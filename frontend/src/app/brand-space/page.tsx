@@ -43,6 +43,10 @@ function BrandSpaceContent({ currentUser }: { currentUser: AuthUser }) {
       if (selectedBrandId) setSelectedBrandId(null);
       return;
     }
+    if (requestedEntityId && !entities.some((entity) => entity.id === requestedEntityId)) {
+      if (selectedBrandId) setSelectedBrandId(null);
+      return;
+    }
     if (
       requestedEntityId &&
       entities.some((entity) => entity.id === requestedEntityId) &&
@@ -82,6 +86,13 @@ function BrandSpaceContent({ currentUser }: { currentUser: AuthUser }) {
     !entitiesLoading &&
     !entityError &&
     entities.length === 0;
+  const requestedEntityMissing = Boolean(
+    requestedEntityId &&
+    hasFetchedEntities &&
+    !entitiesLoading &&
+    !entityError &&
+    !entities.some((entity) => entity.id === requestedEntityId),
+  );
 
   const handleBlockedAutoPromptClose = useCallback(() => {
     toast.info('进入品牌空间前，需要先新建一个品牌。');
@@ -107,10 +118,10 @@ function BrandSpaceContent({ currentUser }: { currentUser: AuthUser }) {
       <DashboardTopBar onNewAnalysis={handleNewBrand} />
       <BrandSpaceShell
         entities={entities}
-        selectedEntityId={selectedBrandId}
+        selectedEntityId={requestedEntityMissing ? null : selectedBrandId}
         entitiesLoading={entitiesLoading}
         hasFetchedEntities={hasFetchedEntities}
-        entityError={entityError}
+        entityError={requestedEntityMissing ? '品牌不存在或不可访问。请选择左侧已有品牌，或返回品牌情报页。' : entityError}
         onSelectBrand={handleSelectBrand}
         onAddBrand={handleNewBrand}
       />

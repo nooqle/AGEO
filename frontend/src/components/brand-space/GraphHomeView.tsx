@@ -29,6 +29,75 @@ function classNames(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(' ');
 }
 
+const graphZones = ['center', 'inner', 'middle', 'outer', 'risk', 'competitor', 'pending_review'] as const;
+const graphZoneSet = new Set<string>(graphZones);
+const graphRelationStrengthMap: Record<string, number> = {
+  weak: 0.35,
+  low: 0.35,
+  medium: 0.6,
+  moderate: 0.6,
+  strong: 0.85,
+  high: 0.85,
+};
+
+function normalizeGraphZone(value: unknown): GraphEntity['zone'] {
+  return typeof value === 'string' && graphZoneSet.has(value)
+    ? value as GraphEntity['zone']
+    : 'pending_review';
+}
+
+function normalizeEntityStrength(value: unknown, fallback: number) {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number.parseFloat(value)
+      : Number.NaN;
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : fallback;
+}
+
+function normalizeRelationStrength(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 1 ? Math.max(0, Math.min(1, value / 100)) : Math.max(0, Math.min(1, value));
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    const numeric = Number.parseFloat(normalized);
+    if (Number.isFinite(numeric)) return numeric > 1 ? Math.max(0, Math.min(1, numeric / 100)) : Math.max(0, Math.min(1, numeric));
+    return graphRelationStrengthMap[normalized] ?? 0.35;
+  }
+  return 0.35;
+}
+
+function normalizeGraphEntity(entity: GraphEntity, index: number): GraphEntity {
+  const raw = entity as GraphEntity & Record<string, unknown>;
+  const zone = normalizeGraphZone(raw.zone);
+  return {
+    ...entity,
+    id: typeof raw.id === 'string' && raw.id ? raw.id : `graph-entity-${index}`,
+    label: typeof raw.label === 'string' && raw.label ? raw.label : '未命名实体',
+    zone,
+    x: normalizeEntityStrength(raw.x, 50),
+    y: normalizeEntityStrength(raw.y, 50),
+    strength: normalizeEntityStrength(raw.strength, zone === 'center' ? 100 : 50),
+    evidenceCount: Math.round(normalizeEntityStrength(raw.evidenceCount, 0)),
+  };
+}
+
+function normalizeGraphRelation(relation: GraphRelation, index: number): GraphRelation | null {
+  const raw = relation as GraphRelation & Record<string, unknown>;
+  if (typeof raw.from !== 'string' || typeof raw.to !== 'string' || !raw.from || !raw.to) {
+    return null;
+  }
+  return {
+    ...relation,
+    id: typeof raw.id === 'string' && raw.id ? raw.id : `graph-relation-${index}`,
+    from: raw.from,
+    to: raw.to,
+    kind: typeof raw.kind === 'string' && raw.kind ? raw.kind : 'associated_with',
+    strength: normalizeRelationStrength(raw.strength),
+  };
+}
+
 function entityClass(entity: GraphEntity) {
   return classNames(
     styles.graphEntity,
@@ -46,6 +115,11 @@ const zoneLabels: Record<GraphEntity['zone'], string> = {
   risk: '风险圈',
   competitor: '竞品圈',
   pending_review: '待审阅',
+};
+
+const legendZoneLabels: Record<GraphEntity['zone'], string> = {
+  ...zoneLabels,
+  pending_review: '待审阅实体',
 };
 
 const polarityLabels: Record<string, string> = {
@@ -100,8 +174,9 @@ function relationKindLabel(kind: string) {
 }
 
 function visualZoneForEntity(entity: GraphEntity): GraphEntity['zone'] {
+  const safeZone = normalizeGraphZone(entity.zone);
   if (entity.patchStatus !== 'accepted' && entity.patchStatus !== 'auto_applied') {
-    return entity.zone;
+    return safeZone;
   }
   if (entity.patchType === 'add_competitor_relation' || entity.category === 'competitor') {
     return 'competitor';
@@ -109,8 +184,8 @@ function visualZoneForEntity(entity: GraphEntity): GraphEntity['zone'] {
   if (entity.patchType === 'add_risk_relation' || entity.category === 'risk') {
     return 'risk';
   }
-  if (entity.zone !== 'pending_review') {
-    return entity.zone;
+  if (safeZone !== 'pending_review') {
+    return safeZone;
   }
   if (entity.strength >= 80) return 'inner';
   if (entity.strength >= 60) return 'middle';
@@ -135,19 +210,64 @@ const zoneAngleSeeds: Record<Exclude<GraphEntity['zone'], 'center'>, number[]> =
   outer: [-176, -132, -86, -42, 6, 52, 96, 142],
   risk: [72, 108, 144, 36],
   competitor: [-26, 18, 58, -66],
-  pending_review: [-112, 112, -150, 150],
+  pending_review: [-156, -126, -96, -66, -36, -6, 24, 54, 84, 114, 144, 174],
 };
 
 function clampGraphPoint(value: number) {
   return Math.max(8, Math.min(92, value));
 }
 
+function resolveGraphCollisions(entities: GraphEntity[]) {
+  const next = entities.map((entity) => ({ ...entity }));
+  const minX = 12.8;
+  const minY = 10.5;
+
+  for (let pass = 0; pass < 80; pass += 1) {
+    let moved = false;
+
+    for (let leftIndex = 0; leftIndex < next.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < next.length; rightIndex += 1) {
+        const left = next[leftIndex];
+        const right = next[rightIndex];
+        const deltaX = right.x - left.x;
+        const deltaY = right.y - left.y;
+        const horizontalOverlap = minX - Math.abs(deltaX);
+        const verticalOverlap = minY - Math.abs(deltaY);
+
+        if (horizontalOverlap <= 0 || verticalOverlap <= 0) continue;
+
+        const distance = Math.hypot(deltaX, deltaY);
+        const fallbackAngle = ((leftIndex + rightIndex + pass) * 47 * Math.PI) / 180;
+        const unitX = distance > 0.01 ? deltaX / distance : Math.cos(fallbackAngle);
+        const unitY = distance > 0.01 ? deltaY / distance : Math.sin(fallbackAngle);
+        const push = Math.min(3.4, Math.max(0.7, Math.max(horizontalOverlap, verticalOverlap) / 2));
+        const leftFixed = left.zone === 'center';
+        const rightFixed = right.zone === 'center';
+
+        if (!leftFixed) {
+          left.x = clampGraphPoint(left.x - unitX * push);
+          left.y = clampGraphPoint(left.y - unitY * push);
+        }
+        if (!rightFixed) {
+          right.x = clampGraphPoint(right.x + unitX * push);
+          right.y = clampGraphPoint(right.y + unitY * push);
+        }
+        moved = true;
+      }
+    }
+
+    if (!moved) break;
+  }
+
+  return next;
+}
+
 function layoutGraphEntities(entities: GraphEntity[], relations: GraphRelation[]): GraphEntity[] {
-  const normalizedEntities = entities.map((entity) => ({
+  const normalizedEntities: GraphEntity[] = entities.map((entity, index) => normalizeGraphEntity(entity, index)).map((entity): GraphEntity => ({
     ...entity,
     zone: visualZoneForEntity(entity),
   }));
-  const centerEntity = normalizedEntities.find((entity) => entity.zone === 'center') ?? normalizedEntities[0] ?? emptyEntity;
+  const centerEntityId = (normalizedEntities.find((entity) => entity.zone === 'center') ?? normalizedEntities[0] ?? emptyEntity).id;
   const relationDegree = relations.reduce<Record<string, number>>((acc, relation) => {
     acc[relation.from] = (acc[relation.from] ?? 0) + 1;
     acc[relation.to] = (acc[relation.to] ?? 0) + 1;
@@ -155,26 +275,30 @@ function layoutGraphEntities(entities: GraphEntity[], relations: GraphRelation[]
   }, {});
   const zoneIndex: Partial<Record<GraphEntity['zone'], number>> = {};
 
-  return normalizedEntities.map((entity) => {
-    if (entity.id === centerEntity.id || entity.zone === 'center') {
-      return { ...entity, x: graphCenter.x, y: graphCenter.y };
+  const positioned: GraphEntity[] = normalizedEntities.map((entity): GraphEntity => {
+    if (entity.id === centerEntityId) {
+      return { ...entity, zone: 'center', x: graphCenter.x, y: graphCenter.y };
     }
 
-    const zone = entity.zone;
+    const normalizedZone = normalizeGraphZone(entity.zone);
+    const zone: GraphEntity['zone'] = normalizedZone === 'center' ? 'pending_review' : normalizedZone;
     const index = zoneIndex[zone] ?? 0;
     zoneIndex[zone] = index + 1;
     const seeds = zoneAngleSeeds[zone];
     const angle = seeds[index % seeds.length] + Math.floor(index / seeds.length) * 12;
     const degreeOffset = Math.min(4, relationDegree[entity.id] ?? 0);
-    const radius = zoneRadii[entity.zone] + Math.floor(index / seeds.length) * 2 + degreeOffset * 0.35;
+    const radius = zoneRadii[zone] + Math.floor(index / seeds.length) * 2 + degreeOffset * 0.35;
     const radians = (angle * Math.PI) / 180;
 
     return {
       ...entity,
+      zone,
       x: clampGraphPoint(graphCenter.x + Math.cos(radians) * radius),
       y: clampGraphPoint(graphCenter.y + Math.sin(radians) * radius),
     };
   });
+
+  return resolveGraphCollisions(positioned);
 }
 
 const emptyEntity: GraphEntity = {
@@ -255,7 +379,11 @@ export function GraphHomeView({
   const sourceEntities = graph
     ? (graph.entities.length ? graph.entities : [emptyCenterEntity])
     : [emptyCenterEntity];
-  const visibleRelations = graph ? graph.relations : [];
+  const visibleRelations = graph
+    ? graph.relations
+        .map((relation, index) => normalizeGraphRelation(relation, index))
+        .filter((relation): relation is GraphRelation => Boolean(relation))
+    : [];
   const visibleEntities = layoutGraphEntities(sourceEntities, visibleRelations);
   const fallbackEvidence = graph
     ? (graph.evidenceRefs.length ? graph.evidenceRefs : [])
@@ -281,6 +409,12 @@ export function GraphHomeView({
     patches[0] ??
     null;
   const selectedEvidence = evidenceForPatch(selectedPatch).length ? evidenceForPatch(selectedPatch) : fallbackEvidence;
+  const selectedPatchObject = selectedPatch?.affectedObjectId
+    ? entityById.get(selectedPatch.affectedObjectId)
+    : undefined;
+  const selectedPatchRelationLabel = selectedPatch
+    ? relationKindLabel(selectedPatch.relationType ?? selectedPatch.patchType)
+    : '';
   const selectedPatchPending = selectedPatch ? pendingPatchDecisionIds.includes(selectedPatch.id) : false;
   const selectedPatchNeedsAction = selectedPatch?.status === 'needs_review' || selectedPatch?.status === 'blocked';
   const categoryCounts = inboxItems.reduce<Record<string, number>>((acc, item) => {
@@ -294,6 +428,12 @@ export function GraphHomeView({
     acc[entity.zone] = (acc[entity.zone] ?? 0) + 1;
     return acc;
   }, {});
+  const pendingEntityCount = zoneCounts.pending_review ?? 0;
+  const reviewQueueEmptyMessage = pendingEntityCount
+    ? `当前没有待处理 Graph Update 补丁。图谱中仍有 ${pendingEntityCount} 个待审阅实体，它们是实体库分层状态；需要新一轮运行生成补丁后才会进入这里。`
+    : graphUpdate
+      ? '本次 Graph Update 没有需要人工处理的补丁。'
+      : '尚未生成 Graph Update 补丁。完成一次画布运行后，需要人工处理的图谱变化会出现在这里。';
   const relationSummaries = visibleRelations
     .map((relation) => {
       const from = entityById.get(relation.from);
@@ -317,9 +457,6 @@ export function GraphHomeView({
     .filter(Boolean);
   const selectedRelationSummaries = relationSummaries.filter((relation) => (
     relation && (relation.fromId === selectedEntity.id || relation.toId === selectedEntity.id)
-  ));
-  const relationLabelsOnMap = relationSummaries.filter((relation) => (
-    relation && (relationSummaries.length <= 6 || relation.fromId === selectedEntity.id || relation.toId === selectedEntity.id)
   ));
   const timelineItems = graphUpdate
     ? [
@@ -370,7 +507,7 @@ export function GraphHomeView({
               {(['inner', 'middle', 'risk', 'competitor', 'pending_review'] as const).map((zone) => (
                 <span key={zone} data-zone={zone}>
                   <i />
-                  {zoneLabels[zone]} {zoneCounts[zone] ?? 0}
+                  {legendZoneLabels[zone]} {zoneCounts[zone] ?? 0}
                 </span>
               ))}
             </div>
@@ -416,26 +553,6 @@ export function GraphHomeView({
                     </g>
                   );
                 })}
-                {relationLabelsOnMap.map((relation) => relation ? (
-                  <g key={`${relation.id}-label`}>
-                    <rect
-                      x={Math.max(4, Math.min(82, relation.x - 9))}
-                      y={Math.max(5, Math.min(91, relation.y - 3))}
-                      width="18"
-                      height="6"
-                      rx="2.3"
-                      className={styles.graphRelationLabelBox}
-                    />
-                    <text
-                      x={Math.max(13, Math.min(91, relation.x))}
-                      y={Math.max(9, Math.min(95, relation.y + 1))}
-                      textAnchor="middle"
-                      className={styles.graphRelationLabelText}
-                    >
-                      {relation.label} · {relation.strength}
-                    </text>
-                  </g>
-                ) : null)}
               </svg>
 
               {visibleEntities.map((entity) => {
@@ -477,7 +594,7 @@ export function GraphHomeView({
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-medium uppercase text-[var(--text-tertiary)]">审阅队列</p>
-              <h2 className="mt-1 text-base font-semibold text-[var(--text-primary)]">待审阅图谱变化</h2>
+              <h2 className="mt-1 text-base font-semibold text-[var(--text-primary)]">待处理图谱变化</h2>
             </div>
             <span className="rounded-lg border px-2.5 py-1 text-xs text-[var(--brand-text)]" style={{ borderColor: 'var(--brand-border)', background: 'var(--brand-bg)' }}>
               {inboxItems.length} 项
@@ -530,7 +647,7 @@ export function GraphHomeView({
               </button>
             )) : (
               <div className="rounded-xl border p-3 text-xs leading-5 text-[var(--text-secondary)]" style={{ borderColor: 'var(--border-subtle)' }}>
-                当前筛选下没有待审阅项。
+                {reviewQueueEmptyMessage}
               </div>
             )}
           </div>
@@ -676,7 +793,18 @@ export function GraphHomeView({
             <h2 className="text-sm font-semibold text-[var(--text-primary)]">证据预览</h2>
           </div>
           <div className="mt-3 space-y-3">
-            {selectedEvidence.map((evidence) => (
+            {selectedPatch ? (
+              <div className="rounded-xl border p-3" style={{ borderColor: 'var(--brand-border)', background: 'var(--brand-bg)' }}>
+                <p className="text-xs font-semibold text-[var(--text-primary)]">当前补丁判定</p>
+                <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">
+                  {selectedPatchRelationLabel ? `关系：${selectedPatchRelationLabel}。` : ''}
+                  {selectedPatchObject ? `对象：${selectedPatchObject.label}。` : ''}
+                  状态：{graphUpdateStatusLabels[selectedPatch.status] ?? selectedPatch.status}，得分：{selectedPatch.score}。
+                </p>
+                <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">{selectedPatch.description}</p>
+              </div>
+            ) : null}
+            {selectedEvidence.length ? selectedEvidence.map((evidence) => (
               <div key={evidence.id} className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-xs font-medium text-[var(--text-primary)]">{evidence.platform}</span>
@@ -686,7 +814,11 @@ export function GraphHomeView({
                 </div>
                 <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">{evidence.excerpt}</p>
               </div>
-            ))}
+            )) : (
+              <div className="rounded-xl border p-3 text-xs leading-5 text-[var(--text-secondary)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                当前图谱更新没有可展示的证据摘录。需要重新运行画布或补充资产后再生成 Graph Update。
+              </div>
+            )}
           </div>
         </section>
 

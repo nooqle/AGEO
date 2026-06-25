@@ -40,6 +40,12 @@ class BoardRun(Base):
 
     __tablename__ = "board_runs"
     __table_args__ = (
+        UniqueConstraint(
+            "entity_id",
+            "created_by_user_id",
+            "origin_event_id",
+            name="uq_board_runs_entity_user_origin_event",
+        ),
         Index("ix_board_runs_entity_status", "entity_id", "status"),
         Index("ix_board_runs_entity_updated", "entity_id", "updated_at"),
     )
@@ -70,6 +76,11 @@ class BoardRun(Base):
     analysis_task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("analysis_tasks.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    origin_event_id: Mapped[str | None] = mapped_column(
+        String(180),
         nullable=True,
         index=True,
     )

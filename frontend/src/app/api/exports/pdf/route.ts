@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { CanvasContent } from '@/types/canvas';
 import type { ExportDescriptor } from '@/lib/canvasExportShared';
-import { launchPdfBrowser } from '@/lib/playwrightBrowser';
 import {
   createPrintExportEntry,
   deletePrintExportEntry,
@@ -51,6 +50,7 @@ export async function POST(request: NextRequest) {
     }
 
     exportId = createPrintExportEntry({ content, descriptor });
+    const { launchPdfBrowser } = await import('@/lib/playwrightBrowser');
     const browser = await launchPdfBrowser();
 
     try {

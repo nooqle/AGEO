@@ -109,6 +109,20 @@ function accessReasonLabel(reason?: string | null, available?: boolean) {
   return available ? '可下载' : '暂不可用';
 }
 
+function artifactRowStatusLabel(artifact: ArtifactRef) {
+  if ((artifact.rowCount ?? 0) > 0) return '';
+  const labels: Record<string, string> = {
+    raw_answers: '运行完成前可能为空',
+    parsed_answers: '等待答案标准化',
+    entity_relation_set: '等待实体匹配',
+    graph_patch_set: '本轮暂无补丁',
+    review_queue: '暂无待处理变化',
+    graph_update: '等待 Graph Update',
+    report: '等待报告生成',
+  };
+  return labels[artifact.type] ?? '暂无记录';
+}
+
 function PreviewBlock({ preview }: { preview?: ArtifactPreview }) {
   if (!preview) {
     return (
@@ -296,6 +310,7 @@ export function AssetsView({
           {filteredArtifacts.length ? (
             filteredArtifacts.map((artifact) => {
               const active = activeDetailId === artifactStableId(artifact);
+              const rowStatus = artifactRowStatusLabel(artifact);
               return (
                 <article
                   key={artifact.id}
@@ -336,6 +351,7 @@ export function AssetsView({
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
                     <span className={styles.assetChip}>{formatValue(artifact.rowCount ?? 1)} 行</span>
+                    {rowStatus ? <span className={styles.assetChip}>{rowStatus}</span> : null}
                     <span className={styles.assetChip}>{formatDate(artifact.createdAt)}</span>
                     {artifact.linkedNodeId ? <span className={styles.assetChip}>{artifact.linkedNodeId}</span> : null}
                   </div>
@@ -401,6 +417,12 @@ export function AssetsView({
                     <strong>{detail?.artifact.linkedNodeId ?? '-'}</strong>
                   </div>
                 </div>
+
+                {detail?.artifact && artifactRowStatusLabel(detail.artifact) ? (
+                  <div className="rounded-xl border p-3 text-xs leading-5 text-[var(--text-secondary)]" style={{ borderColor: 'var(--border-subtle)' }}>
+                    {artifactRowStatusLabel(detail.artifact)}。这表示当前资产已登记，但还没有可预览的记录；请查看追溯链确认来源节点和运行状态。
+                  </div>
+                ) : null}
 
                 {detail?.access ? (
                   <section className={styles.assetAccessPanel}>

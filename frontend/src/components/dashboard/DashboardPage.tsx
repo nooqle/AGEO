@@ -18,7 +18,6 @@ import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { uniqueAiSourceDisplayNames } from '@/lib/aiSourceDisplay';
 import {
-  isAmwayAssociationEntity,
   preferredDashboardEntity,
   splitDashboardEntities,
 } from '@/lib/brandEntityHygiene';
@@ -241,7 +240,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
   const hasLoadError = Boolean(entityError);
   const hasData = entities.length > 0;
   const isInitialLoading = entitiesLoading;
-  const shouldOpenAmwayConsole = Boolean(selectedBrand && isAmwayAssociationEntity(selectedBrand));
 
   useEffect(() => {
     if (!selectedBrandId || !isSelectedRunActive) return;
@@ -251,11 +249,6 @@ export function DashboardPage({ onNewAnalysis }: DashboardPageProps) {
     }, 6000);
     return () => window.clearInterval(timer);
   }, [fetchActiveRun, fetchWorld, isSelectedRunActive, selectedBrandId, selectedRun?.id, selectedRun?.status]);
-
-  useEffect(() => {
-    if (!shouldOpenAmwayConsole || !selectedBrand?.id) return;
-    router.replace('/amwaychina');
-  }, [router, selectedBrand?.id, shouldOpenAmwayConsole]);
 
   const openDashboardChat = async (
     input: string,

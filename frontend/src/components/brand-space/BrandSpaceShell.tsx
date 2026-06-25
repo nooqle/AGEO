@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FileText,
+  HelpCircle,
   Pause,
   Play,
   Square,
+  X,
 } from 'lucide-react';
 import { AssetsView } from './AssetsView';
 import { BoardRuntimeView } from './BoardRuntimeView';
@@ -85,7 +87,7 @@ function isTerminalRunStatus(status: BoardRunStatus) {
 function runPrimaryLabel(status: BoardRunStatus) {
   if (status === 'running') return '暂停';
   if (status === 'paused') return '继续';
-  if (isTerminalRunStatus(status)) return '重新运行';
+  if (isTerminalRunStatus(status)) return '重新运行并生成新版本';
   return '运行';
 }
 
@@ -404,10 +406,12 @@ export function BrandSpaceShell({
   const [pendingPatchDecisionIds, setPendingPatchDecisionIds] = useState<string[]>([]);
   const [downloadingArtifactIds, setDownloadingArtifactIds] = useState<string[]>([]);
   const [downloadStatusByArtifactId, setDownloadStatusByArtifactId] = useState<Record<string, string>>({});
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState('platform-rack');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
   const lastEventSequenceRef = useRef(0);
   const activeRunIdRef = useRef<string | null>(null);
+  const rerunRequestIdRef = useRef<string | null>(null);
 
   const selectedView = useMemo(
     () => brandSpaceNavItems.find((item) => item.id === activeView) ?? brandSpaceNavItems[0],
@@ -579,7 +583,7 @@ export function BrandSpaceShell({
         }
 
         if (entityError) {
-          resetSpaceState('品牌列表加载失败，请刷新页面或回到品牌情报页重试。');
+          resetSpaceState(entityError);
           return;
         }
 
@@ -789,17 +793,22 @@ export function BrandSpaceShell({
     }
     setIsRunCommandPending(true);
     try {
-      const payload = spaceRun?.id && runStatus === 'paused'
+      const shouldResumeRun = Boolean(spaceRun?.id && runStatus === 'paused');
+      if (!shouldResumeRun && !rerunRequestIdRef.current) {
+        rerunRequestIdRef.current = `rerun-${entityId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      }
+      const payload = shouldResumeRun && spaceRun?.id
         ? await api.resumeBrandSpaceBoardRun(spaceRun.id)
         : await api.createBrandSpaceBoardRun(entityId, {
             execution_mode: 'real',
-            request_id: `rerun-${entityId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            request_id: rerunRequestIdRef.current ?? undefined,
           });
       applySpacePayload(payload);
       await refreshReviewItems(entityId, payload.patches, payload.graph_update);
     } catch (error) {
       setBackendNotice(backendNoticeFromError(error, '启动画布失败'));
     } finally {
+      rerunRequestIdRef.current = null;
       setIsRunCommandPending(false);
     }
   };
@@ -848,6 +857,10 @@ export function BrandSpaceShell({
 
   const handleRunStop = async () => {
     if (isRunCommandPending || !canStopRun(runStatus)) return;
+    const confirmed = window.confirm(
+      `将停止「${selectedEntity?.name ?? '当前品牌'}」的当前画布运行。已写入的资产和历史图谱不会被删除，但本次 Graph Update 可能无法完成；如需完整结果，需要重新运行。是否继续？`,
+    );
+    if (!confirmed) return;
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
         setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
@@ -872,6 +885,14 @@ export function BrandSpaceShell({
     status: Extract<GraphPatchStatus, 'accepted' | 'rejected' | 'needs_review'>,
   ) => {
     if (pendingPatchDecisionIds.includes(patchId)) return;
+    const patch = patches.find((item) => item.id === patchId) ?? reviewItems.find((item) => item.id === patchId);
+    const patchTitle = patch?.title ?? '当前图谱补丁';
+    const decisionCopy = status === 'accepted'
+      ? `将接受并应用「${patchTitle}」。这会更新当前 Graph Update 的审阅状态，并可能改变品牌图谱圈层。是否继续？`
+      : status === 'rejected'
+        ? `将拒绝「${patchTitle}」。这会把该变化从本次 Graph Update 中排除，并记录审阅结果。是否继续？`
+        : '';
+    if (decisionCopy && !window.confirm(decisionCopy)) return;
     setPendingPatchDecisionIds((current) => [...current, patchId]);
     if (isBackendMode) {
       try {
@@ -888,9 +909,11 @@ export function BrandSpaceShell({
         } else if (entityId) {
           await refreshReviewItems(entityId, response.patches, response.graph_update);
         }
+        toast.success(status === 'accepted' ? '图谱补丁已接受。' : status === 'rejected' ? '图谱补丁已拒绝。' : '图谱补丁已保留审阅。');
         return;
       } catch (error) {
         setBackendNotice(backendNoticeFromError(error, '审阅提交失败'));
+        toast.error('审阅提交失败，请稍后重试。');
         return;
       } finally {
         setPendingPatchDecisionIds((current) => current.filter((id) => id !== patchId));
@@ -901,11 +924,18 @@ export function BrandSpaceShell({
       setReviewItems(reviewItemsFromPatches(nextPatches, graphUpdate));
       return nextPatches;
     });
+    toast.success(status === 'accepted' ? '图谱补丁已接受。' : status === 'rejected' ? '图谱补丁已拒绝。' : '图谱补丁已保留审阅。');
     setPendingPatchDecisionIds((current) => current.filter((id) => id !== patchId));
   };
 
   const handleGenerateReport = async (publishRequested = false) => {
     if (!graphUpdate?.id) return;
+    if (!publishRequested) {
+      const confirmed = window.confirm(
+        `将基于当前 Graph Update 为「${selectedEntity?.name ?? '当前品牌'}」重新生成一版报告。已有图谱、资产和历史报告不会被覆盖。是否继续？`,
+      );
+      if (!confirmed) return;
+    }
     setIsGeneratingReport(true);
     try {
       const response = await api.generateBrandSpaceReport(graphUpdate.id, { publishRequested });
@@ -1066,9 +1096,12 @@ export function BrandSpaceShell({
   const showSetupEmptyState = !isDemoMode && !showBackendErrorState && (Boolean(entityError) || (hasFetchedEntities && !hasSelectedBrand));
   const showLoadingState = !isDemoMode && !showSetupEmptyState && isLoadingSpace;
   const showWorkspaceViews = !showSetupEmptyState && !showLoadingState && !showBackendErrorState;
-  const setupTitle = entityError ? '品牌列表暂时不可用' : '先创建或选择一个品牌';
+  const isMissingRequestedEntity = Boolean(entityError?.includes('不存在') || entityError?.includes('不可访问'));
+  const setupTitle = entityError
+    ? (isMissingRequestedEntity ? '品牌不存在或不可访问' : '品牌列表暂时不可用')
+    : '先创建或选择一个品牌';
   const setupDescription = entityError
-    ? '当前无法读取账号下的品牌列表。你可以刷新页面，或返回品牌情报页检查账号和品牌数据。'
+    ? entityError
     : '品牌空间围绕一个品牌的实体关系库运行。请选择左侧已有品牌，或新建品牌后再启动图谱更新画布。';
 
   return (
@@ -1132,7 +1165,52 @@ export function BrandSpaceShell({
                 <Square className="h-4 w-4" />
                 停止
               </button>
+              <button
+                type="button"
+                onClick={() => setIsHelpOpen((value) => !value)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-lg border text-[var(--text-secondary)] transition-colors hover:text-[var(--brand-text)]"
+                style={{ borderColor: 'var(--border-subtle)', background: isHelpOpen ? 'var(--brand-bg)' : 'var(--bg-elevated)' }}
+                aria-label={isHelpOpen ? '关闭 Brand Space 帮助' : '打开 Brand Space 帮助'}
+                aria-expanded={isHelpOpen}
+                aria-controls="brand-space-help-panel"
+                title={isHelpOpen ? '关闭帮助' : '帮助'}
+              >
+                <HelpCircle className="h-4 w-4" />
+              </button>
             </div>
+            {isHelpOpen ? (
+              <div
+                id="brand-space-help-panel"
+                role="dialog"
+                aria-label="Brand Space 帮助"
+                className="basis-full rounded-xl border p-4"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)', boxShadow: 'var(--shadow-sm)' }}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-sm font-semibold text-[var(--text-primary)]">Brand Space 帮助</h2>
+                    <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                      图谱是品牌实体关系库主视图；画布负责运行抓取与图谱更新；资产保存中间产物；报告只解读某次 Graph Update。
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsHelpOpen(false)}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}
+                    aria-label="关闭 Brand Space 帮助"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="mt-3 grid gap-2 text-xs leading-5 text-[var(--text-secondary)] md:grid-cols-4">
+                  <p className="rounded-lg bg-[var(--bg-secondary)] p-3"><strong className="block text-[var(--text-primary)]">图谱</strong>圈层展示实体关系状态；待审阅实体不等于待处理补丁。</p>
+                  <p className="rounded-lg bg-[var(--bg-secondary)] p-3"><strong className="block text-[var(--text-primary)]">画布</strong>节点状态来自真实运行事件；运行完成后才会生成可处理的图谱变化。</p>
+                  <p className="rounded-lg bg-[var(--bg-secondary)] p-3"><strong className="block text-[var(--text-primary)]">资产</strong>原始答案、标准化结果和图谱补丁会在这里追溯；0 行会标明原因。</p>
+                  <p className="rounded-lg bg-[var(--bg-secondary)] p-3"><strong className="block text-[var(--text-primary)]">报告</strong>报告必须绑定 Graph Update；没有图谱更新时不会生成正式报告。</p>
+                </div>
+              </div>
+            ) : null}
           </header>
 
           <div className={classNames(styles.viewTabs, 'flex flex-wrap items-center justify-between gap-3 px-4 py-3 lg:px-6')}>

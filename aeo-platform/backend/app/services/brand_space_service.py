@@ -16,7 +16,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import delete, desc, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -1290,7 +1291,12 @@ class GraphPatchBuilderService:
                 "question_id": answer.question_id,
                 "question": self._question_text(answer, question_lookup),
                 "platform": answer.platform,
-                "excerpt": self._clip(answer.answer_text, 180),
+                "excerpt": self._evidence_excerpt(
+                    answer=answer,
+                    question_lookup=question_lookup,
+                    matched_entry=matched_entry,
+                    limit=180,
+                ),
                 "polarity": polarity,
             }
             if matched_entry is not None:
@@ -1311,6 +1317,23 @@ class GraphPatchBuilderService:
     ) -> str:
         question = GraphPatchBuilderService._question_text(answer, question_lookup)
         return f"{question}\n{answer.answer_text or ''}"
+
+    @staticmethod
+    def _evidence_excerpt(
+        *,
+        answer: BrandPlatformAnswer,
+        question_lookup: dict[str, str],
+        matched_entry: EntityLexiconEntry | None,
+        limit: int,
+    ) -> str:
+        if matched_entry is None:
+            return GraphPatchBuilderService._clip(answer.answer_text, limit)
+        combined_text = GraphPatchBuilderService._combined_text(answer, question_lookup)
+        return GraphPatchBuilderService._clip_around_terms(
+            combined_text,
+            limit=limit,
+            terms=matched_entry.terms,
+        )
 
     @staticmethod
     def question_text(
@@ -1338,6 +1361,31 @@ class GraphPatchBuilderService:
     def _clip(text: str, limit: int) -> str:
         normalized = " ".join((text or "").split())
         return normalized if len(normalized) <= limit else f"{normalized[:limit]}..."
+
+    @staticmethod
+    def _clip_around_terms(text: str, *, limit: int, terms: Sequence[str]) -> str:
+        normalized = " ".join((text or "").split())
+        if len(normalized) <= limit:
+            return normalized
+        lowered = normalized.lower()
+        match_indexes = [
+            lowered.find(str(term).lower())
+            for term in terms
+            if str(term or "").strip()
+        ]
+        match_indexes = [index for index in match_indexes if index >= 0]
+        if not match_indexes:
+            return GraphPatchBuilderService._clip(normalized, limit)
+        match_index = min(match_indexes)
+        context_start = max(0, match_index - max(24, limit // 4))
+        context_end = min(len(normalized), context_start + limit)
+        context_start = max(0, context_end - limit)
+        excerpt = normalized[context_start:context_end].strip()
+        if context_start > 0:
+            excerpt = f"...{excerpt}"
+        if context_end < len(normalized):
+            excerpt = f"{excerpt}..."
+        return excerpt
 
     @staticmethod
     def _score_from_answers(
@@ -1536,6 +1584,7 @@ class BrandSpaceService:
             created_by_user_id=current_user.id,
             brand_intelligence_run_id=intelligence_run.id,
             analysis_task_id=intelligence_run.analysis_task_id,
+            origin_event_id=origin_event_id if normalized_request_id else None,
             board_id=board_id,
             template_id=template_id,
             status=(
@@ -1559,7 +1608,21 @@ class BrandSpaceService:
             started_at=_now(),
         )
         self.db.add(board_run)
-        await self.db.flush()
+        try:
+            await self.db.flush()
+        except IntegrityError:
+            if not normalized_request_id:
+                raise
+            await self.db.rollback()
+            entity = await self._require_entity(entity_id, current_user)
+            existing_board_run = await self._board_run_for_origin_event_id(
+                entity_id=entity.id,
+                created_by_user_id=current_user.id,
+                origin_event_id=origin_event_id,
+            )
+            if existing_board_run is not None:
+                return await self._space_payload(entity=entity, board_run=existing_board_run)
+            raise
 
         node_runs = self._build_initial_nodes(
             board_run=board_run,
@@ -2587,14 +2650,17 @@ class BrandSpaceService:
             return None
         result = await self.db.execute(
             select(BoardRun)
-            .join(
+            .outerjoin(
                 BrandIntelligenceRun,
                 BoardRun.brand_intelligence_run_id == BrandIntelligenceRun.id,
             )
             .where(
                 BoardRun.entity_id == entity_id,
                 BoardRun.created_by_user_id == created_by_user_id,
-                BrandIntelligenceRun.origin_event_id == origin_event_id,
+                or_(
+                    BoardRun.origin_event_id == origin_event_id,
+                    BrandIntelligenceRun.origin_event_id == origin_event_id,
+                ),
             )
             .order_by(desc(BoardRun.created_at))
             .limit(1)

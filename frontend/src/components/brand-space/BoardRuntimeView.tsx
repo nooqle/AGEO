@@ -115,7 +115,7 @@ function statusLabel(status: BoardRunStatus) {
 function runPrimaryLabel(status: BoardRunStatus) {
   if (status === 'running') return '暂停';
   if (status === 'paused') return '继续';
-  if (status === 'completed' || status === 'stopped' || status === 'failed') return '重新运行';
+  if (status === 'completed' || status === 'stopped' || status === 'failed') return '重新运行并生成新版本';
   return '全部运行';
 }
 
@@ -143,6 +143,10 @@ function platformRackStatusLabel(runStatus: BoardRunStatus, platforms: PlatformF
   if (runStatus === 'paused' || runStatus === 'pause_requested') return '已暂停';
   if (runStatus === 'stopped') return '已停止';
   return '待启动';
+}
+
+function platformRackSubtitle(platforms: PlatformFetchNode[]) {
+  return platforms.length > 0 ? `${platforms.length} 个平台并行抓取` : '多平台并行抓取';
 }
 
 function platformAbbreviation(platformKey: string) {
@@ -266,11 +270,11 @@ function edgeIsRunning(edge: BoardEdge, from: BoardNode, to: BoardNode, runStatu
 }
 
 function edgeShowsTrace(edge: BoardEdge, runStatus: BoardRunStatus) {
-  return Boolean(edge.active && (runStatus === 'running' || runStatus === 'completed'));
+  return Boolean(edge.active && runStatus === 'running');
 }
 
 function edgeTraceIsAnimated(edge: BoardEdge, from: BoardNode, to: BoardNode, runStatus: BoardRunStatus) {
-  return edgeIsRunning(edge, from, to, runStatus) || Boolean(edge.active && runStatus === 'completed');
+  return edgeIsRunning(edge, from, to, runStatus);
 }
 
 export function BoardRuntimeView({
@@ -296,6 +300,9 @@ export function BoardRuntimeView({
 }: BoardRuntimeViewProps) {
   const layoutNodes = nodes.map(layoutNode);
   const selectedNode = layoutNodes.find((node) => node.id === selectedNodeId) ?? layoutNodes[0];
+  const inspectedNode = selectedNode?.id === 'platform-rack'
+    ? { ...selectedNode, subtitle: platformRackSubtitle(platforms) }
+    : selectedNode;
   const isRunning = runStatus === 'running';
   const nodeById = new Map(layoutNodes.map((node) => [node.id, node]));
   const platformRackNode = nodeById.get('platform-rack');
@@ -521,13 +528,15 @@ export function BoardRuntimeView({
         />
       </div>
 
-      <NodeInspector
-        node={selectedNode}
-        artifacts={artifacts}
-        events={events}
-        activeTab={inspectorTab}
-        onTabChange={onInspectorTabChange}
-      />
+      {inspectedNode ? (
+        <NodeInspector
+          node={inspectedNode}
+          artifacts={artifacts}
+          events={events}
+          activeTab={inspectorTab}
+          onTabChange={onInspectorTabChange}
+        />
+      ) : null}
     </div>
   );
 }

@@ -6,6 +6,7 @@ const apiProxyBase = (
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
+  serverExternalPackages: ["playwright-core"],
   turbopack: {
     root: __dirname,
   },

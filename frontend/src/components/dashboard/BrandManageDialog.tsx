@@ -11,6 +11,7 @@ import { useEntityStore } from '@/stores/entityStore';
 import { api } from '@/services/api';
 import { toast } from '@/components/ui/toast';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
+import { useDashboardStore } from '@/stores/dashboardStore';
 import { buildBrandMonitoringChatUrl } from '@/lib/dashboardChatEntry';
 import type { Entity, CreateEntityInput } from '@/types/entity';
 
@@ -29,23 +30,50 @@ function getDeleteBrandErrorMessage(error: unknown): string {
   return error.message;
 }
 
+function hasDamagedDisplayText(value?: string | null) {
+  return Boolean(value && (/�|\?{2,}/.test(value) || value.trim() === '?'));
+}
+
+function entityDisplayName(entity: Entity) {
+  return hasDamagedDisplayText(entity.name)
+    ? `名称显示异常 · ${entity.id.slice(-6)}`
+    : entity.name;
+}
+
+function entityDisplayDomain(entity: Entity) {
+  return hasDamagedDisplayText(entity.domain)
+    ? '域名显示异常'
+    : entity.domain;
+}
+
+function isLikelyTestEntity(entity: Entity) {
+  const text = `${entity.name} ${entity.domain} ${entity.industry ?? ''}`.toLowerCase();
+  return /e2e|smoke|test|specta-gate|fixture|同名品牌/.test(text);
+}
+
 export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
   const router = useRouter();
   const { entities, addEntity, updateEntity, removeEntity } = useEntityStore();
+  const { selectedBrandId } = useDashboardStore();
   const [search, setSearch] = useState('');
   const [editEntity, setEditEntity] = useState<Entity | null>(null);
   const [formOpen, setFormOpen] = useState(false);
 
-  const filtered = entities.filter((entity) =>
-    entity.name.toLowerCase().includes(search.toLowerCase()) ||
-    entity.domain.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = entities.filter((entity) => {
+    const query = search.toLowerCase();
+    return entityDisplayName(entity).toLowerCase().includes(query) ||
+      entityDisplayDomain(entity).toLowerCase().includes(query) ||
+      entity.name.toLowerCase().includes(query) ||
+      entity.domain.toLowerCase().includes(query);
+  });
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('确定要删除该品牌吗？此操作将同时删除该品牌的所有分析会话和聊天记录，且无法恢复。')) return;
+  const handleDelete = async (entity: Entity) => {
+    const displayName = entityDisplayName(entity);
+    const displayDomain = entityDisplayDomain(entity);
+    if (!confirm(`确定要删除「${displayName}」吗？域名：${displayDomain || '未填写'}，ID：${entity.id.slice(-6)}。此操作将同时删除该品牌的所有分析会话和聊天记录，且无法恢复。`)) return;
     try {
-      await api.deleteEntity(id);
-      removeEntity(id);
+      await api.deleteEntity(entity.id);
+      removeEntity(entity.id);
       toast.success('品牌已删除');
     } catch (error) {
       toast.error(getDeleteBrandErrorMessage(error));
@@ -122,6 +150,9 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                   <Dialog.Title className="mt-2 text-[26px] font-semibold tracking-[-0.03em] text-[var(--text-primary)]">
                     品牌管理
                   </Dialog.Title>
+                  <Dialog.Description className="mt-2 text-sm text-[var(--text-secondary)]">
+                    搜索、编辑和删除品牌列表；测试数据和显示异常会标记，删除前会再次确认品牌名、域名和 ID。
+                  </Dialog.Description>
                 </div>
                 <Dialog.Close asChild>
                   <button
@@ -177,7 +208,12 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                 ) : (
                   <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
                     <AnimatePresence>
-                      {filtered.map((entity) => (
+                      {filtered.map((entity) => {
+                        const displayName = entityDisplayName(entity);
+                        const displayDomain = entityDisplayDomain(entity);
+                        const damagedText = hasDamagedDisplayText(entity.name) || hasDamagedDisplayText(entity.domain);
+                        const testEntity = isLikelyTestEntity(entity);
+                        return (
                         <motion.article
                           key={entity.id}
                           className="rounded-[16px] border px-5 py-5"
@@ -194,10 +230,28 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                           <div className="flex items-start gap-3">
                             <BrandAvatar name={entity.name} domain={entity.domain} size={46} className="flex-shrink-0" />
                             <div className="min-w-0 flex-1">
-                              <div className="truncate text-[15px] font-semibold text-[var(--text-primary)]">{entity.name}</div>
-                              {entity.domain ? (
-                                <div className="mt-1 truncate text-[12px] text-[var(--text-tertiary)]">{entity.domain}</div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="truncate text-[15px] font-semibold text-[var(--text-primary)]">{displayName}</div>
+                                {entity.id === selectedBrandId ? (
+                                  <span className="shrink-0 rounded-md bg-[var(--brand-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-text)]">
+                                    当前品牌
+                                  </span>
+                                ) : null}
+                                {testEntity ? (
+                                  <span className="shrink-0 rounded-md bg-[var(--bg-tertiary)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-secondary)]">
+                                    测试数据
+                                  </span>
+                                ) : null}
+                                {damagedText ? (
+                                  <span className="shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium text-[var(--warning)]" style={{ borderColor: 'color-mix(in srgb, var(--warning) 36%, var(--border-subtle) 64%)' }}>
+                                    显示异常
+                                  </span>
+                                ) : null}
+                              </div>
+                              {displayDomain ? (
+                                <div className="mt-1 truncate text-[12px] text-[var(--text-tertiary)]">{displayDomain}</div>
                               ) : null}
+                              <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">ID {entity.id.slice(-6)}</div>
                             </div>
                           </div>
 
@@ -212,21 +266,24 @@ export function BrandManageDialog({ open, onClose }: BrandManageDialogProps) {
                                 style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
                                 onClick={() => openEdit(entity)}
                                 title="编辑品牌"
+                                aria-label={`编辑品牌：${displayName} ${displayDomain || ''} ID ${entity.id.slice(-6)}`}
                               >
                                 <RiEditLine className="h-4.5 w-4.5" />
                               </button>
                               <button
                                 className="flex h-10 w-10 items-center justify-center rounded-lg border transition-colors hover:bg-[var(--bg-secondary)]"
                                 style={{ borderColor: 'color-mix(in srgb, var(--border-subtle) 80%, #df8e84 20%)', color: 'var(--status-error)' }}
-                                onClick={() => handleDelete(entity.id)}
+                                onClick={() => handleDelete(entity)}
                                 title="删除品牌"
+                                aria-label={`删除品牌：${displayName} ${displayDomain || ''} ID ${entity.id.slice(-6)}`}
                               >
                                 <RiDeleteBinLine className="h-4.5 w-4.5" />
                               </button>
                             </div>
                           </div>
                         </motion.article>
-                      ))}
+                      );
+                      })}
                     </AnimatePresence>
                   </div>
                 )}

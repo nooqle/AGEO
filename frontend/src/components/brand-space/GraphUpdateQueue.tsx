@@ -68,6 +68,10 @@ export function GraphUpdateQueue({
     },
   );
   const versionLabel = graphUpdate?.after_graph_version ?? graphVersion ?? null;
+  const needsActionCount = grouped.needs_review.length + grouped.blocked.length;
+  const emptyQueueMessage = graphUpdate
+    ? '本次 Graph Update 没有需要人工处理的补丁。可在资产中查看图谱更新产物，或生成报告解读本次状态。'
+    : '尚未生成 Graph Update 补丁。图谱中显示的待审阅实体属于实体库分层状态；运行完成并产生图谱变化后，待处理补丁会出现在这里。';
 
   return (
     <section className={classNames(styles.surface, 'rounded-xl p-4')}>
@@ -75,7 +79,7 @@ export function GraphUpdateQueue({
         <div>
           <h2 className="text-sm font-semibold text-[var(--text-primary)]">图谱更新队列</h2>
           <p className="mt-1 text-xs text-[var(--text-secondary)]">
-            {patches.length} 个补丁 · {grouped.needs_review.length + grouped.blocked.length} 个需要处理
+            {patches.length} 个图谱补丁 · {needsActionCount} 个需要处理
           </p>
         </div>
         <span className="rounded-lg border px-2.5 py-1 text-xs text-[var(--brand-text)]" style={{ borderColor: 'var(--brand-border)', background: 'var(--brand-bg)' }}>
@@ -84,6 +88,11 @@ export function GraphUpdateQueue({
       </div>
 
       <div className="space-y-4">
+        {!patches.length ? (
+          <div className="rounded-xl border p-3 text-xs leading-5 text-[var(--text-secondary)]" style={{ borderColor: 'var(--border-subtle)' }}>
+            {emptyQueueMessage}
+          </div>
+        ) : null}
         {statusOrder.map((status) => {
           const items = grouped[status];
           if (!items.length) return null;

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 os.environ.setdefault("DEBUG", "true")
@@ -38,7 +39,11 @@ from app.models.brand_space import (
 from app.models.entity import Entity, EntityStatus
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.user import User, UserRole, UserStatus
-from app.services.brand_space_service import BrandSpaceService, GraphPatchBuilderService
+from app.services.brand_space_service import (
+    BrandSpaceService,
+    EntityLexiconEntry,
+    GraphPatchBuilderService,
+)
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -697,7 +702,44 @@ async def test_real_board_run_request_id_is_idempotent(tmp_path):
             (await session.execute(select(BrandIntelligenceRun))).scalars().all()
         )
         assert len(board_runs) == 1
+        assert board_runs[0].origin_event_id == (
+            f"brand-space:real:{entity.id}:rerun-click-1"
+        )
         assert len(intelligence_runs) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_board_run_origin_event_id_is_database_unique(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-origin-unique@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        origin_event_id = f"brand-space:real:{entity.id}:same-click"
+        first_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            origin_event_id=origin_event_id,
+            is_scaffold=False,
+        )
+        second_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            origin_event_id=origin_event_id,
+            is_scaffold=False,
+        )
+        session.add(first_run)
+        await session.flush()
+        session.add(second_run)
+
+        with pytest.raises(IntegrityError):
+            await session.flush()
+
+        await session.rollback()
 
     await engine.dispose()
 
@@ -2662,6 +2704,37 @@ def test_graph_patch_builder_scoring_confidence_and_term_boundaries():
     assert GraphPatchBuilderService._contains_term("安利和纽崔莱经常一起出现", "安利")
     assert not GraphPatchBuilderService._contains_term("这是一段不健康的表达", "健康")
     assert not GraphPatchBuilderService._contains_term("这个句子里是不安利用法", "安利")
+
+
+def test_graph_patch_evidence_excerpt_centers_matched_entity_context():
+    answer = _answer_stub("ChatGPT")
+    answer.id = uuid.uuid4()
+    answer.question_id = "q-competitor"
+    answer.answer_text = (
+        "开头是很长的泛化背景，主要描述营养补充、日常健康管理和一般消费决策。"
+        * 10
+        + "在运动营养补剂的替代选择里，GNC 被明确拿来与安利进行对比，"
+        + "回答建议用户比较成分、价格和购买渠道。"
+    )
+    builder = GraphPatchBuilderService.__new__(GraphPatchBuilderService)
+
+    refs = builder._evidence_refs(
+        answers=[answer],
+        question_lookup={"q-competitor": "安利有什么替代品牌？"},
+        polarity="competitor",
+        matched_entry=EntityLexiconEntry(
+            entity_id="competitor:gnc",
+            label="GNC",
+            entity_type="competitor",
+            aliases=("健安喜",),
+        ),
+    )
+
+    excerpt = refs[0]["excerpt"]
+    assert "GNC" in excerpt
+    assert "替代选择" in excerpt
+    assert not excerpt.startswith("开头是很长的泛化背景")
+    assert refs[0]["matched_entity_label"] == "GNC"
 
 
 def test_storyline_risk_context_requires_brand_anchor_and_negative_association():
