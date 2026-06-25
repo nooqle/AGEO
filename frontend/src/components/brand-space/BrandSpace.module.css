@@ -265,7 +265,7 @@
 
 .graphPanel {
   position: relative;
-  min-height: 520px;
+  min-height: clamp(560px, 52vh, 700px);
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg-primary) 8%);
@@ -273,9 +273,9 @@
 
 .graphMap {
   position: relative;
-  width: min(860px, calc(100% - 48px));
-  height: 500px;
-  margin: 10px auto;
+  width: min(1120px, calc(100% - 48px));
+  height: clamp(540px, 50vh, 660px);
+  margin: 18px auto;
 }
 
 .graphLegend {
@@ -351,7 +351,7 @@
   stroke: var(--bg-elevated);
   stroke-width: 4px;
   fill: var(--text-secondary);
-  font-size: 3px;
+  font-size: 3.5px;
   font-weight: 700;
   text-anchor: middle;
   dominant-baseline: central;
@@ -362,25 +362,25 @@
   transform: translate(-50%, -50%);
   display: grid;
   justify-items: center;
-  gap: 7px;
-  min-width: 104px;
+  gap: 8px;
+  min-width: 128px;
 }
 
 .entityPoint {
-  height: 12px;
-  width: 12px;
+  height: 14px;
+  width: 14px;
   border-radius: 999px;
   background: var(--brand-primary);
   border: 2px solid var(--bg-elevated);
 }
 
 .entityCenter {
-  height: 34px;
-  width: 34px;
+  height: 42px;
+  width: 42px;
   border-radius: 999px;
   background: var(--brand-primary);
   border: 3px solid var(--bg-elevated);
-  box-shadow: 0 0 0 8px var(--brand-bg);
+  box-shadow: 0 0 0 10px var(--brand-bg);
 }
 
 .entityRisk .entityPoint {
@@ -399,11 +399,11 @@
 .entityLabel {
   display: grid;
   gap: 2px;
-  min-width: 92px;
-  max-width: 136px;
+  min-width: 108px;
+  max-width: 160px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  padding: 6px 8px;
+  padding: 7px 9px;
   background: color-mix(in srgb, var(--bg-elevated) 94%, var(--bg-primary) 6%);
   box-shadow: 0 8px 16px rgba(24, 30, 28, 0.06);
   text-align: center;
@@ -411,13 +411,13 @@
 
 .entityLabel strong {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.25;
 }
 
 .entityLabel em {
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
   font-style: normal;
   line-height: 1.2;
 }

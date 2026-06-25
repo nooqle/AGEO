@@ -82,16 +82,22 @@ const graphUpdateStatusLabels: Record<string, string> = {
 
 const relationKindLabels: Record<string, string> = {
   belongs_to: '归属',
+  supports: '支持',
   associated_with: '关联',
   solution_for: '方案',
   risk_of: '风险',
   competes_with: '竞品',
   scenario_for: '场景',
   risk_related: '风险',
+  evidence_missing: '证据缺口',
   update_strength: '增强',
   add_risk_relation: '风险',
   add_competitor_relation: '竞品',
 };
+
+function relationKindLabel(kind: string) {
+  return relationKindLabels[kind] ?? '关系';
+}
 
 const emptyEntity: GraphEntity = {
   id: 'empty-brand',
@@ -294,7 +300,7 @@ export function GraphHomeView({
                         y={(from.y + to.y) / 2 - 2}
                         className={styles.graphRelationLabel}
                       >
-                        {relationKindLabels[relation.kind] ?? relation.kind} · {Math.round(strength * 100)}
+                        {relationKindLabel(relation.kind)} · {Math.round(strength * 100)}
                       </text>
                     </g>
                   );
