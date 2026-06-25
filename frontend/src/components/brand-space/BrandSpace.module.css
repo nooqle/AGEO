@@ -106,6 +106,10 @@
   color: color-mix(in srgb, var(--brand-primary) 72%, var(--text-tertiary) 28%);
 }
 
+.edgeGroupRunning .edgePath {
+  stroke: color-mix(in srgb, var(--brand-primary) 50%, var(--text-tertiary) 50%);
+}
+
 .edgePath {
   fill: none;
   stroke: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
@@ -122,12 +126,19 @@
 .edgePathPulse {
   fill: none;
   stroke: currentColor;
-  stroke-width: 2.4;
-  stroke-dasharray: 8 9;
+  stroke-width: 3;
+  stroke-dasharray: 10 12;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
-  animation: edge-flow 1.2s linear infinite;
+  animation: edge-flow 1s linear infinite;
+}
+
+.edgePathTrace {
+  opacity: 0.42;
+  stroke-width: 2.2;
+  stroke-dasharray: 4 16;
+  animation-duration: 3.6s;
 }
 
 .edgePathDashed {
@@ -148,6 +159,8 @@
 
 .edgePacket {
   fill: var(--brand-primary);
+  stroke: var(--bg-elevated);
+  stroke-width: 2;
   opacity: 0.86;
 }
 
@@ -320,6 +333,47 @@
   background: var(--info);
 }
 
+.graphRelationSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -2px 0 12px;
+}
+
+.graphRelationSummary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 90%, var(--bg-primary) 10%);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.graphRelationSummary strong {
+  color: var(--brand-text);
+  font-weight: 700;
+}
+
+.graphRelationSummary span[data-kind*='risk'] strong {
+  color: var(--error);
+}
+
+.graphRelationSummary span[data-kind*='compet'] strong {
+  color: var(--warning);
+}
+
+.graphRelationSummary em {
+  color: var(--text-tertiary);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
 .graphZoneRing,
 .graphZoneRingOuter {
   fill: none;
@@ -344,17 +398,6 @@
 
 .graphLinkCompetitor {
   stroke: color-mix(in srgb, var(--warning) 70%, var(--text-tertiary) 30%);
-}
-
-.graphRelationLabel {
-  paint-order: stroke;
-  stroke: var(--bg-elevated);
-  stroke-width: 4px;
-  fill: var(--text-secondary);
-  font-size: 3.5px;
-  font-weight: 700;
-  text-anchor: middle;
-  dominant-baseline: central;
 }
 
 .graphEntity {

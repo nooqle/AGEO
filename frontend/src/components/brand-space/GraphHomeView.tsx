@@ -215,6 +215,21 @@ export function GraphHomeView({
     acc[entity.zone] = (acc[entity.zone] ?? 0) + 1;
     return acc;
   }, {});
+  const relationSummaries = visibleRelations
+    .map((relation) => {
+      const from = entityById.get(relation.from);
+      const to = entityById.get(relation.to);
+      if (!from || !to) return null;
+      const strength = Math.round(Math.max(0.35, Math.min(1, relation.strength || 0.35)) * 100);
+      return {
+        id: relation.id,
+        kind: relation.kind,
+        label: relationKindLabel(relation.kind),
+        strength,
+        text: `${from.label} → ${to.label}`,
+      };
+    })
+    .filter(Boolean);
   const timelineItems = graphUpdate
     ? [
         `本次更新：${graphUpdate.before_graph_version} → ${graphUpdate.after_graph_version}`,
@@ -269,6 +284,15 @@ export function GraphHomeView({
               ))}
             </div>
           </div>
+          <div className={styles.graphRelationSummary} aria-label="图谱关系摘要">
+            {relationSummaries.map((relation) => relation ? (
+              <span key={relation.id} data-kind={relation.kind}>
+                <strong>{relation.label}</strong>
+                {relation.text}
+                <em>{relation.strength}</em>
+              </span>
+            ) : null)}
+          </div>
 
           <div className={classNames(styles.graphPanel, 'rounded-xl')}>
             <div className={styles.graphMap}>
@@ -295,13 +319,6 @@ export function GraphHomeView({
                         )}
                         style={{ strokeWidth: 1.4 + strength * 3 }}
                       />
-                      <text
-                        x={(from.x + to.x) / 2}
-                        y={(from.y + to.y) / 2 - 2}
-                        className={styles.graphRelationLabel}
-                      >
-                        {relationKindLabel(relation.kind)} · {Math.round(strength * 100)}
-                      </text>
                     </g>
                   );
                 })}

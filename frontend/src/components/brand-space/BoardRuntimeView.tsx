@@ -103,9 +103,22 @@ function classNames(...classes: Array<string | false | undefined>) {
 
 function statusLabel(status: BoardRunStatus) {
   if (status === 'running') return '运行中';
+  if (status === 'pause_requested') return '暂停中';
   if (status === 'paused') return '已暂停';
   if (status === 'stopped') return '已停止';
+  if (status === 'completed') return '已完成';
+  if (status === 'failed') return '失败';
   return '就绪';
+}
+
+function platformRackStatusLabel(runStatus: BoardRunStatus, platforms: PlatformFetchNode[]) {
+  const runningCount = platforms.filter((platform) => platform.status === 'running').length;
+  if (runStatus === 'running') return `${runningCount} / ${platforms.length} 运行中`;
+  if (runStatus === 'completed') return `${platforms.length} / ${platforms.length} 已完成`;
+  if (runStatus === 'failed') return '运行失败';
+  if (runStatus === 'paused' || runStatus === 'pause_requested') return '已暂停';
+  if (runStatus === 'stopped') return '已停止';
+  return '待启动';
 }
 
 function platformAbbreviation(platformKey: string) {
@@ -223,6 +236,15 @@ function edgePath(from: BoardNode, to: BoardNode, stageSize = boardStage) {
   };
 }
 
+function edgeIsRunning(edge: BoardEdge, from: BoardNode, to: BoardNode, runStatus: BoardRunStatus) {
+  if (runStatus !== 'running') return false;
+  return edge.active || from.status === 'running' || to.status === 'running';
+}
+
+function edgeShowsTrace(edge: BoardEdge, runStatus: BoardRunStatus) {
+  return Boolean(edge.active && (runStatus === 'running' || runStatus === 'completed'));
+}
+
 export function BoardRuntimeView({
   runStatus,
   nodes,
@@ -326,8 +348,15 @@ export function BoardRuntimeView({
                 const to = nodeById.get(edge.to);
                 if (!from || !to) return null;
                 const path = edgePath(from, to, stageSize);
+                const isEdgeRunning = edgeIsRunning(edge, from, to, runStatus);
+                const showsTrace = edgeShowsTrace(edge, runStatus);
                 return (
-                  <g key={edge.id} data-brand-space-edge={edge.id} className={styles.edgeGroup}>
+                  <g
+                    key={edge.id}
+                    data-brand-space-edge={edge.id}
+                    data-edge-state={isEdgeRunning ? 'running' : showsTrace ? 'trace' : edge.dashed ? 'review' : 'idle'}
+                    className={classNames(styles.edgeGroup, isEdgeRunning && styles.edgeGroupRunning)}
+                  >
                     <path
                       d={path.d}
                       markerEnd="url(#brand-space-arrow)"
@@ -336,10 +365,10 @@ export function BoardRuntimeView({
                         edge.dashed && styles.edgePathDashed,
                       )}
                     />
-                    {edge.active && isRunning ? (
-                      <path d={path.d} className={styles.edgePathPulse} />
+                    {showsTrace ? (
+                      <path d={path.d} className={classNames(styles.edgePathPulse, !isEdgeRunning && styles.edgePathTrace)} />
                     ) : null}
-                    {edge.active && isRunning ? (
+                    {isEdgeRunning ? (
                       <circle r="3.5" className={styles.edgePacket}>
                         <animateMotion
                           dur="2.4s"
@@ -398,7 +427,7 @@ export function BoardRuntimeView({
                     <h3 className="mt-1 text-sm font-semibold text-[var(--text-primary)]">AI 平台抓取组</h3>
                   </div>
                   <span className="rounded-lg bg-[var(--brand-bg)] px-2 py-1 text-xs font-semibold text-[var(--brand-text)]">
-                    {platforms.filter((platform) => platform.status === 'running').length} / {platforms.length} 运行中
+                    {platformRackStatusLabel(runStatus, platforms)}
                   </span>
                 </div>
                 <div className="space-y-3">
