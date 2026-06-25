@@ -113,8 +113,13 @@ function statusLabel(status: BoardRunStatus) {
 
 function platformRackStatusLabel(runStatus: BoardRunStatus, platforms: PlatformFetchNode[]) {
   const runningCount = platforms.filter((platform) => platform.status === 'running').length;
-  if (runStatus === 'running') return `${runningCount} / ${platforms.length} 运行中`;
-  if (runStatus === 'completed') return `${platforms.length} / ${platforms.length} 已完成`;
+  const completedCount = platforms.filter((platform) => platform.status === 'completed' || platform.progress >= 100).length;
+  if (runStatus === 'running') {
+    if (runningCount > 0) return `${runningCount} / ${platforms.length} 运行中`;
+    if (platforms.length > 0 && completedCount === platforms.length) return `${completedCount} / ${platforms.length} 已完成`;
+    return '等待平台回传';
+  }
+  if (runStatus === 'completed') return `${completedCount || platforms.length} / ${platforms.length} 已完成`;
   if (runStatus === 'failed') return '运行失败';
   if (runStatus === 'paused' || runStatus === 'pause_requested') return '已暂停';
   if (runStatus === 'stopped') return '已停止';
@@ -245,6 +250,10 @@ function edgeShowsTrace(edge: BoardEdge, runStatus: BoardRunStatus) {
   return Boolean(edge.active && (runStatus === 'running' || runStatus === 'completed'));
 }
 
+function edgeTraceIsAnimated(edge: BoardEdge, from: BoardNode, to: BoardNode, runStatus: BoardRunStatus) {
+  return edgeIsRunning(edge, from, to, runStatus);
+}
+
 export function BoardRuntimeView({
   runStatus,
   nodes,
@@ -350,6 +359,7 @@ export function BoardRuntimeView({
                 const path = edgePath(from, to, stageSize);
                 const isEdgeRunning = edgeIsRunning(edge, from, to, runStatus);
                 const showsTrace = edgeShowsTrace(edge, runStatus);
+                const traceIsAnimated = edgeTraceIsAnimated(edge, from, to, runStatus);
                 return (
                   <g
                     key={edge.id}
@@ -366,7 +376,13 @@ export function BoardRuntimeView({
                       )}
                     />
                     {showsTrace ? (
-                      <path d={path.d} className={classNames(styles.edgePathPulse, !isEdgeRunning && styles.edgePathTrace)} />
+                      <path
+                        d={path.d}
+                        className={classNames(
+                          styles.edgePathPulse,
+                          !traceIsAnimated && styles.edgePathTrace,
+                        )}
+                      />
                     ) : null}
                     {isEdgeRunning ? (
                       <circle r="3.5" className={styles.edgePacket}>

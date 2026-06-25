@@ -138,7 +138,7 @@
   opacity: 0.42;
   stroke-width: 2.2;
   stroke-dasharray: 4 16;
-  animation-duration: 3.6s;
+  animation: none;
 }
 
 .edgePathDashed {

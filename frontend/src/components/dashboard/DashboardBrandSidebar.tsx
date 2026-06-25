@@ -103,12 +103,19 @@ export function DashboardBrandSidebar({
             {moreOpen ? (
               <div className="mt-2 space-y-1.5 rounded-[13px] border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-2">
                 {duplicates.map((entity) => {
+                  const isSelected = entity.id === selectedBrandId;
                   const name = cleanEntityDisplayText(entity.name, '未命名品牌');
                   const domain = cleanEntityDisplayText(entity.domain, '未设置官网');
                   return (
-                    <div
+                    <button
                       key={entity.id}
-                      className="grid w-full grid-cols-[28px_minmax(0,1fr)] items-center gap-2 rounded-lg px-2 py-2"
+                      type="button"
+                      onClick={() => onSelectBrand(entity.id)}
+                      className="grid w-full grid-cols-[28px_minmax(0,1fr)] items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--bg-secondary)]"
+                      style={{
+                        background: isSelected ? 'var(--bg-secondary)' : 'transparent',
+                      }}
+                      aria-label={`切换到同名品牌：${name}`}
                     >
                       <BrandAvatar name={name} domain={entity.domain} size={28} />
                       <span className="min-w-0">
@@ -119,7 +126,7 @@ export function DashboardBrandSidebar({
                           {domain}
                         </span>
                       </span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -159,6 +166,7 @@ export function DashboardMobileBrandSwitcher({
   entities,
   selectedBrandId,
   onSelectBrand,
+  onAddBrand,
   showBrandSpaceLink = true,
 }: DashboardBrandSidebarProps) {
   const router = useRouter();
@@ -223,6 +231,18 @@ export function DashboardMobileBrandSwitcher({
         >
           <RiGitBranchLine className="h-4 w-4" />
           进入品牌空间
+        </button>
+      ) : null}
+
+      {onAddBrand ? (
+        <button
+          type="button"
+          onClick={onAddBrand}
+          className="mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-[13px] border border-dashed text-[13px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
+          style={{ background: 'color-mix(in srgb, var(--bg-secondary) 76%, var(--bg-tertiary) 24%)' }}
+        >
+          <RiAddLine className="h-4 w-4" />
+          新建品牌
         </button>
       ) : null}
 
