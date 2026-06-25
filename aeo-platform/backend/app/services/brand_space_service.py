@@ -9,7 +9,7 @@ import logging
 import math
 import re
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -341,6 +341,11 @@ REVIEWABLE_PATCH_STATUSES = {"needs_review", "blocked"}
 IMMUTABLE_PATCH_STATUSES = {"auto_applied", "accepted", "rejected"}
 CONFIRMED_COMPETITOR_PATCH_STATUSES = {"auto_applied", "accepted"}
 GRAPH_UPDATE_BUILD_ACTIVE_STATUSES = {"pending", "queued", "building"}
+GRAPH_ARTIFACT_ROW_KEYS = {
+    "graph_patch_set": "artifact-patch-set",
+    "review_queue": "artifact-review-list",
+    "graph_update": "artifact-graph-update",
+}
 
 REAL_RUN_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -1850,11 +1855,20 @@ class BrandSpaceService:
             limit=limit,
             offset=offset,
         )
+        graph_artifact_counts = (
+            await self._graph_artifact_row_counts(board_run.id)
+            if self._has_graph_artifacts(artifacts)
+            else None
+        )
         total = await self._artifact_count(board_run.id, artifact_type=artifact_type)
         by_type = await self._artifact_type_counts(board_run.id)
         return {
             "artifacts": [
-                await self._artifact_to_dict_for_run(artifact, board_run)
+                await self._artifact_to_dict_for_run(
+                    artifact,
+                    board_run,
+                    graph_artifact_counts=graph_artifact_counts,
+                )
                 for artifact in artifacts
             ],
             "summary": {
@@ -1887,14 +1901,23 @@ class BrandSpaceService:
             artifact=artifact,
             fallback=latest_report,
         )
+        graph_artifact_counts = (
+            await self._graph_artifact_row_counts(board_run.id)
+            if self._has_graph_artifacts([artifact])
+            else None
+        )
         preview = await self._artifact_preview(
             artifact=artifact,
             board_run=board_run,
             graph_update=graph_update,
             latest_report=report_for_artifact,
         )
-        artifact_payload = await self._artifact_to_dict_for_run(artifact, board_run)
-        if artifact.artifact_type in {"raw_answers", "parsed_answers"}:
+        artifact_payload = await self._artifact_to_dict_for_run(
+            artifact,
+            board_run,
+            graph_artifact_counts=graph_artifact_counts,
+        )
+        if artifact.artifact_type in {"raw_answers", "parsed_answers", "graph_patch_set", "review_queue"}:
             artifact_payload["rowCount"] = max(
                 int(artifact_payload.get("rowCount") or 0),
                 int(preview.get("rowCount") or 0),
@@ -2962,15 +2985,16 @@ class BrandSpaceService:
         counts: dict[str, Any],
     ) -> bool:
         changed = False
+        graph_row_counts = await self._graph_artifact_row_counts(board_run.id)
         row_counts = {
             "artifact-lexicon": 1,
             "artifact-questions": counts["questions"],
             "artifact-raw-answers": counts["answers"],
             "artifact-parsed-answers": counts["answers"],
             "artifact-relation-set": counts["answers"],
-            "artifact-patch-set": 0,
-            "artifact-review-list": 0,
-            "artifact-graph-update": counts["snapshots"],
+            "artifact-patch-set": graph_row_counts["artifact-patch-set"],
+            "artifact-review-list": graph_row_counts["artifact-review-list"],
+            "artifact-graph-update": graph_row_counts["artifact-graph-update"] or counts["snapshots"],
         }
         artifacts = await self._artifacts(board_run.id)
         for artifact in artifacts:
@@ -3488,6 +3512,11 @@ class BrandSpaceService:
             return self._empty_space_payload(entity)
         nodes = await self._node_runs(board_run.id)
         artifacts = await self._artifacts(board_run.id)
+        graph_artifact_counts = (
+            await self._graph_artifact_row_counts(board_run.id)
+            if self._has_graph_artifacts(artifacts)
+            else None
+        )
         events = await self._latest_events(board_run.id, limit=240)
         graph_update = await self._graph_update_for_run(board_run.id)
         patches = await self._patches(graph_update.id) if graph_update else []
@@ -3528,7 +3557,11 @@ class BrandSpaceService:
             "edges": BOARD_EDGES,
             "platforms": self._platforms_for_run(board_run),
             "artifacts": [
-                await self._artifact_to_dict_for_run(artifact, board_run)
+                await self._artifact_to_dict_for_run(
+                    artifact,
+                    board_run,
+                    graph_artifact_counts=graph_artifact_counts,
+                )
                 for artifact in artifacts
             ],
             "events": [self._event_to_dict(event) for event in events],
@@ -4174,6 +4207,34 @@ class BrandSpaceService:
         )
         return {str(artifact_type): int(count) for artifact_type, count in result.all()}
 
+    @staticmethod
+    def _has_graph_artifacts(artifacts: Sequence[BoardArtifact]) -> bool:
+        return any(artifact.artifact_type in GRAPH_ARTIFACT_ROW_KEYS for artifact in artifacts)
+
+    async def _graph_artifact_row_counts(self, board_run_id: UUID) -> dict[str, int]:
+        graph_update = await self._graph_update_for_run(board_run_id)
+        if graph_update is None:
+            return {
+                "artifact-patch-set": 0,
+                "artifact-review-list": 0,
+                "artifact-graph-update": 0,
+            }
+        result = await self.db.execute(
+            select(GraphPatch.status, func.count(GraphPatch.id))
+            .where(GraphPatch.graph_update_id == graph_update.id)
+            .group_by(GraphPatch.status)
+        )
+        status_counts = {str(status): int(count) for status, count in result.all()}
+        return {
+            "artifact-patch-set": sum(status_counts.values()),
+            "artifact-review-list": sum(
+                count
+                for status, count in status_counts.items()
+                if status in REVIEWABLE_PATCH_STATUSES
+            ),
+            "artifact-graph-update": 1,
+        }
+
     async def _events(
         self,
         board_run_id: UUID,
@@ -4244,6 +4305,11 @@ class BrandSpaceService:
         row_count = int(artifact.row_count or 0)
         if artifact_type == "graph_patch_set" or artifact_type == "review_queue":
             patches = await self._patches(graph_update.id) if graph_update is not None else []
+            preview_patches = (
+                [patch for patch in patches if patch.status in REVIEWABLE_PATCH_STATUSES]
+                if artifact_type == "review_queue"
+                else patches
+            )
             rows = [
                 {
                     "title": patch.title,
@@ -4252,10 +4318,8 @@ class BrandSpaceService:
                     "score": int(patch.connection_strength or 0),
                     "evidence": len(patch.evidence_refs or []),
                 }
-                for patch in patches[:12]
+                for patch in preview_patches[:12]
             ]
-            if artifact_type == "review_queue":
-                rows = [row for row in rows if row["status"] in {"needs_review", "blocked"}]
             if graph_update is None:
                 empty_summary = "本次运行尚未生成 GraphUpdate，补丁集资产暂无预览内容。"
             elif artifact_type == "review_queue":
@@ -4272,8 +4336,8 @@ class BrandSpaceService:
                     {"key": "evidence", "label": "证据"},
                 ],
                 rows=rows,
-                row_count=row_count or len(rows),
-                truncated=len(patches) > len(rows),
+                row_count=len(preview_patches),
+                truncated=len(preview_patches) > len(rows),
                 empty_summary=empty_summary,
             )
         if artifact_type == "graph_update":
@@ -5000,8 +5064,17 @@ class BrandSpaceService:
         self,
         artifact: BoardArtifact,
         board_run: BoardRun,
+        *,
+        graph_artifact_counts: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         payload = self._artifact_to_dict(artifact)
+        graph_artifact_key = GRAPH_ARTIFACT_ROW_KEYS.get(artifact.artifact_type)
+        if graph_artifact_key:
+            if graph_artifact_counts is None:
+                graph_artifact_counts = await self._graph_artifact_row_counts(board_run.id)
+            derived_row_count = graph_artifact_counts.get(graph_artifact_key)
+            if derived_row_count is not None:
+                payload["rowCount"] = int(derived_row_count)
         if artifact.artifact_type not in {"raw_answers", "parsed_answers"}:
             return payload
 

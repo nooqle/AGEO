@@ -2190,7 +2190,19 @@ async def test_real_completed_run_builds_graph_update_from_answers(tmp_path):
         await session.refresh(board_run)
         board_run.last_synced_at = None
         await session.commit()
-        await service.get_board_run(run_id=payload["run"]["id"], current_user=owner)
+        resynced = await service.get_board_run(run_id=payload["run"]["id"], current_user=owner)
+        resynced_artifact_by_key = {
+            artifact["id"]: artifact for artifact in resynced["artifacts"]
+        }
+        assert resynced_artifact_by_key["artifact-patch-set"]["rowCount"] == 3
+        assert resynced_artifact_by_key["artifact-review-list"]["rowCount"] == 2
+        patch_assets = await service.get_assets(
+            run_id=payload["run"]["id"],
+            current_user=owner,
+            artifact_type="graph_patch_set",
+            limit=1,
+        )
+        assert patch_assets["artifacts"][0]["rowCount"] == 3
         updates = await session.execute(
             select(GraphUpdate).where(GraphUpdate.board_run_id == board_run.id)
         )

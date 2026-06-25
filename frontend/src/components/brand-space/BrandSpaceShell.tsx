@@ -16,6 +16,7 @@ import {
   DashboardBrandSidebar,
   DashboardMobileBrandSwitcher,
 } from '@/components/dashboard/DashboardBrandSidebar';
+import { toast } from '@/components/ui/toast';
 import {
   artifacts,
   boardEdges,
@@ -26,6 +27,7 @@ import {
   initialPlatforms,
 } from '@/mocks/brandSpaceMock';
 import { api } from '@/services/api';
+import { triggerBrowserDownload } from '@/lib/browserDownload';
 import type {
   ArtifactDetail,
   ArtifactRef,
@@ -74,6 +76,28 @@ function runStatusLabel(status: BoardRunStatus) {
   if (status === 'completed') return '已完成';
   if (status === 'failed') return '失败';
   return '就绪';
+}
+
+function isTerminalRunStatus(status: BoardRunStatus) {
+  return status === 'completed' || status === 'stopped' || status === 'failed';
+}
+
+function runPrimaryLabel(status: BoardRunStatus) {
+  if (status === 'running') return '暂停';
+  if (status === 'paused') return '继续';
+  if (isTerminalRunStatus(status)) return '重新运行';
+  return '运行';
+}
+
+function runPrimaryAriaLabel(status: BoardRunStatus) {
+  if (status === 'running') return '暂停当前画布运行';
+  if (status === 'paused') return '继续当前画布运行';
+  if (isTerminalRunStatus(status)) return '重新运行当前画布并创建新的图谱更新';
+  return '启动当前画布运行';
+}
+
+function canStopRun(status: BoardRunStatus) {
+  return status === 'running' || status === 'paused' || status === 'pause_requested';
 }
 
 function runModeLabel(isBackendMode: boolean, isDemoMode: boolean, spaceRun: BrandSpaceBoardRun | null) {
@@ -256,17 +280,6 @@ function mergeRuntimeEvents(current: RuntimeEvent[], incoming: RuntimeEvent[]) {
   return limitRuntimeEvents([...byId.values()]);
 }
 
-function downloadBlob(blob: Blob, filename: string) {
-  const url = window.URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.URL.revokeObjectURL(url);
-}
-
 function fallbackReviewCategory(patch: GraphPatch) {
   if (patch.category) return patch.category;
   if (patch.patchType === 'add_competitor_relation' || patch.relationType === 'competes_with') return 'competitor';
@@ -368,6 +381,7 @@ export function BrandSpaceShell({
   const [spaceReloadKey, setSpaceReloadKey] = useState(0);
   const [backendNotice, setBackendNotice] = useState('');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isRunCommandPending, setIsRunCommandPending] = useState(false);
   const [runStatus, setRunStatus] = useState<BoardRunStatus>('idle');
   const [nodes, setNodes] = useState<BoardNode[]>(() => idleBoardNodes());
   const [platforms, setPlatforms] = useState<PlatformFetchNode[]>(() => idlePlatforms());
@@ -516,7 +530,13 @@ export function BrandSpaceShell({
           ...response.artifacts.filter((artifact) => !seen.has(artifact.artifactId ?? artifact.id)),
         ];
       });
-      setAssetSummary(response.summary ?? assetSummaryFromList(response.artifacts));
+      setAssetSummary((current) => {
+        const nextSummary = response.summary ?? assetSummaryFromList(response.artifacts);
+        if (normalizedType && current && current.total > nextSummary.total) {
+          return current;
+        }
+        return nextSummary;
+      });
       setAssetPagination(response.pagination ?? null);
       return response.artifacts;
     } catch (error) {
@@ -751,6 +771,7 @@ export function BrandSpaceShell({
   };
 
   const handleRunStart = async () => {
+    if (isRunCommandPending) return;
     if (!isBackendMode || !entityId) {
       if (!isDemoMode) {
         setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
@@ -759,6 +780,11 @@ export function BrandSpaceShell({
       startLocalRun();
       return;
     }
+    if (isTerminalRunStatus(runStatus)) {
+      const confirmed = window.confirm('将创建一次新的品牌空间运行，并在完成后生成新的图谱更新。当前历史运行和报告不会被覆盖。是否继续？');
+      if (!confirmed) return;
+    }
+    setIsRunCommandPending(true);
     try {
       const payload = spaceRun?.id && runStatus === 'paused'
         ? await api.resumeBrandSpaceBoardRun(spaceRun.id)
@@ -767,10 +793,13 @@ export function BrandSpaceShell({
       await refreshReviewItems(entityId, payload.patches, payload.graph_update);
     } catch (error) {
       setBackendNotice(backendNoticeFromError(error, '启动画布失败'));
+    } finally {
+      setIsRunCommandPending(false);
     }
   };
 
   const handleRunPause = async () => {
+    if (isRunCommandPending) return;
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
         setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
@@ -779,15 +808,19 @@ export function BrandSpaceShell({
       pauseLocalRun();
       return;
     }
+    setIsRunCommandPending(true);
     try {
       const payload = await api.pauseBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
       setBackendNotice(backendNoticeFromError(error, '暂停失败'));
+    } finally {
+      setIsRunCommandPending(false);
     }
   };
 
   const handleRunResume = async () => {
+    if (isRunCommandPending) return;
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
         setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
@@ -796,15 +829,19 @@ export function BrandSpaceShell({
       resumeLocalRun();
       return;
     }
+    setIsRunCommandPending(true);
     try {
       const payload = await api.resumeBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
       setBackendNotice(backendNoticeFromError(error, '继续失败'));
+    } finally {
+      setIsRunCommandPending(false);
     }
   };
 
   const handleRunStop = async () => {
+    if (isRunCommandPending || !canStopRun(runStatus)) return;
     if (!isBackendMode || !spaceRun?.id) {
       if (!isDemoMode) {
         setBackendNotice('品牌空间数据尚未连接成功，请先重新加载品牌空间。');
@@ -813,11 +850,14 @@ export function BrandSpaceShell({
       stopLocalRun();
       return;
     }
+    setIsRunCommandPending(true);
     try {
       const payload = await api.stopBrandSpaceBoardRun(spaceRun.id);
       applySpacePayload(payload);
     } catch (error) {
       setBackendNotice(backendNoticeFromError(error, '停止失败'));
+    } finally {
+      setIsRunCommandPending(false);
     }
   };
 
@@ -917,8 +957,12 @@ export function BrandSpaceShell({
     setDownloadingArtifactIds((current) => [...current, artifactId]);
     try {
       const response = await api.downloadBrandSpaceArtifact(artifactId);
-      downloadBlob(response.blob, response.filename);
+      if (!triggerBrowserDownload(response.blob, response.filename)) {
+        throw new Error('download_not_started');
+      }
+      toast.success('资产对象已开始下载。');
     } catch (error) {
+      toast.error('资产对象下载失败，请稍后重试。');
       setBackendNotice(backendNoticeFromError(error, '资产对象下载失败'));
     } finally {
       setDownloadingArtifactIds((current) => current.filter((id) => id !== artifactId));
@@ -996,6 +1040,11 @@ export function BrandSpaceShell({
     || Boolean(entityError)
     || isLoadingSpace
     || (!isBackendMode && !isDemoMode);
+  const runPrimaryDisabled = runControlsDisabled || isRunCommandPending;
+  const runStopDisabled = runControlsDisabled
+    || isRunCommandPending
+    || (!spaceRun?.id && !isDemoMode)
+    || !canStopRun(runStatus);
   const showSetupEmptyState = !isDemoMode && !showBackendErrorState && (Boolean(entityError) || (hasFetchedEntities && !hasSelectedBrand));
   const showLoadingState = !isDemoMode && !showSetupEmptyState && isLoadingSpace;
   const showWorkspaceViews = !showSetupEmptyState && !showLoadingState && !showBackendErrorState;
@@ -1045,21 +1094,22 @@ export function BrandSpaceShell({
               <button
                 type="button"
                 onClick={runStatus === 'running' ? handleRunPause : runStatus === 'paused' ? handleRunResume : handleRunStart}
-                disabled={runControlsDisabled}
+                disabled={runPrimaryDisabled}
                 className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-55"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
-                aria-label={runStatus === 'running' ? '暂停当前画布运行' : runStatus === 'paused' ? '继续当前画布运行' : '启动当前画布运行'}
+                aria-label={runPrimaryAriaLabel(runStatus)}
               >
                 {runStatus === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                {runStatus === 'running' ? '暂停' : runStatus === 'paused' ? '继续' : '运行'}
+                {isRunCommandPending ? '处理中' : runPrimaryLabel(runStatus)}
               </button>
               <button
                 type="button"
                 onClick={handleRunStop}
-                disabled={runControlsDisabled || (!spaceRun?.id && !isDemoMode)}
+                disabled={runStopDisabled}
                 className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-55"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
-                aria-label="停止当前画布运行"
+                aria-label={runStopDisabled ? '当前没有可停止的画布运行' : '停止当前画布运行'}
+                title={runStopDisabled ? '当前没有可停止的运行' : undefined}
               >
                 <Square className="h-4 w-4" />
                 停止
@@ -1209,6 +1259,7 @@ export function BrandSpaceShell({
                 onRunStop={handleRunStop}
                 onPatchDecision={handlePatchDecision}
                 pendingPatchDecisionIds={pendingPatchDecisionIds}
+                isRunCommandPending={isRunCommandPending}
               />
             ) : null}
 

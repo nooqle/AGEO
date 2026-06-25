@@ -1,5 +1,7 @@
 import { AlertTriangle, Archive, CheckCircle2, Download, FileCheck2, Lock, Quote, ShieldAlert } from 'lucide-react';
 import styles from './BrandSpace.module.css';
+import { toast } from '@/components/ui/toast';
+import { triggerBrowserDownload } from '@/lib/browserDownload';
 import type {
   BrandSpaceGraphUpdate,
   BrandSpaceReport,
@@ -83,16 +85,21 @@ function storyPayload(report?: BrandSpaceReport | null) {
 }
 
 function downloadMarkdown(title: string, markdown: string) {
-  if (!markdown || typeof window === 'undefined') return;
+  if (!markdown || typeof window === 'undefined') return false;
   const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
-  const url = window.URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${title.replace(/[\\/:*?"<>|]/g, '-')}.md`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.URL.revokeObjectURL(url);
+  return triggerBrowserDownload(blob, `${title.replace(/[\\/:*?"<>|]/g, '-')}.md`);
+}
+
+function handleDownloadMarkdown(title: string, markdown: string) {
+  try {
+    if (!downloadMarkdown(title, markdown)) {
+      toast.error('报告 Markdown 暂时不可导出，请稍后重试。');
+      return;
+    }
+    toast.success('报告 Markdown 已开始下载。');
+  } catch {
+    toast.error('报告 Markdown 导出失败，请稍后重试。');
+  }
 }
 
 function guardrailKey(guardrail: ReportGuardrailResult, index: number) {
@@ -246,6 +253,25 @@ export function ReportReviewView({
                     </li>
                   ))}
                 </ul>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={onOpenAssets}
+                    disabled={!onOpenAssets}
+                    className="inline-flex h-8 items-center rounded-lg border px-3 text-xs font-semibold text-[var(--text-secondary)] disabled:opacity-45"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
+                  >
+                    核验证据资产
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onOpenBoard}
+                    disabled={!onOpenBoard}
+                    className="inline-flex h-8 items-center rounded-lg bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] disabled:opacity-45"
+                  >
+                    回画布审阅
+                  </button>
+                </div>
               </div>
             ) : null}
           </div>
@@ -253,7 +279,7 @@ export function ReportReviewView({
             <button
               type="button"
               disabled={!reportMarkdown}
-              onClick={() => downloadMarkdown(title, reportMarkdown)}
+              onClick={() => handleDownloadMarkdown(title, reportMarkdown)}
               className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-semibold text-[var(--text-secondary)] disabled:opacity-45"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
             >

@@ -40,6 +40,7 @@ interface BoardRuntimeViewProps {
   onRunStop: () => void;
   onPatchDecision: (patchId: string, status: Extract<GraphPatchStatus, 'accepted' | 'rejected' | 'needs_review'>) => void;
   pendingPatchDecisionIds?: string[];
+  isRunCommandPending?: boolean;
 }
 
 const nodeAccent: Record<BoardNode['kind'], string> = {
@@ -109,6 +110,24 @@ function statusLabel(status: BoardRunStatus) {
   if (status === 'completed') return '已完成';
   if (status === 'failed') return '失败';
   return '就绪';
+}
+
+function runPrimaryLabel(status: BoardRunStatus) {
+  if (status === 'running') return '暂停';
+  if (status === 'paused') return '继续';
+  if (status === 'completed' || status === 'stopped' || status === 'failed') return '重新运行';
+  return '全部运行';
+}
+
+function runPrimaryAriaLabel(status: BoardRunStatus) {
+  if (status === 'running') return '暂停画布运行';
+  if (status === 'paused') return '继续画布运行';
+  if (status === 'completed' || status === 'stopped' || status === 'failed') return '重新运行画布并创建新的图谱更新';
+  return '启动画布运行';
+}
+
+function canStopRun(status: BoardRunStatus) {
+  return status === 'running' || status === 'paused' || status === 'pause_requested';
 }
 
 function platformRackStatusLabel(runStatus: BoardRunStatus, platforms: PlatformFetchNode[]) {
@@ -273,6 +292,7 @@ export function BoardRuntimeView({
   onRunStop,
   onPatchDecision,
   pendingPatchDecisionIds = [],
+  isRunCommandPending = false,
 }: BoardRuntimeViewProps) {
   const layoutNodes = nodes.map(layoutNode);
   const selectedNode = layoutNodes.find((node) => node.id === selectedNodeId) ?? layoutNodes[0];
@@ -283,6 +303,7 @@ export function BoardRuntimeView({
     ? Math.round(platforms.reduce((sum, platform) => sum + platform.progress, 0) / platforms.length)
     : 0;
   const stageSize = stageSizeForNodes(nodes);
+  const stopDisabled = isRunCommandPending || !canStopRun(runStatus);
 
   return (
     <div className="grid min-h-0 grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -292,18 +313,21 @@ export function BoardRuntimeView({
             <button
               type="button"
               onClick={runStatus === 'running' ? onRunPause : runStatus === 'paused' ? onRunResume : onRunStart}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)]"
-              aria-label={runStatus === 'running' ? '暂停画布运行' : runStatus === 'paused' ? '继续画布运行' : '启动画布运行'}
+              disabled={isRunCommandPending}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)] disabled:cursor-not-allowed disabled:opacity-55"
+              aria-label={runPrimaryAriaLabel(runStatus)}
             >
               {runStatus === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              {runStatus === 'running' ? '暂停' : runStatus === 'paused' ? '继续' : '全部运行'}
+              {isRunCommandPending ? '处理中' : runPrimaryLabel(runStatus)}
             </button>
             <button
               type="button"
               onClick={onRunStop}
-              className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-secondary)]"
+              disabled={stopDisabled}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-[var(--text-secondary)] disabled:cursor-not-allowed disabled:opacity-55"
               style={{ borderColor: 'var(--border-subtle)' }}
-              aria-label="停止画布运行"
+              aria-label={stopDisabled ? '当前没有可停止的画布运行' : '停止画布运行'}
+              title={stopDisabled ? '当前没有可停止的运行' : undefined}
             >
               <Square className="h-4 w-4" />
               停止
