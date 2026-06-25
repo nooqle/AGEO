@@ -87,6 +87,7 @@ const relationKindLabels: Record<string, string> = {
   risk_of: '风险',
   competes_with: '竞品',
   scenario_for: '场景',
+  risk_related: '风险',
   update_strength: '增强',
   add_risk_relation: '风险',
   add_competitor_relation: '竞品',
