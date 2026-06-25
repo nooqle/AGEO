@@ -903,6 +903,10 @@ deploy() {
   old_sha="$(current_sha)"
   log "Resolved target: $sha"
   guard_migrations "$old_sha" "$sha"
+  if [[ "$ALLOW_MIGRATIONS" -eq 1 && "$MIGRATIONS_CHANGED" -eq 0 ]]; then
+    MIGRATIONS_CHANGED=1
+    log "Explicit migration execution is enabled; Alembic will upgrade to head"
+  fi
   release_dir="$(create_release_tree "$sha")"
 
   build_backend "$release_dir"
