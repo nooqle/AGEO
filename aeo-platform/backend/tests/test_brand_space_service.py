@@ -2413,6 +2413,38 @@ async def test_real_board_run_marks_missing_intelligence_run_failed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_space_marks_runtime_sync_failure_failed(tmp_path, monkeypatch):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-sync-failure-owner@example.com")
+        entity = _entity(owner)
+        board_run = BoardRun(
+            entity_id=entity.id,
+            created_by_user_id=owner.id,
+            brand_intelligence_run_id=uuid.uuid4(),
+            status="running",
+            is_scaffold=False,
+        )
+        session.add_all([owner, entity, board_run])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+
+        async def fail_sync(**_kwargs):
+            raise RuntimeError("sync broke")
+
+        monkeypatch.setattr(service, "_sync_real_board_run", fail_sync)
+
+        payload = await service.get_space(entity_id=entity.id, current_user=owner)
+
+        assert payload["run"]["status"] == "failed"
+        assert payload["run"]["error_code"] == "runtime_sync_failed"
+        assert any(event["type"] == "runtime_sync_failed" for event in payload["events"])
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_real_board_run_failed_stage_marks_matching_node(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:

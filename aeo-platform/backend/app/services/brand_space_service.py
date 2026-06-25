@@ -1383,9 +1383,12 @@ class BrandSpaceService:
 
     async def get_space(self, *, entity_id: str | UUID, current_user: User) -> dict[str, Any]:
         entity = await self._require_entity(entity_id, current_user)
+        entity_uuid = entity.id
         board_run = await self._default_board_run_for_space(entity.id)
         if board_run is not None:
-            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+            if await self._safe_sync_real_board_run(board_run=board_run, current_user=current_user):
+                entity = await self._entity_by_id(entity_uuid)
+                board_run = await self._default_board_run_for_space(entity_uuid)
         return await self._space_payload(entity=entity, board_run=board_run)
 
     async def get_graph(self, *, entity_id: str | UUID, current_user: User) -> dict[str, Any]:
@@ -1662,7 +1665,7 @@ class BrandSpaceService:
                 node_id="brand-seed",
                 payload={"brand_intelligence_run_id": str(intelligence_run.id)},
             )
-        await self._sync_real_board_run(board_run=board_run, current_user=current_user, force=True)
+        await self._safe_sync_real_board_run(board_run=board_run, current_user=current_user, force=True)
         entity = await self._entity_by_id(board_run.entity_id)
         return (
             await self._space_payload(entity=entity, board_run=board_run),
@@ -1676,7 +1679,7 @@ class BrandSpaceService:
         current_user: User,
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
-        await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+        await self._safe_sync_real_board_run(board_run=board_run, current_user=current_user)
         entity = await self._entity_by_id(board_run.entity_id)
         return await self._space_payload(entity=entity, board_run=board_run)
 
@@ -1707,7 +1710,7 @@ class BrandSpaceService:
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
         if not board_run.is_scaffold:
-            await self._sync_real_board_run(board_run=board_run, current_user=current_user, force=True)
+            await self._safe_sync_real_board_run(board_run=board_run, current_user=current_user, force=True)
         intelligence_run_to_cancel: UUID | None = None
         if status == "pause_requested":
             board_run.status = "paused"
@@ -1768,7 +1771,7 @@ class BrandSpaceService:
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
         if sync:
-            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+            await self._safe_sync_real_board_run(board_run=board_run, current_user=current_user)
         bounded_limit = self._bounded_limit(limit, default=100, maximum=500)
         if after_sequence is not None:
             bounded_after_sequence = self._bounded_offset(after_sequence)
@@ -1835,7 +1838,7 @@ class BrandSpaceService:
     ) -> dict[str, Any]:
         board_run = await self._require_board_run(run_id, current_user)
         if sync:
-            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+            await self._safe_sync_real_board_run(board_run=board_run, current_user=current_user)
         artifacts = await self._artifacts(
             board_run.id,
             artifact_type=artifact_type,
@@ -1867,7 +1870,7 @@ class BrandSpaceService:
         artifact = await self._require_artifact(artifact_id, current_user)
         board_run = await self._require_board_run(artifact.board_run_id, current_user)
         if sync:
-            await self._sync_real_board_run(board_run=board_run, current_user=current_user)
+            await self._safe_sync_real_board_run(board_run=board_run, current_user=current_user)
         node_run = await self.db.get(BoardNodeRun, artifact.node_run_id) if artifact.node_run_id else None
         graph_update = await self._graph_update_for_run(board_run.id)
         latest_report = (
@@ -2550,6 +2553,50 @@ class BrandSpaceService:
     def _runtime_dispatch_key(intelligence_run: BrandIntelligenceRun) -> str:
         task_run_id = (intelligence_run.output_refs or {}).get("task_run_id") or ""
         return f"{intelligence_run.id}:{task_run_id}:{intelligence_run.status}"
+
+    async def _safe_sync_real_board_run(
+        self,
+        *,
+        board_run: BoardRun,
+        current_user: User,
+        force: bool = False,
+    ) -> bool:
+        try:
+            return await self._sync_real_board_run(
+                board_run=board_run,
+                current_user=current_user,
+                force=force,
+            )
+        except Exception as exc:
+            run_id = board_run.id
+            entity_id = board_run.entity_id
+            logger.exception("Brand Space runtime sync failed for board run %s", run_id)
+            await self.db.rollback()
+
+            failed_run = await self.db.get(BoardRun, run_id)
+            if failed_run is None:
+                return False
+            if (
+                failed_run.status == "failed"
+                and failed_run.error_code == "runtime_sync_failed"
+            ):
+                return True
+
+            failed_run.status = "failed"
+            failed_run.active_node_ids = []
+            failed_run.error_code = "runtime_sync_failed"
+            failed_run.error_message = "真实运行同步失败，已保留画布状态。"
+            failed_run.last_synced_at = _now()
+            await self._append_event(
+                entity_id=entity_id,
+                board_run_id=run_id,
+                event_type="runtime_sync_failed",
+                severity="error",
+                message="真实运行同步失败，画布运行已标记失败。",
+                payload={"error_type": exc.__class__.__name__},
+            )
+            await self.db.commit()
+            return True
 
     async def _sync_real_board_run(
         self,
