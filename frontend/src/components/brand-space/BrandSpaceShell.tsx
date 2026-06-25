@@ -330,6 +330,7 @@ function idlePlatforms() {
 }
 
 function canvasStressFixtureCount() {
+  if (process.env.NODE_ENV === 'production') return null;
   if (typeof window === 'undefined') return null;
   const params = new URLSearchParams(window.location.search);
   const value = params.get('canvasFixture');
@@ -441,9 +442,9 @@ export function BrandSpaceShell({
     setContext(payload.context);
     setSpaceRun(payload.run);
     setRunStatus(payload.run?.status ?? 'idle');
-    setNodes(payload.nodes.length ? payload.nodes : initialBoardNodes);
-    setPlatforms(payload.platforms.length ? payload.platforms : initialPlatforms);
-    setEdges(payload.edges.length ? payload.edges : boardEdges);
+    setNodes(payload.nodes);
+    setPlatforms(payload.platforms);
+    setEdges(payload.edges);
     setPatches(payload.patches);
     setArtifactsState(payload.artifacts);
     setAssetSummary(assetSummaryFromList(payload.artifacts));
@@ -899,8 +900,8 @@ export function BrandSpaceShell({
       const response = await api.getBrandSpaceArtifact(artifactId);
       setSelectedArtifactDetail(response);
     } catch (error) {
-      setSelectedArtifactDetail(buildLocalArtifactDetail(artifact));
-      setBackendNotice(backendNoticeFromError(error, '资产详情读取失败，已显示本地摘要'));
+      setSelectedArtifactDetail(null);
+      setBackendNotice(backendNoticeFromError(error, '资产详情读取失败'));
     } finally {
       setIsLoadingArtifactDetail(false);
     }
