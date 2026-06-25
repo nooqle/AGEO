@@ -86,6 +86,17 @@ function runModeLabel(isBackendMode: boolean, isDemoMode: boolean, spaceRun: Bra
   return '真实运行态';
 }
 
+function graphUpdateBuildStatus(spaceRun: BrandSpaceBoardRun | null) {
+  const status = spaceRun?.output_refs?.graph_update_build_status;
+  return typeof status === 'string' ? status : '';
+}
+
+function shouldAwaitGraphUpdate(spaceRun: BrandSpaceBoardRun | null, graphUpdate: BrandSpaceGraphUpdate | null) {
+  if (!spaceRun || spaceRun.is_scaffold || spaceRun.status !== 'completed') return false;
+  const buildStatus = graphUpdateBuildStatus(spaceRun);
+  return !graphUpdate || buildStatus === 'pending' || buildStatus === 'queued' || buildStatus === 'building';
+}
+
 function advanceStatus(status: NodeStatus): NodeStatus {
   if (status === 'paused') return 'running';
   if (status === 'idle' || status === 'queued') return 'running';
@@ -633,6 +644,58 @@ export function BrandSpaceShell({
       window.clearInterval(fullRefreshIntervalId);
     };
   }, [applySpacePayload, isBackendMode, runStatus, spaceRun?.id]);
+
+  useEffect(() => {
+    if (!isBackendMode || !spaceRun?.id || !shouldAwaitGraphUpdate(spaceRun, graphUpdate)) return undefined;
+
+    let cancelled = false;
+    let attempts = 0;
+    let intervalId: number | null = null;
+
+    const refreshCompletedRun = async () => {
+      attempts += 1;
+      try {
+        const payload = await api.getBrandSpaceBoardRun(spaceRun.id);
+        if (cancelled) return;
+        applySpacePayload(payload);
+        if (entityId) {
+          await refreshReviewItems(entityId, payload.patches, payload.graph_update);
+        }
+        if (!shouldAwaitGraphUpdate(payload.run, payload.graph_update) && intervalId !== null) {
+          window.clearInterval(intervalId);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBackendNotice(backendNoticeFromError(error, '图谱更新状态刷新失败'));
+        }
+      }
+
+      if (!cancelled && attempts >= 10) {
+        if (intervalId !== null) window.clearInterval(intervalId);
+        setBackendNotice('图谱更新仍在后台构建中，稍后会自动进入图谱与报告视图。');
+      }
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      void refreshCompletedRun();
+    }, 2000);
+    intervalId = window.setInterval(() => {
+      void refreshCompletedRun();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      if (intervalId !== null) window.clearInterval(intervalId);
+    };
+  }, [
+    applySpacePayload,
+    entityId,
+    graphUpdate,
+    isBackendMode,
+    refreshReviewItems,
+    spaceRun,
+  ]);
 
   useEffect(() => {
     if (isBackendMode || !isDemoMode) return undefined;
