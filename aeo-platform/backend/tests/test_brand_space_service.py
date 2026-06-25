@@ -668,6 +668,41 @@ async def test_real_board_run_defaults_to_real_a4_platform_scope(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_real_board_run_request_id_is_idempotent(tmp_path):
+    engine, session_factory = await _build_session(tmp_path)
+    async with session_factory() as session:
+        owner = _user("brand-space-real-idempotent@example.com")
+        entity = _entity(owner)
+        session.add_all([owner, entity])
+        await session.commit()
+
+        service = BrandSpaceService(session)
+        first = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            execution_mode="real",
+            request_id="rerun-click-1",
+        )
+        second = await service.create_board_run(
+            entity_id=entity.id,
+            current_user=owner,
+            execution_mode="real",
+            request_id="rerun-click-1",
+        )
+
+        assert second["run"]["id"] == first["run"]["id"]
+        assert second["run"]["output_refs"]["request_id"] == "rerun-click-1"
+        board_runs = list((await session.execute(select(BoardRun))).scalars().all())
+        intelligence_runs = list(
+            (await session.execute(select(BrandIntelligenceRun))).scalars().all()
+        )
+        assert len(board_runs) == 1
+        assert len(intelligence_runs) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_get_space_does_not_fallback_to_scaffold_graph_update_for_real_empty_run(tmp_path):
     engine, session_factory = await _build_session(tmp_path)
     async with session_factory() as session:
@@ -1773,6 +1808,7 @@ async def test_review_items_and_patch_decision_are_idempotent(tmp_path):
         )
         assert accepted_competitor_entity["patchId"] == competitor_patch_id
         assert accepted_competitor_entity["patchStatus"] == "accepted"
+        assert accepted_competitor_entity["zone"] == "competitor"
 
         remaining_review_items = await service.get_review_items(
             entity_id=entity.id,

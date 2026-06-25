@@ -41,6 +41,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
         <ThemeToggle />
         <NotificationBell align="right" />
         <button
+          type="button"
           onClick={() => router.push('/settings')}
           className="h-10 w-10 rounded-lg p-2 transition-colors"
           style={{ color: 'var(--text-tertiary)' }}
@@ -52,6 +53,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
             e.currentTarget.style.backgroundColor = 'transparent';
             e.currentTarget.style.color = 'var(--text-tertiary)';
           }}
+          aria-label="打开设置"
           title="设置"
         >
           <RiSettings4Line className="h-4.5 w-4.5" />

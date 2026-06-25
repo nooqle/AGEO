@@ -164,6 +164,10 @@
   opacity: 0.86;
 }
 
+.edgePacketTrace {
+  opacity: 0.58;
+}
+
 .node {
   position: absolute;
   z-index: 2;
@@ -386,6 +390,13 @@
   stroke-dasharray: 4 4;
 }
 
+.graphZoneText {
+  fill: var(--text-tertiary);
+  font-size: 2.4px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
 .graphLink {
   stroke: color-mix(in srgb, var(--brand-primary) 44%, var(--text-tertiary) 56%);
   stroke-linecap: round;
@@ -400,6 +411,19 @@
   stroke: color-mix(in srgb, var(--warning) 70%, var(--text-tertiary) 30%);
 }
 
+.graphRelationLabelBox {
+  fill: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  stroke: color-mix(in srgb, var(--border-subtle) 82%, transparent);
+  stroke-width: 0.35;
+}
+
+.graphRelationLabelText {
+  fill: var(--text-secondary);
+  font-size: 2.25px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
 .graphEntity {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -407,6 +431,11 @@
   justify-items: center;
   gap: 8px;
   min-width: 128px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 .entityPoint {
@@ -463,6 +492,59 @@
   font-size: 11px;
   font-style: normal;
   line-height: 1.2;
+}
+
+.graphEntitySelected .entityPoint,
+.graphEntitySelected .entityCenter {
+  box-shadow: 0 0 0 9px color-mix(in srgb, var(--brand-bg) 86%, transparent);
+}
+
+.graphEntitySelected .entityLabel {
+  border-color: var(--brand-border);
+  background: color-mix(in srgb, var(--brand-bg) 32%, var(--bg-elevated) 68%);
+}
+
+.entityRelationRow {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, var(--bg-secondary) 12%);
+}
+
+.entityRelationRow span {
+  color: var(--brand-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.entityRelationRow span[data-kind*='risk'] {
+  color: var(--error);
+}
+
+.entityRelationRow span[data-kind*='compet'] {
+  color: var(--warning);
+}
+
+.entityRelationRow strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entityRelationRow em {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .queueItem {
@@ -531,6 +613,16 @@
   line-height: 1;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
+}
+
+.reportDownloadStatus {
+  flex-basis: 100%;
+  margin: 0;
+  max-width: 460px;
+  color: var(--brand-text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
 }
 
 .reportSection {
@@ -1027,6 +1119,15 @@
   background: var(--bg-tertiary);
   color: var(--text-tertiary);
   cursor: not-allowed;
+}
+
+.assetDownloadStatus {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--brand-text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .assetPreview {

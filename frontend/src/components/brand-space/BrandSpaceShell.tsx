@@ -403,6 +403,7 @@ export function BrandSpaceShell({
   const [assetPagination, setAssetPagination] = useState<PaginationInfo | null>(null);
   const [pendingPatchDecisionIds, setPendingPatchDecisionIds] = useState<string[]>([]);
   const [downloadingArtifactIds, setDownloadingArtifactIds] = useState<string[]>([]);
+  const [downloadStatusByArtifactId, setDownloadStatusByArtifactId] = useState<Record<string, string>>({});
   const [selectedNodeId, setSelectedNodeId] = useState('platform-rack');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
   const lastEventSequenceRef = useRef(0);
@@ -781,14 +782,19 @@ export function BrandSpaceShell({
       return;
     }
     if (isTerminalRunStatus(runStatus)) {
-      const confirmed = window.confirm('将创建一次新的品牌空间运行，并在完成后生成新的图谱更新。当前历史运行和报告不会被覆盖。是否继续？');
+      const confirmed = window.confirm(
+        '将创建一次新的品牌空间运行，重新抓取豆包、元宝、Kimi、DeepSeek 四个平台，并在完成后生成新的 Graph Update。当前图谱版本、历史资产和已有报告不会被覆盖。是否继续？',
+      );
       if (!confirmed) return;
     }
     setIsRunCommandPending(true);
     try {
       const payload = spaceRun?.id && runStatus === 'paused'
         ? await api.resumeBrandSpaceBoardRun(spaceRun.id)
-        : await api.createBrandSpaceBoardRun(entityId, { execution_mode: 'real' });
+        : await api.createBrandSpaceBoardRun(entityId, {
+            execution_mode: 'real',
+            request_id: `rerun-${entityId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          });
       applySpacePayload(payload);
       await refreshReviewItems(entityId, payload.patches, payload.graph_update);
     } catch (error) {
@@ -954,15 +960,27 @@ export function BrandSpaceShell({
   const handleDownloadArtifact = async (artifact: ArtifactRef) => {
     const artifactId = artifact.artifactId ?? artifact.id;
     if (!isBackendMode || downloadingArtifactIds.includes(artifactId)) return;
+    setDownloadStatusByArtifactId((current) => ({
+      ...current,
+      [artifactId]: '正在准备下载文件...',
+    }));
     setDownloadingArtifactIds((current) => [...current, artifactId]);
     try {
       const response = await api.downloadBrandSpaceArtifact(artifactId);
       if (!triggerBrowserDownload(response.blob, response.filename)) {
         throw new Error('download_not_started');
       }
-      toast.success('资产对象已开始下载。');
+      setDownloadStatusByArtifactId((current) => ({
+        ...current,
+        [artifactId]: `下载请求已发送：${response.filename}。请查看浏览器下载栏；若没有文件，请重试或联系管理员。`,
+      }));
+      toast.success('资产对象已开始下载。', 8000);
     } catch (error) {
-      toast.error('资产对象下载失败，请稍后重试。');
+      setDownloadStatusByArtifactId((current) => ({
+        ...current,
+        [artifactId]: '下载失败：未能生成可下载文件，请稍后重试或联系管理员。',
+      }));
+      toast.error('资产对象下载失败，请稍后重试。', 8000);
       setBackendNotice(backendNoticeFromError(error, '资产对象下载失败'));
     } finally {
       setDownloadingArtifactIds((current) => current.filter((id) => id !== artifactId));
@@ -1286,6 +1304,7 @@ export function BrandSpaceShell({
                 selectedArtifactId={selectedArtifactDetail?.artifact.artifactId ?? selectedArtifactDetail?.artifact.id ?? null}
                 selectedType={assetTypeFilter}
                 downloadingArtifactIds={downloadingArtifactIds}
+                downloadStatusByArtifactId={downloadStatusByArtifactId}
                 onTypeChange={handleAssetTypeChange}
                 onLoadMore={handleLoadMoreAssets}
                 onOpenArtifact={handleOpenArtifact}

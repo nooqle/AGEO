@@ -39,6 +39,7 @@ interface AssetsViewProps {
   onDownloadArtifact?: (artifact: ArtifactRef) => void;
   onOpenBoard?: () => void;
   downloadingArtifactIds?: string[];
+  downloadStatusByArtifactId?: Record<string, string>;
 }
 
 function classNames(...classes: Array<string | false | undefined>) {
@@ -226,6 +227,7 @@ export function AssetsView({
   onDownloadArtifact,
   onOpenBoard,
   downloadingArtifactIds = [],
+  downloadStatusByArtifactId = {},
 }: AssetsViewProps) {
   const typeOptions = useMemo(() => {
     const counts = summary?.by_type ?? artifacts.reduce<Record<string, number>>((acc, artifact) => {
@@ -248,6 +250,7 @@ export function AssetsView({
   const activeDownloadId = detail?.artifact ? artifactStableId(detail.artifact) : null;
   const isDownloadingActive = activeDownloadId ? downloadingArtifactIds.includes(activeDownloadId) : false;
   const canDownloadActive = Boolean(detail?.access?.available && detail.access.downloadUrl);
+  const activeDownloadStatus = activeDownloadId ? downloadStatusByArtifactId[activeDownloadId] : '';
 
   return (
     <div className="space-y-4">
@@ -427,6 +430,11 @@ export function AssetsView({
                       )}
                       下载对象
                     </button>
+                    {activeDownloadStatus ? (
+                      <p className={styles.assetDownloadStatus} role="status" aria-live="polite">
+                        {activeDownloadStatus}
+                      </p>
+                    ) : null}
                   </section>
                 ) : null}
 

@@ -128,6 +128,7 @@ async def create_board_run(
             template_id=payload.template_id,
             input_scope=payload.input_scope,
             execution_mode=payload.execution_mode,
+            request_id=payload.request_id,
         )
         if payload.execution_mode == "real":
             response, intelligence_run_id = await service.submit_board_run_runtime(

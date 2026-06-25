@@ -1485,10 +1485,27 @@ class BrandSpaceService:
         template_id: str = "ai_visibility_monitor:v0.1",
         input_scope: dict[str, Any] | None = None,
         execution_mode: str = SCAFFOLD_EXECUTION_MODE,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         entity = await self._require_entity(entity_id, current_user)
         normalized_execution_mode = str(execution_mode or SCAFFOLD_EXECUTION_MODE).strip().lower()
         is_scaffold = normalized_execution_mode != REAL_EXECUTION_MODE
+        normalized_request_id = self._normalize_board_run_request_id(request_id)
+        origin_event_id = self._board_run_origin_event_id(
+            entity_id=entity.id,
+            execution_mode=normalized_execution_mode,
+            request_id=normalized_request_id,
+            is_scaffold=is_scaffold,
+        )
+        if normalized_request_id:
+            await self._lock_graph_update_entity_scope(entity.id)
+            existing_board_run = await self._board_run_for_origin_event_id(
+                entity_id=entity.id,
+                created_by_user_id=current_user.id,
+                origin_event_id=origin_event_id,
+            )
+            if existing_board_run is not None:
+                return await self._space_payload(entity=entity, board_run=existing_board_run)
         default_platforms = (
             BRAND_SPACE_DEFAULT_SCAFFOLD_PLATFORMS
             if is_scaffold
@@ -1502,10 +1519,17 @@ class BrandSpaceService:
             analysis_mode="panorama",
             input_scope=effective_input_scope,
             origin_surface="brand_space",
-            origin_event_id=f"brand-space:scaffold:{entity.id}" if is_scaffold else None,
+            origin_event_id=origin_event_id,
             start_immediately=not is_scaffold,
             commit=False,
         )
+        if normalized_request_id:
+            existing_board_run = await self._board_run_for_intelligence_run(
+                intelligence_run_id=intelligence_run.id,
+                created_by_user_id=current_user.id,
+            )
+            if existing_board_run is not None:
+                return await self._space_payload(entity=entity, board_run=existing_board_run)
 
         board_run = BoardRun(
             entity_id=entity.id,
@@ -1559,6 +1583,8 @@ class BrandSpaceService:
             "execution_mode": REAL_EXECUTION_MODE if not is_scaffold else SCAFFOLD_EXECUTION_MODE,
             "intelligence_status": intelligence_run.status,
             "intelligence_stage": intelligence_run.stage,
+            **({"request_id": normalized_request_id} if normalized_request_id else {}),
+            **({"origin_event_id": origin_event_id} if origin_event_id else {}),
         }
 
         patches: list[GraphPatch] = []
@@ -2526,6 +2552,71 @@ class BrandSpaceService:
             return value if isinstance(value, UUID) else UUID(str(value))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Invalid UUID for {field_name}: {value}") from exc
+
+    @staticmethod
+    def _normalize_board_run_request_id(request_id: str | None) -> str | None:
+        normalized = str(request_id or "").strip()
+        if not normalized:
+            return None
+        normalized = re.sub(r"[^A-Za-z0-9._:-]+", "-", normalized)
+        normalized = normalized.strip(".:-_")
+        return normalized[:120] or None
+
+    @staticmethod
+    def _board_run_origin_event_id(
+        *,
+        entity_id: UUID,
+        execution_mode: str,
+        request_id: str | None,
+        is_scaffold: bool,
+    ) -> str | None:
+        if request_id:
+            return f"brand-space:{execution_mode}:{entity_id}:{request_id}"[:160]
+        if is_scaffold:
+            return f"brand-space:scaffold:{entity_id}"
+        return None
+
+    async def _board_run_for_origin_event_id(
+        self,
+        *,
+        entity_id: UUID,
+        created_by_user_id: UUID,
+        origin_event_id: str | None,
+    ) -> BoardRun | None:
+        if not origin_event_id:
+            return None
+        result = await self.db.execute(
+            select(BoardRun)
+            .join(
+                BrandIntelligenceRun,
+                BoardRun.brand_intelligence_run_id == BrandIntelligenceRun.id,
+            )
+            .where(
+                BoardRun.entity_id == entity_id,
+                BoardRun.created_by_user_id == created_by_user_id,
+                BrandIntelligenceRun.origin_event_id == origin_event_id,
+            )
+            .order_by(desc(BoardRun.created_at))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _board_run_for_intelligence_run(
+        self,
+        *,
+        intelligence_run_id: UUID,
+        created_by_user_id: UUID,
+    ) -> BoardRun | None:
+        result = await self.db.execute(
+            select(BoardRun)
+            .where(
+                BoardRun.brand_intelligence_run_id == intelligence_run_id,
+                BoardRun.created_by_user_id == created_by_user_id,
+            )
+            .order_by(desc(BoardRun.created_at))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     @staticmethod
     def _bounded_limit(limit: int | None, *, default: int = 50, maximum: int = 200) -> int:
@@ -3923,6 +4014,7 @@ class BrandSpaceService:
         coordinates = [(42, 35), (47, 78), (77, 72), (61, 18)]
         for index, patch in enumerate(patches):
             after_payload = patch.after_payload or {}
+            zone = self._graph_zone_for_patch(patch, after_payload.get("zone"))
             entities.append(
                 {
                     "id": patch.affected_object_id or str(patch.id),
@@ -3932,7 +4024,7 @@ class BrandSpaceService:
                     "category": self._patch_review_category(patch),
                     "priority": self._patch_review_priority(patch),
                     "label": after_payload.get("label") or patch.title,
-                    "zone": after_payload.get("zone") or "pending_review",
+                    "zone": zone,
                     "x": coordinates[index % len(coordinates)][0],
                     "y": coordinates[index % len(coordinates)][1],
                     "strength": int(patch.connection_strength or 0),
@@ -4006,6 +4098,26 @@ class BrandSpaceService:
             "blocked": counts.get("blocked", 0),
             "total": len(patches),
         }
+
+    @staticmethod
+    def _graph_zone_for_patch(patch: GraphPatch, suggested_zone: Any) -> str:
+        zone = str(suggested_zone or "").strip() or "pending_review"
+        if patch.status not in {"accepted", "auto_applied"}:
+            return zone
+        relation_type = patch.relation_type or ""
+        patch_type = patch.patch_type or ""
+        if relation_type == "competes_with" or patch_type == "add_competitor_relation":
+            return "competitor"
+        if relation_type == "risk_related" or patch_type == "add_risk_relation":
+            return "risk"
+        if zone != "pending_review":
+            return zone
+        strength = float(patch.connection_strength or 0)
+        if strength >= 80:
+            return "inner"
+        if strength >= 60:
+            return "middle"
+        return "outer"
 
     @staticmethod
     def _patches_for_graph_snapshot(patches: list[GraphPatch]) -> list[GraphPatch]:

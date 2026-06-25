@@ -1224,6 +1224,7 @@ class ApiService {
             platforms: defaultPlatforms,
           },
           execution_mode: executionMode,
+          ...(payload.request_id ? { request_id: payload.request_id } : {}),
         }),
       },
     );

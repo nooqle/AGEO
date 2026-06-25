@@ -395,4 +395,5 @@ export interface CreateBrandSpaceBoardRunInput {
   template_id?: string;
   input_scope?: Record<string, unknown> | null;
   execution_mode?: 'scaffold' | 'real';
+  request_id?: string;
 }

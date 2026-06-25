@@ -270,7 +270,7 @@ function edgeShowsTrace(edge: BoardEdge, runStatus: BoardRunStatus) {
 }
 
 function edgeTraceIsAnimated(edge: BoardEdge, from: BoardNode, to: BoardNode, runStatus: BoardRunStatus) {
-  return edgeIsRunning(edge, from, to, runStatus);
+  return edgeIsRunning(edge, from, to, runStatus) || Boolean(edge.active && runStatus === 'completed');
 }
 
 export function BoardRuntimeView({
@@ -408,10 +408,13 @@ export function BoardRuntimeView({
                         )}
                       />
                     ) : null}
-                    {isEdgeRunning ? (
-                      <circle r="3.5" className={styles.edgePacket}>
+                    {traceIsAnimated ? (
+                      <circle
+                        r="3.5"
+                        className={classNames(styles.edgePacket, !isEdgeRunning && styles.edgePacketTrace)}
+                      >
                         <animateMotion
-                          dur="2.4s"
+                          dur={isEdgeRunning ? '2.4s' : '4.2s'}
                           begin={`${index * 0.16}s`}
                           repeatCount="indefinite"
                           path={path.d}

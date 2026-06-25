@@ -1,4 +1,5 @@
-import { AlertTriangle, Archive, CheckCircle2, Download, FileCheck2, Lock, Quote, ShieldAlert } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, Archive, CheckCircle2, Download, FileCheck2, Lock, Quote, RefreshCw, ShieldAlert } from 'lucide-react';
 import styles from './BrandSpace.module.css';
 import { toast } from '@/components/ui/toast';
 import { triggerBrowserDownload } from '@/lib/browserDownload';
@@ -90,18 +91,6 @@ function downloadMarkdown(title: string, markdown: string) {
   return triggerBrowserDownload(blob, `${title.replace(/[\\/:*?"<>|]/g, '-')}.md`);
 }
 
-function handleDownloadMarkdown(title: string, markdown: string) {
-  try {
-    if (!downloadMarkdown(title, markdown)) {
-      toast.error('报告 Markdown 暂时不可导出，请稍后重试。');
-      return;
-    }
-    toast.success('报告 Markdown 已开始下载。');
-  } catch {
-    toast.error('报告 Markdown 导出失败，请稍后重试。');
-  }
-}
-
 function guardrailKey(guardrail: ReportGuardrailResult, index: number) {
   return guardrail.id || guardrail.guardrailKey || guardrail.guardrail_key || `${guardrail.title}-${index}`;
 }
@@ -133,6 +122,7 @@ export function ReportReviewView({
   isGenerating = false,
   selectedReportId,
 }: ReportReviewViewProps) {
+  const [markdownDownloadStatus, setMarkdownDownloadStatus] = useState('');
   const story = storyPayload(report);
   const sampleScope = asRecord(story.sample_scope ?? report?.payload?.sample_scope);
   const structuralJudgments = asArray(story.structural_judgments ?? report?.payload?.structural_judgments);
@@ -186,6 +176,21 @@ export function ReportReviewView({
           : isGenerating
             ? '处理中'
             : '发布报告';
+  const handleDownloadMarkdownClick = () => {
+    setMarkdownDownloadStatus('正在准备 Markdown 文件...');
+    try {
+      if (!downloadMarkdown(title, reportMarkdown)) {
+        setMarkdownDownloadStatus('导出失败：当前报告没有可导出的 Markdown 内容。');
+        toast.error('报告 Markdown 暂时不可导出，请稍后重试。', 8000);
+        return;
+      }
+      setMarkdownDownloadStatus(`导出请求已发送：${title.replace(/[\\/:*?"<>|]/g, '-')}.md。请查看浏览器下载栏；若没有文件，请重试或联系管理员。`);
+      toast.success('报告 Markdown 已开始下载。', 8000);
+    } catch {
+      setMarkdownDownloadStatus('导出失败：未能生成 Markdown 文件，请稍后重试或联系管理员。');
+      toast.error('报告 Markdown 导出失败，请稍后重试。', 8000);
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -256,6 +261,15 @@ export function ReportReviewView({
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
+                    onClick={onGenerateReport}
+                    disabled={!onGenerateReport || isGenerating}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] disabled:opacity-45"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    {isGenerating ? '生成中' : '重新生成报告'}
+                  </button>
+                  <button
+                    type="button"
                     onClick={onOpenAssets}
                     disabled={!onOpenAssets}
                     className="inline-flex h-8 items-center rounded-lg border px-3 text-xs font-semibold text-[var(--text-secondary)] disabled:opacity-45"
@@ -279,13 +293,18 @@ export function ReportReviewView({
             <button
               type="button"
               disabled={!reportMarkdown}
-              onClick={() => handleDownloadMarkdown(title, reportMarkdown)}
+              onClick={handleDownloadMarkdownClick}
               className="inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-semibold text-[var(--text-secondary)] disabled:opacity-45"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
             >
               <Download className="h-4 w-4" />
               导出 Markdown
             </button>
+            {markdownDownloadStatus ? (
+              <p className={styles.reportDownloadStatus} role="status" aria-live="polite">
+                {markdownDownloadStatus}
+              </p>
+            ) : null}
             <button
               type="button"
               disabled={!onOpenAssets}

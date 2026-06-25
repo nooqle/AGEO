@@ -379,7 +379,7 @@ async def test_brand_space_api_real_run_submits_background_dispatch(tmp_path):
         background_tasks = BackgroundTasks()
         created = await create_board_run(
             entity_id=str(entity.id),
-            payload=BoardRunCreate(execution_mode="real"),
+            payload=BoardRunCreate(execution_mode="real", request_id="rerun-click-1"),
             background_tasks=background_tasks,
             db=session,
             current_user=owner,
@@ -393,6 +393,17 @@ async def test_brand_space_api_real_run_submits_background_dispatch(tmp_path):
             for event in created["events"]
         )
         assert len(background_tasks.tasks) == 1
+
+        duplicate_tasks = BackgroundTasks()
+        duplicate = await create_board_run(
+            entity_id=str(entity.id),
+            payload=BoardRunCreate(execution_mode="real", request_id="rerun-click-1"),
+            background_tasks=duplicate_tasks,
+            db=session,
+            current_user=owner,
+        )
+        assert duplicate["run"]["id"] == created["run"]["id"]
+        assert len(duplicate_tasks.tasks) == 0
 
         first_resume_tasks = BackgroundTasks()
         await resume_board_run(

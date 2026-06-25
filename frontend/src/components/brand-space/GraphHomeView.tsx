@@ -11,6 +11,7 @@ import type {
   GraphEntity,
   GraphPatch,
   GraphPatchStatus,
+  GraphRelation,
   GraphReviewItem,
 } from '@/types/brandSpace';
 
@@ -98,6 +99,84 @@ function relationKindLabel(kind: string) {
   return relationKindLabels[kind] ?? '关系';
 }
 
+function visualZoneForEntity(entity: GraphEntity): GraphEntity['zone'] {
+  if (entity.patchStatus !== 'accepted' && entity.patchStatus !== 'auto_applied') {
+    return entity.zone;
+  }
+  if (entity.patchType === 'add_competitor_relation' || entity.category === 'competitor') {
+    return 'competitor';
+  }
+  if (entity.patchType === 'add_risk_relation' || entity.category === 'risk') {
+    return 'risk';
+  }
+  if (entity.zone !== 'pending_review') {
+    return entity.zone;
+  }
+  if (entity.strength >= 80) return 'inner';
+  if (entity.strength >= 60) return 'middle';
+  return 'outer';
+}
+
+const graphCenter = { x: 50, y: 50 };
+
+const zoneRadii: Record<GraphEntity['zone'], number> = {
+  center: 0,
+  inner: 23,
+  middle: 33,
+  outer: 42,
+  risk: 38,
+  competitor: 39,
+  pending_review: 31,
+};
+
+const zoneAngleSeeds: Record<Exclude<GraphEntity['zone'], 'center'>, number[]> = {
+  inner: [-138, -88, -36, 26, 138],
+  middle: [-166, -118, -62, -10, 44, 102, 154],
+  outer: [-176, -132, -86, -42, 6, 52, 96, 142],
+  risk: [72, 108, 144, 36],
+  competitor: [-26, 18, 58, -66],
+  pending_review: [-112, 112, -150, 150],
+};
+
+function clampGraphPoint(value: number) {
+  return Math.max(8, Math.min(92, value));
+}
+
+function layoutGraphEntities(entities: GraphEntity[], relations: GraphRelation[]): GraphEntity[] {
+  const normalizedEntities = entities.map((entity) => ({
+    ...entity,
+    zone: visualZoneForEntity(entity),
+  }));
+  const centerEntity = normalizedEntities.find((entity) => entity.zone === 'center') ?? normalizedEntities[0] ?? emptyEntity;
+  const relationDegree = relations.reduce<Record<string, number>>((acc, relation) => {
+    acc[relation.from] = (acc[relation.from] ?? 0) + 1;
+    acc[relation.to] = (acc[relation.to] ?? 0) + 1;
+    return acc;
+  }, {});
+  const zoneIndex: Partial<Record<GraphEntity['zone'], number>> = {};
+
+  return normalizedEntities.map((entity) => {
+    if (entity.id === centerEntity.id || entity.zone === 'center') {
+      return { ...entity, x: graphCenter.x, y: graphCenter.y };
+    }
+
+    const zone = entity.zone;
+    const index = zoneIndex[zone] ?? 0;
+    zoneIndex[zone] = index + 1;
+    const seeds = zoneAngleSeeds[zone];
+    const angle = seeds[index % seeds.length] + Math.floor(index / seeds.length) * 12;
+    const degreeOffset = Math.min(4, relationDegree[entity.id] ?? 0);
+    const radius = zoneRadii[entity.zone] + Math.floor(index / seeds.length) * 2 + degreeOffset * 0.35;
+    const radians = (angle * Math.PI) / 180;
+
+    return {
+      ...entity,
+      x: clampGraphPoint(graphCenter.x + Math.cos(radians) * radius),
+      y: clampGraphPoint(graphCenter.y + Math.sin(radians) * radius),
+    };
+  });
+}
+
 const emptyEntity: GraphEntity = {
   id: 'empty-brand',
   label: '品牌中心',
@@ -173,10 +252,11 @@ export function GraphHomeView({
     ...emptyEntity,
     label: brandName || emptyEntity.label,
   };
-  const visibleEntities = graph
+  const sourceEntities = graph
     ? (graph.entities.length ? graph.entities : [emptyCenterEntity])
     : [emptyCenterEntity];
   const visibleRelations = graph ? graph.relations : [];
+  const visibleEntities = layoutGraphEntities(sourceEntities, visibleRelations);
   const fallbackEvidence = graph
     ? (graph.evidenceRefs.length ? graph.evidenceRefs : [])
     : [];
@@ -223,12 +303,24 @@ export function GraphHomeView({
       return {
         id: relation.id,
         kind: relation.kind,
+        fromId: relation.from,
+        toId: relation.to,
+        fromLabel: from.label,
+        toLabel: to.label,
         label: relationKindLabel(relation.kind),
         strength,
         text: `${from.label} → ${to.label}`,
+        x: (from.x + to.x) / 2,
+        y: (from.y + to.y) / 2,
       };
     })
     .filter(Boolean);
+  const selectedRelationSummaries = relationSummaries.filter((relation) => (
+    relation && (relation.fromId === selectedEntity.id || relation.toId === selectedEntity.id)
+  ));
+  const relationLabelsOnMap = relationSummaries.filter((relation) => (
+    relation && (relationSummaries.length <= 6 || relation.fromId === selectedEntity.id || relation.toId === selectedEntity.id)
+  ));
   const timelineItems = graphUpdate
     ? [
         `本次更新：${graphUpdate.before_graph_version} → ${graphUpdate.after_graph_version}`,
@@ -299,6 +391,9 @@ export function GraphHomeView({
                 <circle cx="50" cy="50" r="16" className={styles.graphZoneRing} />
                 <circle cx="50" cy="50" r="29" className={styles.graphZoneRing} />
                 <circle cx="50" cy="50" r="42" className={styles.graphZoneRingOuter} />
+                <text x="50" y="33" textAnchor="middle" className={styles.graphZoneText}>内圈</text>
+                <text x="50" y="20" textAnchor="middle" className={styles.graphZoneText}>中圈</text>
+                <text x="50" y="7" textAnchor="middle" className={styles.graphZoneText}>外圈</text>
                 {visibleRelations.map((relation) => {
                   const from = entityById.get(relation.from);
                   const to = entityById.get(relation.to);
@@ -321,6 +416,26 @@ export function GraphHomeView({
                     </g>
                   );
                 })}
+                {relationLabelsOnMap.map((relation) => relation ? (
+                  <g key={`${relation.id}-label`}>
+                    <rect
+                      x={Math.max(4, Math.min(82, relation.x - 9))}
+                      y={Math.max(5, Math.min(91, relation.y - 3))}
+                      width="18"
+                      height="6"
+                      rx="2.3"
+                      className={styles.graphRelationLabelBox}
+                    />
+                    <text
+                      x={Math.max(13, Math.min(91, relation.x))}
+                      y={Math.max(9, Math.min(95, relation.y + 1))}
+                      textAnchor="middle"
+                      className={styles.graphRelationLabelText}
+                    >
+                      {relation.label} · {relation.strength}
+                    </text>
+                  </g>
+                ) : null)}
               </svg>
 
               {visibleEntities.map((entity) => {
@@ -331,7 +446,7 @@ export function GraphHomeView({
                     key={entity.id}
                     type="button"
                     onClick={() => selectGraphEntity(entity)}
-                    className={entityClass(entity)}
+                    className={classNames(entityClass(entity), selectedEntity.id === entity.id && styles.graphEntitySelected)}
                     style={{ left: `${entity.x}%`, top: `${entity.y}%` }}
                     aria-label={`查看实体：${entity.label}，圈层${zoneLabel}，连接强度${strengthLabel}`}
                   >
@@ -516,6 +631,26 @@ export function GraphHomeView({
             <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)' }}>
               <p className="text-xs text-[var(--text-tertiary)]">证据</p>
               <p className="mt-1 text-xl font-semibold text-[var(--text-primary)]">{selectedEntity.evidenceCount}</p>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold text-[var(--text-primary)]">直接关系</p>
+              <span className="text-xs text-[var(--text-tertiary)]">{selectedRelationSummaries.length} 条</span>
+            </div>
+            <div className="mt-3 space-y-2">
+              {selectedRelationSummaries.length ? selectedRelationSummaries.map((relation) => relation ? (
+                <div key={relation.id} className={styles.entityRelationRow}>
+                  <span data-kind={relation.kind}>{relation.label}</span>
+                  <strong>{relation.text}</strong>
+                  <em>{relation.strength}</em>
+                </div>
+              ) : null) : (
+                <p className="text-xs leading-5 text-[var(--text-secondary)]">
+                  当前实体还没有可视化直接关系。
+                </p>
+              )}
             </div>
           </div>
 
