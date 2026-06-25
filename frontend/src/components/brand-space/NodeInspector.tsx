@@ -126,7 +126,7 @@ export function NodeInspector({ node, artifacts, events, activeTab, onTabChange 
                 运行策略
               </div>
               <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
-                当前底版只更新可视化状态。正式图谱事实仍由后端图谱更新服务写入和校验。
+                节点状态由真实运行事件驱动；图谱补丁、审阅结果和报告产物由后端写入并保留追溯。
               </p>
             </div>
           </div>
@@ -182,7 +182,7 @@ export function NodeInspector({ node, artifacts, events, activeTab, onTabChange 
                 </div>
                 <div className="flex justify-between gap-3">
                   <dt className="text-[var(--text-tertiary)]">写入方式</dt>
-                  <dd className="font-medium text-[var(--text-primary)]">仅模拟</dd>
+                  <dd className="font-medium text-[var(--text-primary)]">事件驱动</dd>
                 </div>
               </dl>
             </div>

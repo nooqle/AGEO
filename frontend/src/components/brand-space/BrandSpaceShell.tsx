@@ -391,6 +391,7 @@ export function BrandSpaceShell({
   const [selectedNodeId, setSelectedNodeId] = useState('platform-rack');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
   const lastEventSequenceRef = useRef(0);
+  const activeRunIdRef = useRef<string | null>(null);
 
   const selectedView = useMemo(
     () => brandSpaceNavItems.find((item) => item.id === activeView) ?? brandSpaceNavItems[0],
@@ -426,11 +427,17 @@ export function BrandSpaceShell({
     setGuardrails([]);
     setReport(null);
     setReports([]);
+    setSelectedArtifactDetail(null);
+    setAssetTypeFilter('all');
     setBackendNotice(notice);
+    activeRunIdRef.current = null;
     lastEventSequenceRef.current = 0;
   }, []);
 
   const applySpacePayload = useCallback((payload: BrandSpacePayload) => {
+    const incomingRunId = payload.run?.id ?? null;
+    const runChanged = activeRunIdRef.current !== incomingRunId;
+    activeRunIdRef.current = incomingRunId;
     setContext(payload.context);
     setSpaceRun(payload.run);
     setRunStatus(payload.run?.status ?? 'idle');
@@ -451,6 +458,10 @@ export function BrandSpaceShell({
     }
     if (payload.reports) {
       setReports(payload.reports);
+    }
+    if (runChanged) {
+      setSelectedArtifactDetail(null);
+      setAssetTypeFilter('all');
     }
   }, []);
 
