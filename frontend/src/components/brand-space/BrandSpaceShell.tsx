@@ -24,7 +24,6 @@ import {
   initialBoardNodes,
   initialGraphPatches,
   initialPlatforms,
-  reportGuardrails,
 } from '@/mocks/brandSpaceMock';
 import { api } from '@/services/api';
 import type {
@@ -48,6 +47,7 @@ import type {
   NodeStatus,
   PaginationInfo,
   PlatformFetchNode,
+  ReportGuardrailResult,
   RuntimeEvent,
 } from '@/types/brandSpace';
 import type { Entity } from '@/types/entity';
@@ -378,7 +378,7 @@ export function BrandSpaceShell({
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
   const [graph, setGraph] = useState<BrandSpaceGraph>(emptyGraph);
   const [graphUpdate, setGraphUpdate] = useState<BrandSpaceGraphUpdate | null>(null);
-  const [guardrails, setGuardrails] = useState(reportGuardrails);
+  const [guardrails, setGuardrails] = useState<ReportGuardrailResult[]>([]);
   const [report, setReport] = useState<BrandSpaceReport | null>(null);
   const [reports, setReports] = useState<BrandSpaceReportSummary[]>([]);
   const [selectedArtifactDetail, setSelectedArtifactDetail] = useState<ArtifactDetail | null>(null);
@@ -584,7 +584,7 @@ export function BrandSpaceShell({
         setBackendNotice('');
         applySpacePayload(payload);
         setReviewItems(reviewItemsFromPatches(payload.patches, payload.graph_update));
-        await refreshReviewItems(loadedEntityId, payload.patches, payload.graph_update);
+        void refreshReviewItems(loadedEntityId, payload.patches, payload.graph_update);
       } catch (error) {
         if (cancelled) return;
         resetSpaceState('', selectedEntity?.name);
@@ -832,7 +832,7 @@ export function BrandSpaceShell({
         const response = await api.decideBrandSpaceGraphPatch(patchId, { status });
         setPatches(response.patches);
         setGraphUpdate(response.graph_update);
-        setGuardrails(response.guardrails.length ? response.guardrails : guardrails);
+        setGuardrails(response.guardrails);
         if (spaceRun?.id) {
           const payload = await api.getBrandSpaceBoardRun(spaceRun.id);
           applySpacePayload(payload);
@@ -890,8 +890,12 @@ export function BrandSpaceShell({
 
   const handleOpenArtifact = async (artifact: ArtifactRef) => {
     const artifactId = artifact.artifactId ?? artifact.id;
-    if (!isBackendMode) {
+    if (!isBackendMode && isDemoMode) {
       setSelectedArtifactDetail(buildLocalArtifactDetail(artifact));
+      return;
+    }
+    if (!isBackendMode) {
+      setBackendNotice('品牌空间数据尚未连接成功，不能打开资产详情。');
       return;
     }
     setIsLoadingArtifactDetail(true);

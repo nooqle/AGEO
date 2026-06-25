@@ -1,6 +1,5 @@
 import { AlertTriangle, Archive, CheckCircle2, Download, FileCheck2, Lock, Quote, ShieldAlert } from 'lucide-react';
 import styles from './BrandSpace.module.css';
-import { reportGuardrails } from '@/mocks/brandSpaceMock';
 import type {
   BrandSpaceGraphUpdate,
   BrandSpaceReport,
@@ -118,8 +117,7 @@ export function ReportReviewView({
   report,
   reports = [],
   graphUpdate,
-  // Mock-only fallback for the no-report demo state; persisted reports must use parent-supplied guardrails.
-  guardrails = report ? [] : reportGuardrails,
+  guardrails = [],
   onGenerateReport,
   onPublishReport,
   onSelectReport,

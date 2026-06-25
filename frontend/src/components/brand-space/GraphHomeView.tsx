@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { AlertTriangle, Check, GitBranch, Layers, RotateCcw, ShieldCheck, X } from 'lucide-react';
 import { GraphUpdateQueue } from './GraphUpdateQueue';
 import styles from './BrandSpace.module.css';
-import { evidenceRefs, graphEntities, graphRelations } from '@/mocks/brandSpaceMock';
 import type {
   BrandSpaceGraph,
   BrandSpaceGraphUpdate,
@@ -176,11 +175,11 @@ export function GraphHomeView({
   };
   const visibleEntities = graph
     ? (graph.entities.length ? graph.entities : [emptyCenterEntity])
-    : graphEntities;
-  const visibleRelations = graph ? graph.relations : graphRelations;
+    : [emptyCenterEntity];
+  const visibleRelations = graph ? graph.relations : [];
   const fallbackEvidence = graph
     ? (graph.evidenceRefs.length ? graph.evidenceRefs : [])
-    : evidenceRefs;
+    : [];
   const versionConflict = graphUpdate?.summary?.version_conflict as Record<string, unknown> | undefined;
   const currentGraphVersion = typeof versionConflict?.current_graph_version === 'string'
     ? versionConflict.current_graph_version
