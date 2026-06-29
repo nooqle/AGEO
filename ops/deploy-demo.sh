@@ -605,6 +605,58 @@ for line in text:
   fail "No TLS certificate pair found for host: $host"
 }
 
+ensure_certbot() {
+  if command -v certbot >/dev/null 2>&1; then
+    return
+  fi
+  command -v apt-get >/dev/null 2>&1 || fail "certbot is missing and apt-get is unavailable"
+  log "Installing certbot"
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get update
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y certbot
+}
+
+renew_tls_certificates() {
+  local primary_host
+  local host
+  local existing_cert_pair
+  local cert_name=""
+  local cert_pair
+  local cert
+  local domain_args=()
+  local cert_name_args=()
+
+  require_command openssl
+  ensure_certbot
+
+  primary_host="$(external_url_host)"
+  existing_cert_pair="$(certificate_pair_for_host "$primary_host" || true)"
+  if [[ -n "$existing_cert_pair" ]]; then
+    cert_name="$(basename "$(dirname "${existing_cert_pair%%|*}")")"
+    cert_name_args=(--cert-name "$cert_name" --expand)
+  fi
+  for host in $primary_host $DOMAIN_REDIRECT_HOSTS; do
+    domain_args+=(-d "$host")
+  done
+
+  log "Renewing Let's Encrypt certificates"
+  sudo mkdir -p /var/www/html
+  sudo certbot certonly \
+    --non-interactive \
+    --agree-tos \
+    --register-unsafely-without-email \
+    --webroot \
+    -w /var/www/html \
+    "${cert_name_args[@]}" \
+    "${domain_args[@]}"
+
+  for host in $primary_host $DOMAIN_REDIRECT_HOSTS; do
+    cert_pair="$(certificate_pair_for_host "$host")"
+    cert="${cert_pair%%|*}"
+    sudo openssl x509 -checkend 604800 -noout -in "$cert" >/dev/null \
+      || fail "TLS certificate for $host expires within 7 days or is expired: $cert"
+  done
+}
+
 install_nginx_site() {
   local primary_host
   local primary_cert_pair
@@ -893,6 +945,10 @@ deploy() {
 
   bootstrap_shared_env
   sync_public_domain_env
+  renew_tls_certificates
+  if [[ -L "$CURRENT_LINK" ]]; then
+    install_nginx_site
+  fi
   prepare_repo
 
   local sha
@@ -903,6 +959,22 @@ deploy() {
   old_sha="$(current_sha)"
   log "Resolved target: $sha"
   guard_migrations "$old_sha" "$sha"
+  if [[ "$old_sha" == "$sha" && -L "$CURRENT_LINK" ]]; then
+    log "Target already current; refreshing services without rebuilding"
+    if [[ ! -f "$CURRENT_LINK/frontend/.next/BUILD_ID" ]]; then
+      log "Current frontend build is missing; rebuilding frontend in place"
+      sudo chown -R "$(id -u):$(id -g)" "$CURRENT_LINK/frontend"
+      build_frontend "$CURRENT_LINK"
+    fi
+    install_systemd_units
+    install_nginx_site
+    if ! restart_services || ! health_check; then
+      dump_service_diagnostics
+      fail "Deployment refresh failed health checks"
+    fi
+    log "Deployment refresh complete: $sha"
+    return
+  fi
   if [[ "$ALLOW_MIGRATIONS" -eq 1 && "$MIGRATIONS_CHANGED" -eq 0 ]]; then
     MIGRATIONS_CHANGED=1
     log "Explicit migration execution is enabled; Alembic will upgrade to head"
