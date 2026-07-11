@@ -34,6 +34,9 @@ class SnapshotService:
         report_data: dict[str, Any],
         competitor_metrics: dict[str, Any] | None = None,
         fetch_results_summary: list[dict] | None = None,
+        fetch_results: list[dict[str, Any]] | None = None,
+        entity_extraction_result: dict[str, Any] | None = None,
+        entity_calibration_result: dict[str, Any] | None = None,
         is_degraded: bool = False,
         triggered_by: str = "manual",
         snapshot_type: str = "legacy",
@@ -50,6 +53,9 @@ class SnapshotService:
             report_data: LLM 生成的报告数据
             competitor_metrics: 竞品指标（可选）
             fetch_results_summary: 抓取结果摘要（可选）
+            fetch_results: 可用于恢复完整问题与回答的规范化抓取结果（可选）
+            entity_extraction_result: 实体关系抽取结果（可选）
+            entity_calibration_result: 实体校准结果（可选）
             is_degraded: 是否为降级报告
             triggered_by: 触发方式
 
@@ -76,6 +82,9 @@ class SnapshotService:
             "report_data": report_data,
             "competitor_metrics": competitor_metrics,
             "fetch_results_summary": fetch_results_summary,
+            "fetch_results": fetch_results,
+            "entity_extraction_result": entity_extraction_result,
+            "entity_calibration_result": entity_calibration_result,
             "metric_bundle": report_data.get("metric_bundle") if isinstance(report_data, dict) else None,
             "comparison_bundle": report_data.get("comparison_bundle") if isinstance(report_data, dict) else None,
             "dashboard_projection": report_data.get("dashboard_projection") if isinstance(report_data, dict) else None,

@@ -543,6 +543,15 @@ async def _run_association_circle_report(
                         report_data=report_data,
                         competitor_metrics=None,
                         fetch_results_summary=fetch_results_summary,
+                        fetch_results=fetch_results,
+                        entity_extraction_result=(
+                            state.get("entity_extraction_result")
+                            if isinstance(state.get("entity_extraction_result"), dict)
+                            else None
+                        ),
+                        entity_calibration_result=(
+                            _association_entity_calibration_from_state(state)
+                        ),
                         is_degraded=not nodes,
                         triggered_by=triggered_by,
                         snapshot_type=report_kind,

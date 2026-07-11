@@ -3401,6 +3401,7 @@ def _build_four_have_report_narrative_sections(
     health_refs = _storyline_refs(health, first_finding)
     companionship_refs = _storyline_refs(companionship, first_finding)
     security_refs = _storyline_refs(security, first_finding)
+    value_refs = _storyline_refs(value, first_finding)
     action_lines = [
         f"{item.get('title')}：{item.get('action')} 验证口径：{item.get('validation')}"
         for item in weekly_actions
@@ -3463,7 +3464,13 @@ def _build_four_have_report_narrative_sections(
                 f"解析节点 {len(nodes)} 个；风险关系 {risk_summary.get('risk_count', 0)} 个；竞品参照 {risk_summary.get('competition_count', 0)} 个。",
                 f"有效回答 {valid_answers} 条；有效平台 {platform_count} 个。",
             ],
-            "evidence_refs": first_finding.get("evidence_refs") or [],
+            "evidence_refs": [
+                *(first_finding.get("evidence_refs") or []),
+                *health_refs,
+                *companionship_refs,
+                *security_refs,
+                *value_refs,
+            ],
             "next_probe": "下一轮固定同一批问题，观察四有的承接顺序和风险遮蔽是否发生变化。",
         },
         {
@@ -3579,7 +3586,7 @@ def _build_four_have_report_narrative_sections(
                 _pillar_fact_line(value),
                 *source_quote_lines(security, value),
             ],
-            "evidence_refs": security_refs,
+            "evidence_refs": [*security_refs, *value_refs],
             "next_probe": (
                 f"下一轮先复测{_story_terms(security, 'risk_terms', '直销、收入边界和合规')}题，"
                 "再观察有价值类节点是否获得正向证据。"
@@ -3704,7 +3711,7 @@ def _storyline_refs(
         if _clean_text(item)
     ]
     if refs:
-        return refs[:8]
+        return refs
     return fallback_finding.get("evidence_refs") or []
 
 
@@ -4571,7 +4578,7 @@ def _build_storyline_report_sections(
                 *_storyline_refs(companionship, {}),
                 *_storyline_refs(security, {}),
                 *_storyline_refs(value, {}),
-            ][:10],
+            ],
             "next_probe": "下一轮看有健康是否进入方案层，有陪伴是否减少销售旧认知伴随，有保障风险语境是否下降。",
         },
         {
@@ -4714,6 +4721,84 @@ def _strategy_rows_for_story_section(
     return rows[:limit]
 
 
+def _with_period_change_section(
+    sections: list[dict[str, Any]],
+    tracking_projection: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    for section in sections:
+        refs = section.get("evidence_refs")
+        if isinstance(refs, list):
+            section["evidence_refs"] = list(
+                dict.fromkeys(_clean_text(ref) for ref in refs if _clean_text(ref))
+            )
+    tracking = tracking_projection if isinstance(tracking_projection, dict) else {}
+    period_view = (
+        tracking.get("period_view")
+        if isinstance(tracking.get("period_view"), dict)
+        else {}
+    )
+    previous_period = period_view.get("previous_period")
+    if not isinstance(previous_period, dict) or not previous_period.get("run_count"):
+        return sections
+
+    changes = [
+        item
+        for item in period_view.get("change_top5") or []
+        if isinstance(item, dict)
+    ][:5]
+    current_period = (
+        period_view.get("current_period")
+        if isinstance(period_view.get("current_period"), dict)
+        else {}
+    )
+    comparison_notice = _clean_text(period_view.get("comparison_notice"))
+    change_lines = [
+        _clean_text(item.get("explanation"))
+        or (
+            f"{_clean_text(item.get('term'))}："
+            f"{_clean_text(item.get('change_type')) or '发生变化'}。"
+        )
+        for item in changes
+        if _clean_text(item.get("term"))
+    ]
+    if not change_lines:
+        change_lines = ["本周期没有识别出足以进入 Top 5 的联想变化。"]
+
+    section = {
+        "section_id": "period_change",
+        "role": "tracking_finding",
+        "title": "与上一周期相比，图谱发生了什么",
+        "reader_question": "本周期哪些品牌联想移动最明显？",
+        "takeaway": change_lines[0],
+        "claims": change_lines,
+        "paragraphs": [
+            (
+                f"本周期汇总 {int(current_period.get('run_count') or 0)} 轮采集，"
+                f"上一周期汇总 {int(previous_period.get('run_count') or 0)} 轮采集。"
+                "变化排序按有效回答中的提及比例计算，原始提及数量保留用于核对。"
+            ),
+            *change_lines,
+            *([comparison_notice] if comparison_notice else []),
+        ],
+        "so_what": "品牌团队可优先复核变化 Top 5 的题目、平台与原文，再决定内容和风险治理动作。",
+        "supporting_facts": [
+            f"本周期有效回答 {int(current_period.get('valid_answer_count') or 0)} 条。",
+            f"上一周期有效回答 {int(previous_period.get('valid_answer_count') or 0)} 条。",
+        ],
+        "evidence_refs": list(
+            dict.fromkeys(
+                ref
+                for item in changes
+                for ref in item.get("evidence_refs") or []
+            )
+        ),
+        "next_probe": "下一周期沿用可比问题口径，继续观察这些联想的提及比例与轨道位置。",
+    }
+    if not sections:
+        return [section]
+    return [sections[0], section, *sections[1:]]
+
+
 def _build_calibrated_report_narrative_sections(
     *,
     center_terms: list[str],
@@ -4731,28 +4816,34 @@ def _build_calibrated_report_narrative_sections(
 ) -> list[dict[str, Any]]:
     if isinstance(strategy_storyline, dict) and strategy_storyline.get("pillars"):
         if isinstance(storyline_analysis, dict) and storyline_analysis:
-            return _build_storyline_report_sections(
-                center_term=_first_center_term(center_terms),
+            return _with_period_change_section(
+                _build_storyline_report_sections(
+                    center_term=_first_center_term(center_terms),
+                    sample_scope=sample_scope,
+                    nodes=nodes,
+                    risk_summary=risk_summary,
+                    platform_source_summary=platform_source_summary,
+                    association_actions=association_actions,
+                    strategy_storyline=strategy_storyline,
+                    storyline_analysis=storyline_analysis,
+                ),
+                tracking_projection,
+            )
+        return _with_period_change_section(
+            _build_four_have_report_narrative_sections(
+                center_terms=center_terms,
                 sample_scope=sample_scope,
+                executive_summary=executive_summary,
                 nodes=nodes,
+                strategy_validation=strategy_validation,
                 risk_summary=risk_summary,
                 platform_source_summary=platform_source_summary,
+                evidence_findings=evidence_findings,
                 association_actions=association_actions,
+                tracking_projection=tracking_projection,
                 strategy_storyline=strategy_storyline,
-                storyline_analysis=storyline_analysis,
-            )
-        return _build_four_have_report_narrative_sections(
-            center_terms=center_terms,
-            sample_scope=sample_scope,
-            executive_summary=executive_summary,
-            nodes=nodes,
-            strategy_validation=strategy_validation,
-            risk_summary=risk_summary,
-            platform_source_summary=platform_source_summary,
-            evidence_findings=evidence_findings,
-            association_actions=association_actions,
-            tracking_projection=tracking_projection,
-            strategy_storyline=strategy_storyline,
+            ),
+            tracking_projection,
         )
     center_term = _first_center_term(center_terms)
     tracking_projection = tracking_projection or {}
@@ -4852,7 +4943,7 @@ def _build_calibrated_report_narrative_sections(
         _clean_text(executive_summary.get("overall_strategy_status")) or "部分验证"
     )
     action_lines = _association_action_lines_for_report(association_actions, limit=4)
-    return [
+    sections = [
         {
             "section_id": "executive_summary",
             "role": "executive_summary",
@@ -4953,8 +5044,8 @@ def _build_calibrated_report_narrative_sections(
                 f"回答接住 {sum(1 for row in strategy_validation if row.get('status') == 'validated')} 个；部分接住 {sum(1 for row in strategy_validation if row.get('status') == 'partial')} 个。",
             ],
             "evidence_refs": [
-                ref for row in strategy_rows for ref in row.get("evidence_refs", [])[:2]
-            ][:8],
+                ref for row in strategy_rows for ref in row.get("evidence_refs", [])
+            ],
             "next_probe": "对部分验证和缺少证据的战略词，补充人群、场景、产品证据和品牌锚定问题。",
         },
         {
@@ -5027,8 +5118,8 @@ def _build_calibrated_report_narrative_sections(
                 for row in (risk_summary.get("risk_nodes") or [])
                 + (risk_summary.get("competition_nodes") or [])
                 if isinstance(row, dict)
-                for ref in row.get("evidence_refs", [])[:2]
-            ][:8],
+                for ref in row.get("evidence_refs", [])
+            ],
             "next_probe": "下一轮保留触发风险和竞品的题目，观察这些词是否减少、转弱，或被新的品牌证据替代。",
         },
         {
@@ -5106,6 +5197,7 @@ def _build_calibrated_report_narrative_sections(
             "next_probe": "下轮报告应输出同一批战略词的位置变化、平台提及变化和风险词变化。",
         },
     ]
+    return _with_period_change_section(sections, tracking_projection)
 
 
 def _build_calibrated_report_markdown(

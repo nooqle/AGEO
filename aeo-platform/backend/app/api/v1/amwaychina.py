@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -18,12 +19,15 @@ from app.models.brand_intelligence_run import BrandIntelligenceRun
 from app.models.entity import Entity
 from app.models.monitoring_plan import MonitoringQuestionSet, QuestionSetStatus
 from app.services.access_scope_service import AccessScopeService
+from app.services.amway_circle_tracking_service import \
+    AmwayCircleTrackingService
 from app.services.amway_entity_lexicon_service import AmwayEntityLexiconService
+from app.services.brand_association_circle_variant import (
+    is_amway_association_entity,
+)
 from app.services.monitoring_plan_service import MonitoringPlanService
 from app.services.organization_feature_service import (
-    FEATURE_AMWAYCHINA_CONSOLE,
-    feature_enabled_for_account,
-)
+    FEATURE_AMWAYCHINA_CONSOLE, feature_enabled_for_account)
 
 router = APIRouter(prefix="/amwaychina", tags=["amwaychina"])
 
@@ -47,6 +51,28 @@ class SaveQuestionSetRequest(BaseModel):
     questions: list[dict[str, Any] | str] = Field(default_factory=list)
 
 
+class CirclePeriodViewResponse(BaseModel):
+    period_type: str
+    current_period: dict[str, Any]
+    previous_period: dict[str, Any] | None = None
+    question_set_changed: bool = False
+    comparison_notice: str = ""
+    change_top5: list[dict[str, Any]] = Field(default_factory=list)
+    projection: dict[str, Any] | None = None
+    report_input: dict[str, Any] = Field(default_factory=dict)
+    report_id: str | None = None
+
+
+class CirclePeriodReportRequest(BaseModel):
+    period_type: str = Field(
+        default="last_30_days",
+        pattern="^(latest_run|last_7_days|last_14_days|last_30_days|custom)$",
+    )
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    center_term: str = Field(min_length=1)
+
+
 def _parse_uuid(value: str, field_name: str) -> UUID:
     try:
         return UUID(str(value))
@@ -55,6 +81,37 @@ def _parse_uuid(value: str, field_name: str) -> UUID:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid UUID for {field_name}: {value}",
         ) from exc
+
+
+def _parse_optional_uuid(value: str | None, field_name: str) -> UUID | None:
+    if not value:
+        return None
+    return _parse_uuid(value, field_name)
+
+
+def _parse_optional_datetime(value: str | None, field_name: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid datetime for {field_name}: {value}",
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _entity_aliases(entity: Entity) -> list[Any]:
+    if not entity.aliases:
+        return []
+    try:
+        value = json.loads(entity.aliases)
+    except (TypeError, json.JSONDecodeError):
+        return [entity.aliases]
+    return value if isinstance(value, list) else [value]
 
 
 async def _require_amway_entity(
@@ -73,9 +130,23 @@ async def _require_amway_entity(
     entity = result.scalar_one_or_none()
     if entity is None:
         raise HTTPException(status_code=404, detail="Entity not found")
-    if not AccessScopeService.can_access_entity(entity, current_user):
+    if not is_amway_association_entity(
+        name=entity.name,
+        domain=entity.domain,
+        aliases=_entity_aliases(entity),
+    ):
+        raise HTTPException(status_code=404, detail="Amway entity not found")
+    if not AccessScopeService.can_access_entity(
+        entity,
+        current_user,
+        allow_internal_admin_bypass=False,
+    ):
         raise HTTPException(status_code=403, detail="无权访问该安利实体")
-    if manage and not AccessScopeService.can_manage_entity(entity, current_user):
+    if manage and not AccessScopeService.can_manage_entity(
+        entity,
+        current_user,
+        allow_internal_admin_bypass=False,
+    ):
         raise HTTPException(status_code=403, detail="无权管理该安利实体")
     if not feature_enabled_for_account(
         user_flags=getattr(current_user, "feature_flags", None),
@@ -84,6 +155,142 @@ async def _require_amway_entity(
     ):
         raise HTTPException(status_code=403, detail="当前账号未开通安利专项权限")
     return entity
+
+
+@router.get("/entities/{entity_id}/circle-runs")
+async def list_circle_runs(
+    entity_id: str,
+    limit: int = Query(30, ge=1, le=100),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    service = AmwayCircleTrackingService(db)
+    return await service.list_runs(entity.id, limit=limit)
+
+
+@router.get("/entities/{entity_id}/circle-projection")
+async def get_circle_projection(
+    entity_id: str,
+    scope: str = Query("cumulative", pattern="^(run|cumulative|compare)$"),
+    run_id: str | None = None,
+    base_run_id: str | None = None,
+    target_run_id: str | None = None,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    if scope == "run":
+        if not run_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="run 视图需要提供 run_id。",
+            )
+        if base_run_id or target_run_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="run 视图不能同时提供 compare 参数。",
+            )
+    elif scope == "cumulative":
+        if run_id or base_run_id or target_run_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="cumulative 视图不能提供 run_id 或 compare 参数。",
+            )
+    elif scope == "compare":
+        if run_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="compare 视图不能同时提供 run_id。",
+            )
+        if bool(base_run_id) != bool(target_run_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="compare 视图需要同时提供 base_run_id 和 target_run_id，或都不提供读取最新对比。",
+            )
+    service = AmwayCircleTrackingService(db)
+    projection = await service.get_projection(
+        entity.id,
+        scope=scope,
+        run_id=_parse_optional_uuid(run_id, "run_id"),
+        base_run_id=_parse_optional_uuid(base_run_id, "base_run_id"),
+        target_run_id=_parse_optional_uuid(target_run_id, "target_run_id"),
+    )
+    return {"projection": projection}
+
+
+@router.get(
+    "/entities/{entity_id}/circle-period-view",
+    response_model=CirclePeriodViewResponse,
+)
+async def get_circle_period_view(
+    entity_id: str,
+    period_type: str = Query(
+        "last_30_days",
+        pattern="^(latest_run|last_7_days|last_14_days|last_30_days|custom)$",
+    ),
+    start_at: str | None = None,
+    end_at: str | None = None,
+    center_term: str | None = None,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    service = AmwayCircleTrackingService(db)
+    try:
+        return await service.get_period_view(
+            entity.id,
+            period_type=period_type,
+            start_at=_parse_optional_datetime(start_at, "start_at"),
+            end_at=_parse_optional_datetime(end_at, "end_at"),
+            center_term=center_term,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/entities/{entity_id}/circle-period-reports",
+    response_model=CirclePeriodViewResponse,
+)
+async def create_circle_period_report(
+    entity_id: str,
+    body: CirclePeriodReportRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    try:
+        return await AmwayCircleTrackingService(db).create_period_report(
+            entity.id,
+            period_type=body.period_type,
+            start_at=body.start_at,
+            end_at=body.end_at,
+            center_term=body.center_term,
+            created_by_user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/entities/{entity_id}/circle-node-insight")
+async def get_circle_node_insight(
+    entity_id: str,
+    projection_id: str,
+    node_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    service = AmwayCircleTrackingService(db)
+    insight = await service.get_node_insight(
+        entity.id,
+        projection_id=_parse_uuid(projection_id, "projection_id"),
+        node_id=node_id,
+    )
+    if insight is None:
+        raise HTTPException(status_code=404, detail="节点解读不存在")
+    return {"insight": insight}
 
 
 @router.get("/entities/{entity_id}/entity-lexicon")

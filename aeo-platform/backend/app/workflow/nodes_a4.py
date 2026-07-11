@@ -339,6 +339,46 @@ async def _persist_a4_stage_result(
         logger.warning("[A4] Failed to persist stage_result: %s", exc)
 
 
+async def _persist_amway_calibrated_run_snapshot(
+    state: AgentState,
+    *,
+    fetch_results: list[dict[str, Any]],
+    extraction_result: dict[str, Any],
+    calibration_result: dict[str, Any],
+) -> None:
+    dashboard_context = state.get("dashboard_context")
+    if not isinstance(dashboard_context, dict):
+        return
+    brand_run_id = _uuid_or_none(dashboard_context.get("run_id"))
+    if brand_run_id is None:
+        return
+
+    from app.core.database import AsyncSessionLocal
+    from app.models.brand_intelligence_run import BrandIntelligenceRun
+    from app.services.amway_circle_tracking_service import (
+        AmwayCircleTrackingService,
+    )
+
+    async with AsyncSessionLocal() as db:
+        brand_run = await db.get(BrandIntelligenceRun, brand_run_id)
+        if brand_run is None:
+            raise RuntimeError("Brand intelligence run is missing during calibration")
+        circle_run = await AmwayCircleTrackingService(db).persist_calibrated_run(
+            brand_run,
+            {
+                "fetch_results": fetch_results,
+                "entity_extraction_result": extraction_result,
+                "entity_calibration_result": calibration_result,
+                "association_circle_projection": calibration_result.get(
+                    "association_circle_projection"
+                ),
+            },
+        )
+        if circle_run is None:
+            raise RuntimeError("Calibration did not create an Amway circle run snapshot")
+        await db.commit()
+
+
 async def _build_amway_entity_pipeline_update(
     state: AgentState,
     *,
@@ -481,6 +521,12 @@ async def _build_amway_entity_pipeline_update(
         stage_name="实体校准汇总",
         result_type="entity_calibration_summary",
         data=calibration_stage_data,
+    )
+    await _persist_amway_calibrated_run_snapshot(
+        state,
+        fetch_results=fetch_results,
+        extraction_result=extraction_result,
+        calibration_result=calibration_result,
     )
     return {
         "entity_extraction_result": extraction_result,

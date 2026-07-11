@@ -1,7 +1,5 @@
 'use client';
 
-/* eslint-disable react-hooks/set-state-in-effect */
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -24,6 +22,10 @@ import type { Entity } from '@/types/entity';
 import type { AnalysisTask } from '@/types/task';
 import type { StageResult } from '@/types/snapshot';
 import type { OntologyWorldSummary } from '@/types/ontology';
+import type {
+  AmwayCirclePeriodType,
+  AmwayCirclePeriodViewResponse,
+} from '@/types/amwayChina';
 
 const ASSOCIATION_ANALYSIS_MODE = 'brand_association_circle';
 const ASSOCIATION_DASHBOARD_VARIANT = 'amway_association_circle';
@@ -192,6 +194,13 @@ export function AmwayAssociationCircleConsolePage({
   const [directWorldEntityId, setDirectWorldEntityId] = useState<string | null>(null);
   const [directWorldError, setDirectWorldError] = useState<string | null>(null);
   const [streamedStageResults, setStreamedStageResults] = useState<StageResult[]>([]);
+  const [periodType, setPeriodType] = useState<AmwayCirclePeriodType>('last_30_days');
+  const [periodCustomStart, setPeriodCustomStart] = useState('');
+  const [periodCustomEnd, setPeriodCustomEnd] = useState('');
+  const [periodView, setPeriodView] = useState<AmwayCirclePeriodViewResponse | null>(null);
+  const [isPeriodLoading, setIsPeriodLoading] = useState(false);
+  const [isPeriodReportGenerating, setIsPeriodReportGenerating] = useState(false);
+  const [periodError, setPeriodError] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchEntities();
@@ -377,6 +386,59 @@ export function AmwayAssociationCircleConsolePage({
       cancelled = true;
     };
   }, [selectedEntityId]);
+
+  useEffect(() => {
+    if (!selectedEntityId) {
+      setPeriodView(null);
+      setPeriodError(null);
+      setIsPeriodLoading(false);
+      return;
+    }
+    if (periodType === 'custom' && (!periodCustomStart || !periodCustomEnd)) {
+      setPeriodView(null);
+      setPeriodError(null);
+      setIsPeriodLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPeriodError(null);
+    setPeriodView(null);
+    setIsPeriodLoading(true);
+    void api
+      .getAmwayCirclePeriodView(selectedEntityId, {
+        periodType,
+        startAt: periodType === 'custom' && periodCustomStart
+          ? `${periodCustomStart}T00:00:00+08:00`
+          : null,
+        endAt: periodType === 'custom' && periodCustomEnd
+          ? `${periodCustomEnd}T23:59:59+08:00`
+          : null,
+        centerTerm: effectiveCenterTerm,
+      })
+      .then((nextPeriodView) => {
+        if (!cancelled) setPeriodView(nextPeriodView);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPeriodView(null);
+          setPeriodError(error instanceof Error ? error.message : '周期图谱读取失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsPeriodLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    effectiveCenterTerm,
+    periodCustomEnd,
+    periodCustomStart,
+    periodType,
+    selectedEntityId,
+    selectedRun?.id,
+    selectedRun?.status,
+  ]);
 
   useEffect(() => {
     if (!selectedEntityId || !isSelectedRunActive) return;
@@ -579,6 +641,38 @@ export function AmwayAssociationCircleConsolePage({
     );
   }, [home, router, selectedEntity, selectedEntityId]);
 
+  const handleGeneratePeriodReport = useCallback(async (): Promise<boolean> => {
+    if (!selectedEntityId || isPeriodReportGenerating) return false;
+    setIsPeriodReportGenerating(true);
+    try {
+      const nextPeriodView = await api.generateAmwayCirclePeriodReport(selectedEntityId, {
+        period_type: periodType,
+        start_at: periodType === 'custom' && periodCustomStart
+          ? `${periodCustomStart}T00:00:00+08:00`
+          : null,
+        end_at: periodType === 'custom' && periodCustomEnd
+          ? `${periodCustomEnd}T23:59:59+08:00`
+          : null,
+        center_term: effectiveCenterTerm || DEFAULT_CENTER_TERMS[0],
+      });
+      setPeriodError(null);
+      setPeriodView(nextPeriodView);
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '周期报告生成失败');
+      return false;
+    } finally {
+      setIsPeriodReportGenerating(false);
+    }
+  }, [
+    effectiveCenterTerm,
+    isPeriodReportGenerating,
+    periodCustomEnd,
+    periodCustomStart,
+    periodType,
+    selectedEntityId,
+  ]);
+
   if (entitiesLoading && !consoleEntities.length) {
     return (
       <div className="min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
@@ -634,8 +728,19 @@ export function AmwayAssociationCircleConsolePage({
       isProjectionLoading={isProjectionLoading}
       runError={errorByEntity[selectedEntity.id]}
       liveStageResults={streamedStageResults}
+      periodType={periodType}
+      periodCustomStart={periodCustomStart}
+      periodCustomEnd={periodCustomEnd}
+      periodView={periodView}
+      isPeriodLoading={isPeriodLoading}
+      isPeriodReportGenerating={isPeriodReportGenerating}
+      periodError={periodError}
       onSelectEntity={setSelectedEntityId}
       onSelectCenterTerm={setSelectedCenterTerm}
+      onSelectPeriodType={setPeriodType}
+      onChangePeriodCustomStart={setPeriodCustomStart}
+      onChangePeriodCustomEnd={setPeriodCustomEnd}
+      onGeneratePeriodReport={handleGeneratePeriodReport}
       onStart={(payload) => {
         void handleStart(payload);
       }}

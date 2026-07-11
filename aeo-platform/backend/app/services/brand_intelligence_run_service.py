@@ -15,24 +15,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import AsyncSessionLocal
 from app.models.brand_intelligence_run import (
     BRAND_INTELLIGENCE_ACTIVE_RUN_STATUSES,
-    BRAND_INTELLIGENCE_TERMINAL_RUN_STATUSES,
-    BrandIntelligenceRun,
-    BrandIntelligenceRunStatus,
-)
+    BRAND_INTELLIGENCE_TERMINAL_RUN_STATUSES, BrandIntelligenceRun,
+    BrandIntelligenceRunStatus)
 from app.models.entity import Entity
 from app.models.session import Session, SessionStatus
 from app.models.snapshot import AnalysisSnapshot, SnapshotStatus
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.task_run import TaskTriggerSource
 from app.models.user import User
-from app.services.brand_ontology_world_service import BrandOntologyWorldService
+from app.services.amway_circle_tracking_service import \
+    AmwayCircleTrackingService
 from app.services.brand_association_circle_variant import (
-    AMWAY_ASSOCIATION_DASHBOARD_VARIANT,
-    AMWAY_ASSOCIATION_CENTER_TERMS,
-    AMWAY_ASSOCIATION_ENABLED_SURFACES,
     BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
     build_amway_association_context,
 )
+from app.services.brand_ontology_world_service import BrandOntologyWorldService
 from app.services.entity_service import EntityService
 from app.services.job_submission_service import JobSubmissionService
 from app.services.runtime_coordinator import runtime_coordinator
@@ -124,17 +121,15 @@ def _build_minimal_brand_profile(entity: Entity) -> dict[str, Any]:
 def _association_context_from_scope(
     input_scope: dict[str, Any]
 ) -> dict[str, Any] | None:
-    if input_scope.get("dashboard_variant") != AMWAY_ASSOCIATION_DASHBOARD_VARIANT:
-        return None
-    return {
-        "dashboard_variant": AMWAY_ASSOCIATION_DASHBOARD_VARIANT,
-        "analysis_mode": BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
-        "report_kind": BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE,
-        "center_terms": input_scope.get("center_terms")
-        or list(AMWAY_ASSOCIATION_CENTER_TERMS),
-        "enabled_surfaces": input_scope.get("enabled_surfaces")
-        or list(AMWAY_ASSOCIATION_ENABLED_SURFACES),
-    }
+    context: dict[str, Any] = {}
+    for key in ("center_terms", "enabled_surfaces"):
+        value = input_scope.get(key)
+        if isinstance(value, list) and (normalized := _string_list(value)):
+            context[key] = normalized
+    active_center_term = input_scope.get("active_center_term")
+    if isinstance(active_center_term, str) and active_center_term.strip():
+        context["active_center_term"] = active_center_term.strip()
+    return context or None
 
 
 def _association_context_for_run(
@@ -142,11 +137,24 @@ def _association_context_for_run(
     entity: Entity,
     input_scope: dict[str, Any],
 ) -> dict[str, Any] | None:
-    return _association_context_from_scope(
-        input_scope
-    ) or build_amway_association_context(
+    raw_aliases = getattr(entity, "aliases", None)
+    try:
+        aliases = json.loads(raw_aliases) if raw_aliases else []
+    except (json.JSONDecodeError, TypeError):
+        aliases = [raw_aliases]
+    if not isinstance(aliases, list):
+        aliases = [aliases]
+
+    association_context = build_amway_association_context(
         name=entity.name,
         domain=entity.domain,
+        aliases=aliases,
+    )
+    if association_context is None:
+        return None
+    return _merge_json(
+        association_context,
+        _association_context_from_scope(input_scope),
     )
 
 
@@ -735,6 +743,17 @@ class BrandIntelligenceRunService:
         if run is None or run.analysis_task_id is None:
             return run
         if run.status == BrandIntelligenceRunStatus.COMPLETED.value:
+            snapshot_id = _coerce_uuid(
+                (run.output_refs or {}).get("snapshot_id"),
+                "snapshot_id",
+            )
+            if snapshot_id is None:
+                completed_task = await self.db.get(AnalysisTask, run.analysis_task_id)
+                snapshot_id = completed_task.snapshot_id if completed_task else None
+            await AmwayCircleTrackingService(
+                self.db
+            ).persist_completed_run_from_snapshot(run, snapshot_id)
+            await self.db.commit()
             return run
 
         task = await self.db.get(AnalysisTask, run.analysis_task_id)
@@ -801,6 +820,9 @@ class BrandIntelligenceRunService:
         if status == BrandIntelligenceRunStatus.COMPLETED.value:
             run.completed_at = run.completed_at or now
             run.requires_user_action = False
+            await AmwayCircleTrackingService(
+                self.db
+            ).persist_completed_run_from_snapshot(run, task.snapshot_id)
         elif status == BrandIntelligenceRunStatus.FAILED.value:
             run.failed_at = run.failed_at or now
             run.error_code = run.error_code or "analysis_task_failed"
@@ -1031,6 +1053,30 @@ async def dispatch_brand_intelligence_run(run_id: str) -> None:
                 )
                 return
 
+            circle_run = await AmwayCircleTrackingService(db).persist_completed_run(
+                reloaded,
+                final_state,
+            )
+            if (
+                _normalize_mode(reloaded.analysis_mode)
+                == BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE
+                and circle_run is None
+            ):
+                await TaskService(db).fail_task(
+                    task_id,
+                    error_message="本轮校准结果未写入品牌圈层历史",
+                    error_stage="entity_calibration",
+                    run_id=task_run_uuid,
+                )
+                await service.transition(
+                    reloaded,
+                    status=BrandIntelligenceRunStatus.FAILED.value,
+                    stage="entity_calibration",
+                    message="圈层历史写入失败，请重试",
+                    error_code="circle_run_snapshot_missing",
+                    error_message="Calibration completed without a circle run snapshot",
+                )
+                return
             await TaskService(db).complete_task(
                 task_id,
                 snapshot_id=snapshot_id,
@@ -1071,6 +1117,12 @@ async def dispatch_brand_intelligence_run(run_id: str) -> None:
                     and task_after_cancel.status == TaskStatus.COMPLETED
                     and task_after_cancel.snapshot_id is not None
                 ):
+                    await AmwayCircleTrackingService(
+                        db
+                    ).persist_completed_run_from_snapshot(
+                        reloaded,
+                        task_after_cancel.snapshot_id,
+                    )
                     await service.transition(
                         reloaded,
                         status=BrandIntelligenceRunStatus.COMPLETED.value,

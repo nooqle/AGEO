@@ -91,8 +91,15 @@ import type {
   BrandSpaceReportSummary,
 } from '@/types/brandSpace';
 import type {
+  AmwayCircleProjectionResponse,
+  AmwayCirclePeriodReportRequest,
+  AmwayCirclePeriodType,
+  AmwayCirclePeriodViewResponse,
+  AmwayCircleRunSummary,
   AmwayEntityLexiconMutationInput,
   AmwayEntityLexiconResponse,
+  AmwayNodeInsight,
+  AmwayProjectionScope,
   AmwayQuestionHistoryResponse,
   AmwayQuestionHistorySet,
 } from '@/types/amwayChina';
@@ -1606,6 +1613,75 @@ class ApiService {
       },
     );
     return resp.question_set;
+  }
+
+  async listAmwayCircleRuns(
+    entityId: string,
+    limit = 30,
+  ): Promise<{ runs: AmwayCircleRunSummary[]; total: number }> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    return this.request(`/amwaychina/entities/${entityId}/circle-runs?${query}`);
+  }
+
+  async getAmwayCircleProjection(
+    entityId: string,
+    params?: {
+      scope?: AmwayProjectionScope;
+      runId?: string | null;
+      baseRunId?: string | null;
+      targetRunId?: string | null;
+    },
+  ): Promise<{ projection: AmwayCircleProjectionResponse | null }> {
+    const query = new URLSearchParams({
+      scope: params?.scope ?? 'cumulative',
+    });
+    if (params?.runId) query.set('run_id', params.runId);
+    if (params?.baseRunId) query.set('base_run_id', params.baseRunId);
+    if (params?.targetRunId) query.set('target_run_id', params.targetRunId);
+    return this.request(`/amwaychina/entities/${entityId}/circle-projection?${query}`);
+  }
+
+  async getAmwayCirclePeriodView(
+    entityId: string,
+    params?: {
+      periodType?: AmwayCirclePeriodType;
+      startAt?: string | null;
+      endAt?: string | null;
+      centerTerm?: string | null;
+    },
+  ): Promise<AmwayCirclePeriodViewResponse> {
+    const query = new URLSearchParams({
+      period_type: params?.periodType ?? 'last_30_days',
+    });
+    if (params?.startAt) query.set('start_at', params.startAt);
+    if (params?.endAt) query.set('end_at', params.endAt);
+    if (params?.centerTerm) query.set('center_term', params.centerTerm);
+    return this.request(`/amwaychina/entities/${entityId}/circle-period-view?${query}`);
+  }
+
+  async generateAmwayCirclePeriodReport(
+    entityId: string,
+    payload: AmwayCirclePeriodReportRequest,
+  ): Promise<AmwayCirclePeriodViewResponse> {
+    return this.request(`/amwaychina/entities/${entityId}/circle-period-reports`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getAmwayNodeInsight(
+    entityId: string,
+    projectionId: string,
+    nodeId: string,
+  ): Promise<AmwayNodeInsight> {
+    const query = new URLSearchParams({
+      projection_id: projectionId,
+      node_id: nodeId,
+    });
+    const resp = await this.request<{ insight: AmwayNodeInsight }>(
+      `/amwaychina/entities/${entityId}/circle-node-insight?${query}`,
+    );
+    return resp.insight;
   }
 
   async listMonitoringPlans(params?: {

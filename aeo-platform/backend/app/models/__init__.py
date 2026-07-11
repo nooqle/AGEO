@@ -5,6 +5,18 @@ from app.models.aio_runtime_session import (
     AioRuntimeSession,
     AioRuntimeTakeover,
 )
+from app.models.amway_circle_tracking import (
+    AmwayCircleAnswer,
+    AmwayCircleEdgeSnapshot,
+    AmwayCircleEntityMention,
+    AmwayCircleEvidence,
+    AmwayCircleExport,
+    AmwayCircleNodeSnapshot,
+    AmwayCircleProjection,
+    AmwayCircleReport,
+    AmwayCircleRun,
+    AmwayCircleRuntimeEvent,
+)
 from app.models.brand import BrandProfile
 from app.models.amway_entity_lexicon import AmwayEntityLexiconOverride
 from app.models.brand_intelligence import (
@@ -104,6 +116,16 @@ __all__ = [
     "AioRuntimeSession",
     "AioRuntimeTakeover",
     "AioPlatformRuntimeState",
+    "AmwayCircleAnswer",
+    "AmwayCircleEdgeSnapshot",
+    "AmwayCircleEntityMention",
+    "AmwayCircleEvidence",
+    "AmwayCircleExport",
+    "AmwayCircleNodeSnapshot",
+    "AmwayCircleProjection",
+    "AmwayCircleReport",
+    "AmwayCircleRun",
+    "AmwayCircleRuntimeEvent",
     "Session",
     "Message",
     "BrandProfile",

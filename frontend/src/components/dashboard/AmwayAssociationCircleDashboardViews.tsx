@@ -1206,7 +1206,7 @@ function OrbitTrackHitEllipse({
       onFocus={() => onHoverChange(track)}
       onBlur={() => onHoverChange(null)}
       onClick={() => onTrackFilterChange(track)}
-      style={{ cursor: 'pointer' }}
+      style={{ cursor: 'pointer', outline: 'none' }}
     />
   );
 }
@@ -3067,6 +3067,8 @@ export function AssociationReportPanel({
     : generatedReportSections;
   const compactReportSections = reportSections.slice(0, 6);
   const exportReportSections = compactReportSections;
+  const periodView = readPeriodView(projection);
+  const periodScopeText = buildPeriodScopeText(periodView);
   return (
     <section>
       <article className="bg-[var(--bg-primary)] px-6 py-7 sm:px-10 sm:py-10">
@@ -3074,6 +3076,7 @@ export function AssociationReportPanel({
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="text-xs font-medium text-[var(--text-tertiary)]">
               解读报告
+              {periodScopeText ? <span className="ml-2">{periodScopeText}</span> : null}
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -3089,6 +3092,7 @@ export function AssociationReportPanel({
                   groups,
                   platformComparison,
                   sampleScope: projection.sample_scope || {},
+                  periodView,
                 })}
                 disabled={!nodes.length}
                 className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--brand-border)] px-3 text-sm text-[var(--brand-primary)] hover:bg-[var(--brand-bg)] disabled:opacity-50"
@@ -3130,6 +3134,8 @@ export function AssociationReportPanel({
           })}
 
           <ReportEvidenceSamples quotes={compactReportSections.flatMap((section) => (section.supportingFacts || []).filter(reportEvidenceLine))} />
+
+          <ReportPeriodChangeSummary periodView={periodView} />
 
           <ReportEvidenceBrief
             questionDefinition={questionDefinition}
@@ -3711,6 +3717,118 @@ function scoreNumber(value?: number) {
 function readTrackingProjection(projection: OntologyAssociationCircleProjection) {
   const tracking = projection.tracking_projection;
   return tracking && typeof tracking === 'object' ? tracking as Record<string, unknown> : null;
+}
+
+function readPeriodView(projection: OntologyAssociationCircleProjection) {
+  const tracking = readTrackingProjection(projection);
+  const periodView = tracking?.period_view;
+  return periodView && typeof periodView === 'object' ? periodView as Record<string, unknown> : null;
+}
+
+function buildPeriodScopeText(periodView: Record<string, unknown> | null | undefined) {
+  return buildPeriodSummaryText(periodView?.current_period);
+}
+
+function buildPreviousPeriodScopeText(periodView: Record<string, unknown> | null | undefined) {
+  return buildPeriodSummaryText(periodView?.previous_period);
+}
+
+function buildPeriodSummaryText(value: unknown) {
+  if (!value || typeof value !== 'object') return '';
+  const period = value as Record<string, unknown>;
+  const runCount = Number(period.run_count || 0);
+  const start = formatPeriodDate(period.start_at);
+  const end = formatPeriodDate(period.end_at);
+  const range = start && end ? `${start} 至 ${end}` : '当前可用周期';
+  return `${range} / ${runCount || 0} 轮采集`;
+}
+
+function formatPeriodDate(value: unknown) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text.slice(0, 10);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function periodChangeRows(periodView: Record<string, unknown> | null | undefined) {
+  const rows = periodView?.change_top5;
+  return Array.isArray(rows)
+    ? rows.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    : [];
+}
+
+function ReportPeriodChangeSummary({
+  periodView,
+}: {
+  periodView: Record<string, unknown> | null;
+}) {
+  const rows = periodChangeRows(periodView);
+  const notice = String(periodView?.comparison_notice || '').trim();
+  const hasPreviousPeriod = Boolean(periodView?.previous_period);
+  const previousScopeText = buildPreviousPeriodScopeText(periodView);
+  if (!rows.length && !notice) return null;
+  return (
+    <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-6">
+      <div className="text-xs font-medium text-[var(--text-tertiary)]">周期变化</div>
+      <h2 className="mt-2 text-2xl font-semibold">
+        {hasPreviousPeriod ? '相比上一周期，最该关注的变化' : '本周期基线说明'}
+      </h2>
+      {notice ? (
+        <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">{notice}</p>
+      ) : null}
+      {previousScopeText ? (
+        <p className="mt-2 text-sm leading-7 text-[var(--text-secondary)]">
+          对比周期：{previousScopeText}
+        </p>
+      ) : null}
+      {rows.length ? (
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          {rows.map((row) => (
+            <div key={`${row.node_id || row.term}`} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4">
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="font-semibold">{String(row.term || '变化节点')}</h3>
+                <span className="rounded-full border border-[var(--brand-border)] px-2 py-1 text-xs text-[var(--brand-primary)]">
+                  {periodChangeLabel(String(row.change_type || 'stable'))}
+                </span>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                {String(row.explanation || '')}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-tertiary)]">
+                <span>提及 {signedNumber(row.mention_delta)}</span>
+                <span>贴近 {signedNumber(row.gravity_delta)}</span>
+                <span>平台 {signedNumber(row.platform_delta)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function periodChangeLabel(value: string) {
+  return {
+    new: '新增',
+    dropped: '消失',
+    track_moved: '轨道变化',
+    strengthened: '增强',
+    weakened: '减弱',
+  }[value] || '变化';
+}
+
+function signedNumber(value: unknown) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num) || num === 0) return '0';
+  return num > 0 ? `+${Math.round(num)}` : String(Math.round(num));
 }
 
 function TrackingMetric({
@@ -5222,9 +5340,9 @@ function ReportEvidenceBrief({
           </p>
           {(questionDefinition?.sample_questions || []).length ? (
             <ul className="mt-3 space-y-2 pl-5 text-sm leading-7 text-[var(--text-secondary)]">
-              {(questionDefinition?.sample_questions || []).slice(0, 5).map((question) => (
-                <li key={question.id || question.text} className="list-disc">
-                  {question.text}
+              {(questionDefinition?.sample_questions || []).slice(0, 5).map((question, index) => (
+                <li key={question.id || question.question_id || question.text || question.question_text || index} className="list-disc">
+                  {question.text || question.question_text}
                 </li>
               ))}
             </ul>
@@ -5428,6 +5546,7 @@ function downloadAssociationReportHtml(
     groups?: AssociationMapGroup[];
     platformComparison?: OntologyAssociationCirclePlatformComparison[];
     sampleScope?: Record<string, unknown>;
+    periodView?: Record<string, unknown> | null;
   },
 ) {
   if (typeof window === 'undefined') return;
@@ -5436,6 +5555,8 @@ function downloadAssociationReportHtml(
   const sampleScope = evidence?.sampleScope || {};
   const entityTerms = buildReportEntityTerms(groups, centerTerm);
   const orbitSnapshotHtml = buildExportOrbitSnapshotHtml(centerTerm, groups, sampleScope);
+  const periodScopeText = buildPeriodScopeText(evidence?.periodView || null);
+  const periodChangeHtml = buildExportPeriodChangeHtml(evidence?.periodView || null);
 
   const sectionHtml = sections.map((section, index) => {
     const titleText = section.title || '';
@@ -5538,7 +5659,7 @@ function downloadAssociationReportHtml(
         <div><b>生活场景</b><span>${escapeHtml((questionDefinition.life_scenes || []).join('、') || '题库未携带生活场景标签')}</span></div>
       </div>
       ${(questionDefinition.sample_questions || []).slice(0, 6).map((question) => `
-        <p class="source-line">${escapeHtml(question.text || '')}</p>
+        <p class="source-line">${escapeHtml(question.text || question.question_text || '')}</p>
       `).join('')}
     </section>
   ` : '';
@@ -5813,9 +5934,10 @@ function downloadAssociationReportHtml(
   <main>
     <div class="eyebrow">Specta AI 品牌圈层报告</div>
     <h1>${escapeHtml(centerTerm)}品牌圈层解读报告</h1>
-    <div class="meta">由平台回答解析结果生成。外围节点来自回答证据，战略词只作为解释背景。</div>
+    <div class="meta">由平台回答解析结果生成。外围节点来自回答证据，战略词只作为解释背景。${periodScopeText ? `当前口径：${escapeHtml(periodScopeText)}。` : ''}</div>
     ${orbitSnapshotHtml}
     ${sectionHtml}
+    ${periodChangeHtml}
     ${questionHtml}
     ${platformHtml}
     ${evidenceHtml}
@@ -5835,6 +5957,38 @@ function downloadAssociationReportHtml(
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function buildExportPeriodChangeHtml(periodView: Record<string, unknown> | null) {
+  const rows = periodChangeRows(periodView);
+  const notice = String(periodView?.comparison_notice || '').trim();
+  const hasPreviousPeriod = Boolean(periodView?.previous_period);
+  const previousScopeText = buildPreviousPeriodScopeText(periodView);
+  if (!rows.length && !notice) return '';
+  return `
+    <section>
+      <h2>${hasPreviousPeriod ? '相比上一周期，最该关注的变化' : '本周期基线说明'}</h2>
+      ${notice ? `<p>${escapeHtml(notice)}</p>` : ''}
+      ${previousScopeText ? `<p>对比周期：${escapeHtml(previousScopeText)}</p>` : ''}
+      ${rows.length ? `
+        <table>
+          <thead><tr><th>节点</th><th>变化</th><th>提及</th><th>贴近</th><th>平台</th><th>说明</th></tr></thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td>${escapeHtml(String(row.term || '变化节点'))}</td>
+                <td>${escapeHtml(periodChangeLabel(String(row.change_type || 'stable')))}</td>
+                <td>${escapeHtml(signedNumber(row.mention_delta))}</td>
+                <td>${escapeHtml(signedNumber(row.gravity_delta))}</td>
+                <td>${escapeHtml(signedNumber(row.platform_delta))}</td>
+                <td>${escapeHtml(String(row.explanation || ''))}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : ''}
+    </section>
+  `;
 }
 
 function escapeHtml(value: string) {
@@ -5973,7 +6127,12 @@ export function sampleAnswerCount(sampleScope: Record<string, unknown>) {
 }
 
 function samplePlatformCount(sampleScope: Record<string, unknown>) {
-  return firstSampleNumber(sampleScope.platform_count, sampleScope.valid_platform_count);
+  const platforms = Array.isArray(sampleScope.platforms) ? sampleScope.platforms.length : 0;
+  return firstSampleNumber(
+    sampleScope.platform_count,
+    sampleScope.valid_platform_count,
+    platforms,
+  );
 }
 
 function readLiveExtractionStats(sampleScope: Record<string, unknown>) {

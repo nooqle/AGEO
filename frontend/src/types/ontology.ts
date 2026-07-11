@@ -760,7 +760,9 @@ export interface OntologyAssociationCircleQuestionDefinition {
   life_scenes?: string[];
   sample_questions?: Array<{
     id?: string;
+    question_id?: string;
     text?: string;
+    question_text?: string;
     audience_segment?: string;
     life_scene?: string;
     opportunity_point?: string;
