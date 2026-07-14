@@ -7,15 +7,17 @@ Calibration and report writing live in separate services.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.utils import sanitize_model_visible_text
 from app.ontology import AmwayEntityDefinition, AmwayEntityOntologyRegistry
 from app.ontology import load_default_amway_entity_ontology
 
 
-EXTRACTION_SCHEMA_VERSION = "2026-06-15"
+EXTRACTION_SCHEMA_VERSION = "2026-07-14"
 ANSWER_START_CHARS = 120
 ANSWER_MIDDLE_CHARS = 420
 CENTER_CONTEXT_WINDOW = 96
@@ -146,6 +148,7 @@ class AmwayEntityExtractionService:
                 )
                 answer_record = {
                     "answer_id": answer_id,
+                    "source_answer_id": _source_answer_id(platform_result),
                     "question_id": question_id,
                     "question": question_text,
                     "platform": platform,
@@ -371,15 +374,26 @@ def _answer_id(
     platform: str,
     platform_index: int,
 ) -> str:
-    explicit = _clean_text(
+    explicit = _source_answer_id(platform_result)
+    safe_platform = re.sub(r"[^0-9A-Za-z]+", "_", platform).strip("_").lower()
+    safe_question = re.sub(r"[^0-9A-Za-z]+", "_", question_id).strip("_").lower()
+    safe_source = re.sub(r"[^0-9A-Za-z]+", "_", explicit).strip("_").lower()
+    suffix = safe_source or str(platform_index)
+    digest = hashlib.sha256(
+        f"{question_id}\x00{platform}\x00{explicit or platform_index}".encode("utf-8")
+    ).hexdigest()[:16]
+    return (
+        f"answer_{safe_question or 'question'}_"
+        f"{safe_platform or platform_index}_{suffix}_{digest}"
+    )
+
+
+def _source_answer_id(platform_result: dict[str, Any]) -> str:
+    return _clean_text(
         platform_result.get("answer_id")
         or platform_result.get("id")
         or platform_result.get("result_id")
     )
-    if explicit:
-        return explicit
-    safe_platform = re.sub(r"[^0-9A-Za-z]+", "_", platform).strip("_").lower()
-    return f"answer_{question_id}_{safe_platform or platform_index}"
 
 
 def _question_context(
@@ -746,14 +760,15 @@ def _is_near_center_context(
 
 
 def _build_excerpt(answer_text: str, matched_text: str, radius: int = 72) -> str:
-    index = _find_text(answer_text, matched_text)
+    clean_answer = sanitize_model_visible_text(answer_text)
+    index = _find_text(clean_answer, matched_text)
     if index < 0:
-        return answer_text[: radius * 2].strip()
+        return clean_answer[: radius * 2].strip()
     start = max(0, index - radius)
-    end = min(len(answer_text), index + len(matched_text) + radius)
+    end = min(len(clean_answer), index + len(matched_text) + radius)
     prefix = "..." if start > 0 else ""
-    suffix = "..." if end < len(answer_text) else ""
-    return f"{prefix}{answer_text[start:end].strip()}{suffix}"
+    suffix = "..." if end < len(clean_answer) else ""
+    return f"{prefix}{clean_answer[start:end].strip()}{suffix}"
 
 
 def _find_text(haystack: str, needle: str) -> int:

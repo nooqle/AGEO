@@ -37,6 +37,13 @@ const ASSOCIATION_STAGE_RESULT_TYPES = new Set([
   'entity_calibration_summary',
 ]);
 
+function customPeriodEndExclusive(value: string): string | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const nextDay = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 1));
+  return `${nextDay.toISOString().slice(0, 10)}T00:00:00+08:00`;
+}
+
 function normalizeWebSocketBase(rawUrl: string | undefined): string {
   const value = (rawUrl || 'ws://localhost:8001').trim().replace(/\/+$/, '');
   if (value.endsWith('/ws')) {
@@ -201,6 +208,7 @@ export function AmwayAssociationCircleConsolePage({
   const [isPeriodLoading, setIsPeriodLoading] = useState(false);
   const [isPeriodReportGenerating, setIsPeriodReportGenerating] = useState(false);
   const [periodError, setPeriodError] = useState<string | null>(null);
+  const [periodReportError, setPeriodReportError] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchEntities();
@@ -391,18 +399,25 @@ export function AmwayAssociationCircleConsolePage({
     if (!selectedEntityId) {
       setPeriodView(null);
       setPeriodError(null);
+      setPeriodReportError(null);
       setIsPeriodLoading(false);
       return;
     }
     if (periodType === 'custom' && (!periodCustomStart || !periodCustomEnd)) {
-      setPeriodView(null);
       setPeriodError(null);
+      setPeriodReportError(null);
+      setIsPeriodLoading(false);
+      return;
+    }
+    if (periodType === 'custom' && periodCustomStart > periodCustomEnd) {
+      setPeriodError('开始日期不能晚于结束日期。');
+      setPeriodReportError(null);
       setIsPeriodLoading(false);
       return;
     }
     let cancelled = false;
     setPeriodError(null);
-    setPeriodView(null);
+    setPeriodReportError(null);
     setIsPeriodLoading(true);
     void api
       .getAmwayCirclePeriodView(selectedEntityId, {
@@ -411,16 +426,22 @@ export function AmwayAssociationCircleConsolePage({
           ? `${periodCustomStart}T00:00:00+08:00`
           : null,
         endAt: periodType === 'custom' && periodCustomEnd
-          ? `${periodCustomEnd}T23:59:59+08:00`
+          ? customPeriodEndExclusive(periodCustomEnd)
           : null,
         centerTerm: effectiveCenterTerm,
       })
       .then((nextPeriodView) => {
-        if (!cancelled) setPeriodView(nextPeriodView);
+        if (cancelled) return;
+        const runCount = Number(nextPeriodView.current_period?.run_count || 0);
+        const nodeCount = nextPeriodView.projection?.nodes?.length || 0;
+        if (runCount <= 0 || nodeCount <= 0) {
+          setPeriodError('所选周期暂无采集数据。当前保留上一个有数据周期，请返回最近 30 天继续查看。');
+          return;
+        }
+        setPeriodView(nextPeriodView);
       })
       .catch((error) => {
         if (!cancelled) {
-          setPeriodView(null);
           setPeriodError(error instanceof Error ? error.message : '周期图谱读取失败');
         }
       })
@@ -643,6 +664,17 @@ export function AmwayAssociationCircleConsolePage({
 
   const handleGeneratePeriodReport = useCallback(async (): Promise<boolean> => {
     if (!selectedEntityId || isPeriodReportGenerating) return false;
+    if (periodError) {
+      toast.info(periodError);
+      return false;
+    }
+    if (periodType === 'custom' && periodCustomStart > periodCustomEnd) {
+      const message = '开始日期不能晚于结束日期。';
+      setPeriodReportError(message);
+      toast.error(message);
+      return false;
+    }
+    setPeriodReportError(null);
     setIsPeriodReportGenerating(true);
     try {
       const nextPeriodView = await api.generateAmwayCirclePeriodReport(selectedEntityId, {
@@ -651,15 +683,18 @@ export function AmwayAssociationCircleConsolePage({
           ? `${periodCustomStart}T00:00:00+08:00`
           : null,
         end_at: periodType === 'custom' && periodCustomEnd
-          ? `${periodCustomEnd}T23:59:59+08:00`
+          ? customPeriodEndExclusive(periodCustomEnd)
           : null,
         center_term: effectiveCenterTerm || DEFAULT_CENTER_TERMS[0],
       });
       setPeriodError(null);
+      setPeriodReportError(null);
       setPeriodView(nextPeriodView);
       return true;
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '周期报告生成失败');
+    } catch {
+      const message = '周期报告生成失败，请稍后重试。';
+      setPeriodReportError(message);
+      toast.error(message);
       return false;
     } finally {
       setIsPeriodReportGenerating(false);
@@ -670,6 +705,7 @@ export function AmwayAssociationCircleConsolePage({
     periodCustomEnd,
     periodCustomStart,
     periodType,
+    periodError,
     selectedEntityId,
   ]);
 
@@ -735,6 +771,7 @@ export function AmwayAssociationCircleConsolePage({
       isPeriodLoading={isPeriodLoading}
       isPeriodReportGenerating={isPeriodReportGenerating}
       periodError={periodError}
+      periodReportError={periodReportError}
       onSelectEntity={setSelectedEntityId}
       onSelectCenterTerm={setSelectedCenterTerm}
       onSelectPeriodType={setPeriodType}

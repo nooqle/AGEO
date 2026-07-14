@@ -5,6 +5,72 @@ import re
 from typing import Any
 
 
+_MODEL_CITATION_WITH_MARKER_RE = re.compile(
+    r"[\ue000-\uf8ff]+"
+    r"(?:ci(?:te)?|web[_\s-]?search|websearch|turn\d+[a-z]*|search\d+)"
+    r"(?:[\ue000-\uf8ff]|[\w:=#./-]){0,160}",
+    flags=re.IGNORECASE,
+)
+_MODEL_CITATION_TOKEN_RE = re.compile(
+    r"(?:\bcite\b\s*)?"
+    r"(?:web[_\s-]?search|websearch|turn\d+(?:search|fetch|view|open)?\d*|search\d+)"
+    r"[\s:=#./-]*\d*",
+    flags=re.IGNORECASE,
+)
+
+
+def sanitize_model_visible_text(value: Any) -> str:
+    """Remove model-internal citation markers before text is clipped or rendered."""
+    text = str(value or "")
+    text = _MODEL_CITATION_WITH_MARKER_RE.sub("", text)
+    text = _MODEL_CITATION_TOKEN_RE.sub("", text)
+    text = re.sub(r"[\ue000-\uf8ff]", "", text)
+    text = re.sub(
+        r"(?:ci(?:te)?|web[_-]?search|turn\d+[a-z]*|search\d+)"
+        r"[\w:=#./-]*\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+def repair_mojibake(value: Any) -> Any:
+    """Repair legacy UTF-8 text decoded as Latin-1, including nested payloads."""
+    if isinstance(value, dict):
+        return {key: repair_mojibake(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [repair_mojibake(item) for item in value]
+    if not isinstance(value, str) or not value:
+        return value
+    has_marker = any(
+        marker in value for marker in ("Ã", "Â", "â", "å", "ç", "è", "é")
+    )
+    has_control = any(127 <= ord(char) <= 159 for char in value)
+    if not has_marker and not has_control:
+        return value
+    try:
+        repaired = value.encode("latin1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+    return (
+        repaired
+        if _text_readability_score(repaired) > _text_readability_score(value) + 3
+        else value
+    )
+
+
+def _text_readability_score(value: str) -> int:
+    cjk_count = sum(1 for char in value if "\u4e00" <= char <= "\u9fff")
+    mojibake_penalty = sum(
+        value.count(marker) for marker in ("Ã", "Â", "â", "å", "ç", "è", "é")
+    )
+    control_penalty = sum(
+        1 for char in value if ord(char) < 32 or 127 <= ord(char) <= 159
+    )
+    return cjk_count * 2 - mojibake_penalty - control_penalty
+
+
 def repair_truncated_json(text: str) -> str | None:
     """Attempt to repair JSON that was truncated mid-output (e.g. by max_tokens).
 
@@ -12,7 +78,7 @@ def repair_truncated_json(text: str) -> str | None:
     Returns repaired JSON string or None if repair is not feasible.
     """
     text = text.strip()
-    if not text or text[0] != '{':
+    if not text or text[0] != "{":
         return None
 
     # Remove trailing incomplete string values (cut mid-string)
@@ -26,18 +92,36 @@ def repair_truncated_json(text: str) -> str | None:
         if escape_next:
             escape_next = False
             continue
-        if ch == '\\' and in_string:
+        if ch == "\\" and in_string:
             escape_next = True
             continue
         if ch == '"':
             in_string = not in_string
-        if not in_string and ch in ('}', ']', '"', '0', '1', '2', '3', '4', '5',
-                                     '6', '7', '8', '9', 'e', 'l', 'u', 'r', 's'):
+        if not in_string and ch in (
+            "}",
+            "]",
+            '"',
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "e",
+            "l",
+            "u",
+            "r",
+            "s",
+        ):
             # Could be end of a value
             last_good = i
 
     # If we're in a string, close it
-    repaired = text[:last_good + 1]
+    repaired = text[: last_good + 1]
     if in_string:
         repaired += '"'
 
@@ -50,29 +134,29 @@ def repair_truncated_json(text: str) -> str | None:
         if esc:
             esc = False
             continue
-        if ch == '\\' and in_str:
+        if ch == "\\" and in_str:
             esc = True
             continue
         if ch == '"':
             in_str = not in_str
         if not in_str:
-            if ch == '{':
+            if ch == "{":
                 open_braces += 1
-            elif ch == '}':
+            elif ch == "}":
                 open_braces -= 1
-            elif ch == '[':
+            elif ch == "[":
                 open_brackets += 1
-            elif ch == ']':
+            elif ch == "]":
                 open_brackets -= 1
 
     # Remove trailing comma before closing
     repaired = repaired.rstrip()
-    if repaired.endswith(','):
+    if repaired.endswith(","):
         repaired = repaired[:-1]
 
     # Close all open structures
-    repaired += ']' * open_brackets
-    repaired += '}' * open_braces
+    repaired += "]" * open_brackets
+    repaired += "}" * open_braces
 
     try:
         json.loads(repaired)
@@ -118,14 +202,14 @@ def extract_json_from_content(content: str) -> dict | None:
         results = []
         i = 0
         while i < len(text):
-            if text[i] == '{':
+            if text[i] == "{":
                 # Try to find matching closing brace
                 brace_count = 1
                 j = i + 1
                 while j < len(text) and brace_count > 0:
-                    if text[j] == '{':
+                    if text[j] == "{":
                         brace_count += 1
-                    elif text[j] == '}':
+                    elif text[j] == "}":
                         brace_count -= 1
                     j += 1
                 if brace_count == 0:

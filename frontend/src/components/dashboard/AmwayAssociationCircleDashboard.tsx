@@ -99,6 +99,7 @@ interface AmwayAssociationCircleDashboardProps {
   isPeriodLoading?: boolean;
   isPeriodReportGenerating?: boolean;
   periodError?: string | null;
+  periodReportError?: string | null;
   onSelectEntity: (entityId: string) => void;
   onSelectCenterTerm: (term: string) => void;
   onSelectPeriodType?: (periodType: AmwayCirclePeriodType) => void;
@@ -130,6 +131,7 @@ export function AmwayAssociationCircleDashboard({
   isPeriodLoading,
   isPeriodReportGenerating,
   periodError,
+  periodReportError,
   onSelectCenterTerm,
   onSelectPeriodType,
   onChangePeriodCustomStart,
@@ -150,6 +152,11 @@ export function AmwayAssociationCircleDashboard({
     ? selectedCenterTerm
     : centerTerms[0] || '安利';
   const isCustomPeriodIncomplete = periodType === 'custom' && (!periodCustomStart || !periodCustomEnd);
+  const isCustomPeriodInvalid = periodType === 'custom'
+    && Boolean(periodCustomStart && periodCustomEnd && periodCustomStart > periodCustomEnd);
+  const periodSelectionUnavailable = Boolean(
+    periodError || isPeriodLoading || isCustomPeriodIncomplete || isCustomPeriodInvalid,
+  );
   useEffect(() => {
     setIsReportOpen(false);
   }, [activeCenterTerm, periodCustomEnd, periodCustomStart, periodType, selectedEntityId]);
@@ -158,10 +165,10 @@ export function AmwayAssociationCircleDashboard({
     [activeCenterTerm, centerTerms],
   );
   const officialProjection = useMemo(() => {
-    if (periodError || isPeriodLoading || isCustomPeriodIncomplete) return emptyPeriodProjection;
     if (periodView) return periodView.projection || emptyPeriodProjection;
+    if (periodError || isPeriodLoading || isCustomPeriodIncomplete || isCustomPeriodInvalid) return baseProjection;
     return baseProjection;
-  }, [baseProjection, emptyPeriodProjection, isCustomPeriodIncomplete, isPeriodLoading, periodError, periodView]);
+  }, [baseProjection, emptyPeriodProjection, isCustomPeriodIncomplete, isCustomPeriodInvalid, isPeriodLoading, periodError, periodView]);
   const combinedLiveStageResults = useMemo(
     () => mergeStageResults(activeTask?.stage_results_cache || [], liveStageResults),
     [activeTask?.stage_results_cache, liveStageResults],
@@ -188,14 +195,17 @@ export function AmwayAssociationCircleDashboard({
   const evidenceSamples = projection.evidence_samples || [];
   const evidenceFindings = projection.evidence_findings || [];
   const sourceAppendix = projection.source_appendix || [];
-  const questionBank = projection.question_bank || [];
   const answerCount = sampleAnswerCount(sampleScope);
-  const targetQuestionCount = numericSampleValue(activeRun?.input_scope?.uploaded_question_count) || uploadedQuestions.length || questionBank.length || 0;
-  const targetPlatformCount = targetPlatforms.length || samplePlatformCountFromScope(sampleScope);
-  const liveQuestionCount = sampleQuestionCountFromScope(sampleScope) || 0;
+  const questionCount = numericSampleValue(sampleScope.question_count)
+    || numericSampleValue(sampleScope.total_question_count);
+  const targetPlatformCount = numericSampleValue(sampleScope.requested_platform_count)
+    || targetPlatforms.length
+    || samplePlatformCountFromScope(sampleScope);
   const hasPeriodReport = Boolean(
     periodView?.report_id && hasReportContent(periodView.projection),
   );
+  const isPeriodReportDeliverable = hasPeriodReport
+    && reportQualityPassed(periodView?.projection);
   const headerStatusLabel = isRunSubmitting || isRunActive
     ? nodes.length > 0 ? '实时抽取中' : '正在抓取'
     : status === 'loading'
@@ -213,12 +223,16 @@ export function AmwayAssociationCircleDashboard({
       uploadedQuestionSource,
     });
   };
+  const openReport = () => {
+    setIsReportOpen(true);
+    window.setTimeout(() => document.getElementById('strategy-report')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
   const handleReportAction = async () => {
     if (hasPeriodReport) {
-      setIsReportOpen(true);
+      openReport();
       return;
     }
-    if (await onGeneratePeriodReport()) setIsReportOpen(true);
+    if (await onGeneratePeriodReport()) openReport();
   };
   const handleQuestionFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -251,6 +265,13 @@ export function AmwayAssociationCircleDashboard({
 
   const isModeling = Boolean(isRunSubmitting || isRunActive);
   const runButtonLabel = isModeling ? '运行中' : status === 'loading' ? '读取中' : status === 'ready' ? '重新生成图谱' : '生成图谱';
+  const assistiveStatusMessage = periodError
+    || periodReportError
+    || uploadError
+    || (isReadingUpload ? '正在读取上传的问题文件。' : null)
+    || (isPeriodReportGenerating ? '正在生成周期报告。' : null)
+    || (isPeriodLoading ? '正在切换统计周期，当前保留上一份可用图谱。' : null)
+    || headerStatusLabel;
   const workspaceItems: Array<{
     id: ConsoleWorkspace;
     label: string;
@@ -263,6 +284,9 @@ export function AmwayAssociationCircleDashboard({
 
   return (
     <div className="min-h-screen bg-[var(--bg-secondary)] text-[var(--text-primary)]">
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {assistiveStatusMessage}
+      </p>
       <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/96">
         <div className="mx-auto flex h-16 max-w-[1920px] items-center justify-between gap-4 px-5 lg:px-7 2xl:px-10">
           <div className="flex min-w-0 items-center gap-3">
@@ -271,7 +295,7 @@ export function AmwayAssociationCircleDashboard({
             </div>
             <div className="min-w-0">
               <div className="text-sm font-semibold leading-5">Specta AI</div>
-              <div className="truncate text-xs text-[var(--text-tertiary)]">安利品牌圈层</div>
+              <div className="truncate text-xs text-[var(--text-secondary)]">安利品牌圈层</div>
             </div>
           </div>
           <nav className="hidden items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-1 lg:flex">
@@ -283,6 +307,8 @@ export function AmwayAssociationCircleDashboard({
                   key={item.id}
                   type="button"
                   onClick={() => setWorkspace(item.id)}
+                  aria-current={active ? 'page' : undefined}
+                  aria-pressed={active}
                   className="inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm transition"
                   style={{
                     background: active ? 'var(--bg-primary)' : 'transparent',
@@ -305,6 +331,19 @@ export function AmwayAssociationCircleDashboard({
                 </span>
               ) : null}
             </div>
+            <button
+              type="button"
+              onClick={() => void handleReportAction()}
+              disabled={isModeling || Boolean(isPeriodReportGenerating) || !nodes.length || periodSelectionUnavailable}
+              className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FileText size={15} />
+              {isPeriodReportGenerating
+                ? '生成中'
+                : hasPeriodReport
+                  ? isPeriodReportDeliverable ? '查看报告' : '查看待校验报告'
+                  : '生成报告'}
+            </button>
           </div>
         </div>
       </header>
@@ -318,6 +357,8 @@ export function AmwayAssociationCircleDashboard({
                 key={item.id}
                 type="button"
                 onClick={() => setWorkspace(item.id)}
+                aria-current={active ? 'page' : undefined}
+                aria-pressed={active}
                 className="h-10 shrink-0 rounded-xl border px-3 text-sm"
                 style={{
                   borderColor: active ? 'var(--brand-primary)' : 'var(--border-subtle)',
@@ -337,23 +378,20 @@ export function AmwayAssociationCircleDashboard({
         ) : (
         <section className="min-w-0 space-y-4">
           {runError ? (
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-5 py-4 text-sm text-[var(--text-secondary)]">
-              {runError}
-            </div>
+            <InlineActionError message={runError} actionLabel="重试生成图谱" onAction={handleStart} />
           ) : null}
 
-          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-5 sm:p-6">
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_400px]">
               <div className="max-w-5xl">
-                <div className="text-xs font-medium text-[var(--text-tertiary)]">安利专属</div>
-                <h1 className="mt-1 text-3xl font-semibold leading-tight">品牌联想图谱</h1>
-                <p className="mt-3 max-w-4xl text-sm leading-7 text-[var(--text-secondary)]">
-                  上传问题，生成图谱，再生成报告。页面只保留这条主线；节点和报告都来自抓取回答后的解析结果。
-                </p>
-                <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
-                  <InfoPill label="题库目标" value={`${targetQuestionCount || '-'} 题 / ${targetPlatformCount || '-'} 平台`} />
-                  <InfoPill label="实时样本" value={`${liveQuestionCount || '-'} 题 / ${answerCount || '-'} 回答 / ${nodes.length || '-'} 节点`} />
-                  <InfoPill label="位置判断" value="由回答证据决定" tone="warning" />
+                <div className="text-xs font-medium text-[var(--text-tertiary)]">{activeCenterTerm} 专属</div>
+                <h1 className="mt-1 text-2xl font-semibold leading-tight tracking-tight">品牌联想图谱</h1>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="本轮数据范围">
+                  <InfoPill label="问题" value={String(questionCount || '-')} />
+                  <InfoPill label="计划平台" value={String(targetPlatformCount || '-')} />
+                  <InfoPill label="有效平台" value={String(samplePlatformCountFromScope(sampleScope) || '-')} />
+                  <InfoPill label="回答" value={String(answerCount || '-')} />
+                  <InfoPill label="节点" value={String(nodes.length || '-')} tone="brand" />
                 </div>
                 <PeriodSelector
                   value={periodType}
@@ -369,9 +407,9 @@ export function AmwayAssociationCircleDashboard({
                 />
               </div>
 
-              <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
-                <div className="text-xs font-medium text-[var(--text-tertiary)]">观察品牌</div>
-                <div className="mt-3 grid gap-2">
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3">
+                <div className="text-xs font-medium text-[var(--text-tertiary)]">分析对象</div>
+                <div className="mt-3 grid grid-cols-3 gap-2">
                   {centerTerms.map((term) => (
                     <button
                       key={term}
@@ -380,20 +418,23 @@ export function AmwayAssociationCircleDashboard({
                         onSelectCenterTerm(term);
                         setSelectedNodeId(null);
                       }}
-                      className="flex items-center justify-between rounded-xl border px-3 py-2 text-left text-sm transition"
+                      disabled={term !== activeCenterTerm}
+                      aria-pressed={term === activeCenterTerm}
+                      title={term === activeCenterTerm ? '当前分析对象' : '尚未生成该对象的独立投影'}
+                      className="flex min-w-0 items-center justify-between gap-1 rounded-xl border px-2.5 py-2 text-left text-sm transition"
                       style={{
                         borderColor: term === activeCenterTerm ? 'var(--brand-primary)' : 'var(--border-subtle)',
                         background: term === activeCenterTerm ? 'var(--brand-bg)' : 'var(--bg-primary)',
                         color: term === activeCenterTerm ? 'var(--brand-primary)' : 'var(--text-secondary)',
                       }}
                     >
-                      <span className="font-semibold">{term}</span>
-                      <span className="text-xs">{term === activeCenterTerm ? '当前' : '切换'}</span>
+                      <span className="truncate font-semibold">{term}</span>
+                      <span className="shrink-0 text-[11px]">{term === activeCenterTerm ? '当前' : '待生成'}</span>
                     </button>
                   ))}
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-[var(--brand-border)] bg-[var(--bg-primary)] px-3 text-sm font-medium text-[var(--brand-primary)] hover:bg-[var(--brand-bg)]">
+                  <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-[var(--brand-border)] bg-[var(--bg-primary)] px-3 text-sm font-medium text-[var(--brand-primary)] hover:bg-[var(--brand-bg)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--brand-primary)]">
                     <Upload size={15} />
                     {isReadingUpload ? '正在读取' : '上传问题'}
                     <input
@@ -415,7 +456,7 @@ export function AmwayAssociationCircleDashboard({
                   </button>
                 </div>
                 {uploadError ? (
-                  <p className="mt-3 text-xs leading-5 text-[var(--error)]">{uploadError}</p>
+                  <InlineActionError message={uploadError} compact />
                 ) : null}
                 {uploadedQuestionSource ? (
                   <p className="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
@@ -448,7 +489,7 @@ export function AmwayAssociationCircleDashboard({
               />
 
               {isReportOpen && status === 'ready' && nodes.length > 0 ? (
-                <section id="strategy-report">
+                <section id="strategy-report" className="scroll-mt-20">
                   <AssociationReportPanel
                     projection={projection}
                     activeCenterTerm={activeCenterTerm}
@@ -457,13 +498,14 @@ export function AmwayAssociationCircleDashboard({
                 </section>
               ) : (
                 <ReportGenerationGate
-                  disabled={isModeling || Boolean(isPeriodReportGenerating) || !nodes.length}
+                  disabled={isModeling || Boolean(isPeriodReportGenerating) || !nodes.length || periodSelectionUnavailable}
                   activeCenterTerm={activeCenterTerm}
                   answerCount={answerCount}
                   nodeCount={nodes.length}
                   isModeling={isModeling}
                   hasReport={hasPeriodReport}
                   isGenerating={Boolean(isPeriodReportGenerating)}
+                  hasError={Boolean(periodReportError)}
                   onGenerate={() => void handleReportAction()}
                 />
               )}
@@ -507,6 +549,12 @@ function hasReportContent(
   );
 }
 
+function reportQualityPassed(
+  projection: AmwayCirclePeriodViewResponse['projection'] | undefined,
+): boolean {
+  return projection?.report_quality_checks?.passed === true;
+}
+
 function PeriodSelector({
   value,
   customStart,
@@ -532,9 +580,11 @@ function PeriodSelector({
 }) {
   const helperText = value === 'custom' && (!customStart || !customEnd)
     ? '选择起止日期后更新图谱。'
+    : value === 'custom' && customStart > customEnd
+      ? '开始日期不能晚于结束日期。'
     : notice;
   return (
-    <div className="mt-5 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3">
+    <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2">
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-1 text-xs font-medium text-[var(--text-tertiary)]">观察周期</span>
         {PERIOD_OPTIONS.map((item) => {
@@ -545,7 +595,8 @@ function PeriodSelector({
               type="button"
               onClick={() => onChange?.(item.value)}
               disabled={disabled}
-              className="h-11 rounded-full border px-3 text-xs font-medium transition"
+              aria-pressed={active}
+              className="h-9 rounded-full border px-3 text-xs font-medium transition"
               style={{
                 borderColor: active ? 'var(--brand-border)' : 'var(--border-subtle)',
                 background: active ? 'var(--brand-bg)' : 'var(--bg-primary)',
@@ -562,18 +613,20 @@ function PeriodSelector({
               type="date"
               aria-label="开始日期"
               value={customStart}
+              max={customEnd || undefined}
               onChange={(event) => onChangeCustomStart?.(event.target.value)}
               disabled={disabled}
-              className="h-11 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs text-[var(--text-secondary)]"
+              className="h-9 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs text-[var(--text-secondary)]"
             />
             <span className="text-xs text-[var(--text-tertiary)]">至</span>
             <input
               type="date"
               aria-label="结束日期"
               value={customEnd}
+              min={customStart || undefined}
               onChange={(event) => onChangeCustomEnd?.(event.target.value)}
               disabled={disabled}
-              className="h-11 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs text-[var(--text-secondary)]"
+              className="h-9 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs text-[var(--text-secondary)]"
             />
           </div>
         ) : null}
@@ -582,7 +635,18 @@ function PeriodSelector({
         ) : null}
       </div>
       {error ? (
-        <p className="mt-2 text-xs leading-5 text-[var(--error)]">{error}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs leading-5 text-[var(--error)]">
+          <span>{error}</span>
+          {value === 'custom' ? (
+            <button
+              type="button"
+              onClick={() => onChange?.('last_30_days')}
+              className="rounded-full border border-[var(--brand-border)] bg-[var(--bg-primary)] px-3 py-1 font-semibold text-[var(--brand-primary)] hover:bg-[var(--brand-bg)]"
+            >
+              返回最近 30 天
+            </button>
+          ) : null}
+        </div>
       ) : helperText ? (
         <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">{helperText}</p>
       ) : null}
@@ -757,6 +821,9 @@ function buildLiveAssociationProjection(
       is_risk_term: isRisk,
       is_target_term: accumulator.termOrigin === 'strategy',
       answer_count: answerCount,
+      answer_refs: Array.from(accumulator.answerIds),
+      answer_count_is_exact: true,
+      count_semantics: 'distinct_answer_refs',
       platform_count: platformCount,
       platform_distribution: Object.fromEntries(accumulator.platforms.entries()),
       relation_type_distribution: relationTypes,
@@ -848,11 +915,6 @@ function buildLiveAssociationProjection(
 
 function stringValue(value: unknown): string {
   return String(value || '').trim();
-}
-
-function sampleQuestionCountFromScope(sampleScope?: Record<string, unknown>): number {
-  if (!sampleScope) return 0;
-  return numericSampleValue(sampleScope.question_count) || numericSampleValue(sampleScope.total_question_count);
 }
 
 function samplePlatformCountFromScope(sampleScope?: Record<string, unknown>): number {
@@ -969,6 +1031,7 @@ function ReportGenerationGate({
   isModeling,
   hasReport,
   isGenerating,
+  hasError,
   onGenerate,
 }: {
   disabled: boolean;
@@ -978,6 +1041,7 @@ function ReportGenerationGate({
   isModeling: boolean;
   hasReport: boolean;
   isGenerating: boolean;
+  hasError: boolean;
   onGenerate: () => void;
 }) {
   return (
@@ -989,7 +1053,7 @@ function ReportGenerationGate({
             {isModeling
               ? '抓取与实时抽取还在进行，校准完成后会开放报告生成。'
               : hasReport
-                ? `A5 已基于校准后的 ${answerCount || '-'} 条回答和 ${nodeCount || '-'} 个节点生成报告。`
+                ? `已基于校准后的 ${answerCount || '-'} 条回答和 ${nodeCount || '-'} 个节点生成报告。`
               : `基于当前 ${answerCount || '-'} 条回答和 ${nodeCount || '-'} 个节点，展开战略词验证、平台差异和下一轮建议。`}
           </p>
         </div>
@@ -1002,6 +1066,55 @@ function ReportGenerationGate({
           {isGenerating ? '生成中' : hasReport ? '查看报告' : '生成报告'}
         </button>
       </div>
+      {hasError ? <ReportGenerationError onRetry={onGenerate} /> : null}
     </section>
+  );
+}
+
+function ReportGenerationError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[color-mix(in_srgb,var(--evidence-risk)_28%,var(--border-subtle))] bg-[var(--status-error-bg)] px-3 py-2 text-sm text-[var(--error)]"
+    >
+      <span className="leading-5">报告生成失败，请稍后重试。当前图谱数据已保留。</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="h-9 rounded-lg border border-[color-mix(in_srgb,var(--evidence-risk)_35%,var(--border-subtle))] bg-[var(--bg-primary)] px-3 text-xs font-semibold text-[var(--error)] hover:bg-[var(--bg-secondary)]"
+      >
+        重试生成报告
+      </button>
+    </div>
+  );
+}
+
+function InlineActionError({
+  message,
+  actionLabel,
+  onAction,
+  compact = false,
+}: {
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      role="alert"
+      className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[color-mix(in_srgb,var(--evidence-risk)_28%,var(--border-subtle))] bg-[var(--status-error-bg)] text-sm text-[var(--error)] ${compact ? 'mt-3 px-3 py-2' : 'px-5 py-4'}`}
+    >
+      <span className="leading-5">{message}</span>
+      {actionLabel && onAction ? (
+        <button
+          type="button"
+          onClick={onAction}
+          className="h-9 rounded-lg border border-[color-mix(in_srgb,var(--evidence-risk)_35%,var(--border-subtle))] bg-[var(--bg-primary)] px-3 text-xs font-semibold text-[var(--error)] hover:bg-[var(--bg-secondary)]"
+        >
+          {actionLabel}
+        </button>
+      ) : null}
+    </div>
   );
 }

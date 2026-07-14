@@ -12,11 +12,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.utils import sanitize_model_visible_text
+from app.tools.a4_fetch_agent import (
+    display_platform_name,
+    normalize_public_platform_id,
+)
+
 
 REPORT_KIND = "brand_association_circle"
 ARTIFACT_KIND = "brand_association_circle"
-SCHEMA_VERSION = "2026-06-14"
-REPORT_COPY_CONSTRAINT_VERSION = "human_brand_diagnosis_v3_mirofish_spine"
+SCHEMA_VERSION = "2026-07-14"
+REPORT_COPY_CONSTRAINT_VERSION = "human_brand_diagnosis_v16_identity_scope_contract"
 
 REPORT_COPY_FORBIDDEN_PHRASES = (
     "这" + "说" + "明",
@@ -55,6 +61,19 @@ REPORT_NARRATIVE_SECTION_REQUIRED_FIELDS = (
     "so_what",
     "next_probe",
 )
+
+REPORT_EVIDENCE_SCOPE_CONTRACTS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "core_verdict.v1": (("evidence_ids",), ("entity_ids", "node_terms")),
+    "ai_archive.v1": (("evidence_ids",), ("entity_ids", "node_terms")),
+    "value_pillars.v1": (("evidence_ids",), ("node_terms",)),
+    "ai_blind_spot.v1": (("evidence_ids",), ("question_ids",)),
+    "platform_difference.v1": (
+        ("evidence_ids",),
+        ("question_ids",),
+        ("platforms",),
+    ),
+    "data_to_action.v1": (("evidence_ids",), ("entity_ids", "node_terms")),
+}
 
 DEFAULT_CENTER_TERMS = ["安利", "安利中国", "纽崔莱", "Amway China", "Nutrilite"]
 
@@ -292,11 +311,11 @@ def is_association_circle_mode(value: Any) -> bool:
 
 
 def _clean_text(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+    return re.sub(r"\s+", " ", sanitize_model_visible_text(value)).strip()
 
 
 def _preserve_answer_text(value: Any) -> str:
-    text = str(value or "")
+    text = sanitize_model_visible_text(value)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"[ \t]+", " ", text)
@@ -304,19 +323,10 @@ def _preserve_answer_text(value: Any) -> str:
 
 
 def _normalize_platform(value: Any) -> str:
-    text = _clean_text(value).lower()
-    aliases = {
-        "deepseek": "DeepSeek",
-        "kimi": "Kimi",
-        "moonshot": "Kimi",
-        "doubao": "豆包",
-        "豆包": "豆包",
-        "yuanbao": "元宝",
-        "元宝": "元宝",
-        "chatgpt": "ChatGPT",
-        "gpt": "ChatGPT",
-    }
-    return aliases.get(text, _clean_text(value) or "Unknown")
+    platform = normalize_public_platform_id(value)
+    return (
+        display_platform_name(platform) if platform else _clean_text(value) or "Unknown"
+    )
 
 
 def _normalize_center_terms(
@@ -524,14 +534,15 @@ def _answer_position(answer_text: str, alias: str) -> str:
 
 
 def _build_excerpt(answer_text: str, alias: str, radius: int = 72) -> str:
-    index = answer_text.lower().find(alias.lower())
+    clean_answer = sanitize_model_visible_text(answer_text)
+    index = clean_answer.lower().find(alias.lower())
     if index < 0:
-        return answer_text[: radius * 2].strip()
+        return clean_answer[: radius * 2].strip()
     start = max(0, index - radius)
-    end = min(len(answer_text), index + len(alias) + radius)
+    end = min(len(clean_answer), index + len(alias) + radius)
     prefix = "..." if start > 0 else ""
-    suffix = "..." if end < len(answer_text) else ""
-    return f"{prefix}{answer_text[start:end].strip()}{suffix}"
+    suffix = "..." if end < len(clean_answer) else ""
+    return f"{prefix}{clean_answer[start:end].strip()}{suffix}"
 
 
 def _relation_type_for_evidence(term: str, observation: AnswerObservation) -> str:
@@ -1453,7 +1464,7 @@ def _build_evidence_findings(
         first_sample = samples[0] if samples else {}
         supporting_facts = [
             (
-                f"{int(node.get('answer_count') or node.get('evidence_count') or 0)} 条回答提到，"
+                f"{_node_count_phrase(node)}，"
                 f"覆盖 {int(node.get('platform_count') or 0)} 个平台。"
             ),
             (
@@ -2233,26 +2244,41 @@ def _build_report_quality_checks(
     evidence_findings: list[dict[str, Any]],
     association_actions: list[dict[str, Any]],
     source_appendix: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    sample_scope: dict[str, Any],
+    storyline_analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    narrative_text = "\n".join(
-        [
-            _clean_text(section.get("title"))
-            + "\n"
-            + "\n".join(
-                _clean_text(paragraph)
-                for paragraph in section.get("paragraphs") or []
-                if _clean_text(paragraph)
-            )
-            for section in narrative_sections
+    authored_text = "\n".join(
+        _clean_text(value)
+        for section in narrative_sections
+        for value in [
+            section.get("title"),
+            section.get("reader_question"),
+            section.get("takeaway"),
+            *(section.get("claims") or []),
+            *(section.get("paragraphs") or []),
+            section.get("so_what"),
+            section.get("next_probe"),
         ]
+        if _clean_text(value)
+    )
+    narrative_text = (
+        authored_text
+        + "\n"
+        + "\n".join(
+            _clean_text(fact)
+            for section in narrative_sections
+            for fact in section.get("supporting_facts") or []
+            if _clean_text(fact)
+        )
     )
     forbidden_hits = [
-        phrase for phrase in REPORT_COPY_FORBIDDEN_PHRASES if phrase in narrative_text
+        phrase for phrase in REPORT_COPY_FORBIDDEN_PHRASES if phrase in authored_text
     ]
     forbidden_pattern_hits = [
         pattern
         for pattern in REPORT_COPY_FORBIDDEN_PATTERNS
-        if re.search(pattern, narrative_text)
+        if re.search(pattern, authored_text)
     ]
     evidence_bound_roles = {
         "executive_summary",
@@ -2264,6 +2290,102 @@ def _build_report_quality_checks(
     section_evidence_gaps = []
     section_takeaway_gaps = []
     section_contract_gaps = []
+    source_evidence_by_ref = {
+        _clean_text(item.get("evidence_id")): item
+        for item in source_appendix
+        if isinstance(item, dict) and _clean_text(item.get("evidence_id"))
+    }
+
+    def evidence_scope_contract_gaps(section: dict[str, Any]) -> list[str]:
+        contract_id = _clean_text(section.get("evidence_contract_id"))
+        scope = section.get("evidence_scope")
+        gaps: list[str] = []
+        if not contract_id:
+            gaps.append("evidence_contract_id")
+            required_groups = None
+        else:
+            required_groups = REPORT_EVIDENCE_SCOPE_CONTRACTS.get(contract_id)
+            if required_groups is None:
+                gaps.append("evidence_contract_id:unknown")
+        if not isinstance(scope, dict) or not any(scope.values()):
+            gaps.append("evidence_scope")
+            return gaps
+        if required_groups is None:
+            return gaps
+        gaps.extend(
+            "evidence_scope." + "|".join(group)
+            for group in required_groups
+            if not any(scope.get(field_name) for field_name in group)
+        )
+        return gaps
+
+    def evidence_matches_section(
+        section: dict[str, Any], evidence: dict[str, Any]
+    ) -> bool:
+        if evidence_scope_contract_gaps(section):
+            return False
+        scope = section.get("evidence_scope") or {}
+        if not isinstance(scope, dict) or not any(scope.values()):
+            return False
+        allowed_evidence_ids = {
+            _clean_text(value).lower()
+            for value in scope.get("evidence_ids") or []
+            if _clean_text(value)
+        }
+        allowed_entity_ids = {
+            _clean_text(value).lower()
+            for value in scope.get("entity_ids") or []
+            if _clean_text(value)
+        }
+        allowed_node_terms = {
+            _clean_text(value).lower()
+            for value in scope.get("node_terms") or []
+            if _clean_text(value)
+        }
+        allowed_relation_types = {
+            _clean_text(value).upper()
+            for value in scope.get("relation_types") or []
+            if _clean_text(value)
+        }
+        allowed_question_ids = {
+            _clean_text(value).lower()
+            for value in scope.get("question_ids") or []
+            if _clean_text(value)
+        }
+        allowed_platforms = {
+            _normalize_platform(value).lower()
+            for value in scope.get("platforms") or []
+            if _clean_text(value)
+        }
+        evidence_id = _clean_text(evidence.get("evidence_id")).lower()
+        evidence_entity_ids = {
+            _clean_text(evidence.get(field_name)).lower()
+            for field_name in ("entity_id", "lexicon_entity_id", "node_id")
+            if _clean_text(evidence.get(field_name))
+        }
+        evidence_node_term = _clean_text(
+            evidence.get("node_term") or evidence.get("canonical_name")
+        ).lower()
+        evidence_relation_type = _clean_text(evidence.get("relation_type")).upper()
+        evidence_question_id = _clean_text(evidence.get("question_id")).lower()
+        evidence_platform = _normalize_platform(evidence.get("platform")).lower()
+        required_group_matches: list[bool] = []
+        if allowed_evidence_ids:
+            required_group_matches.append(evidence_id in allowed_evidence_ids)
+        if allowed_entity_ids or allowed_node_terms:
+            required_group_matches.append(
+                bool(evidence_entity_ids & allowed_entity_ids)
+                or evidence_node_term in allowed_node_terms
+            )
+        if allowed_relation_types:
+            required_group_matches.append(
+                evidence_relation_type in allowed_relation_types
+            )
+        if allowed_question_ids:
+            required_group_matches.append(evidence_question_id in allowed_question_ids)
+        if allowed_platforms:
+            required_group_matches.append(evidence_platform in allowed_platforms)
+        return bool(required_group_matches) and all(required_group_matches)
 
     def section_field_missing(section: dict[str, Any], field_name: str) -> bool:
         value = section.get(field_name)
@@ -2272,11 +2394,15 @@ def _build_report_quality_checks(
         return not bool(_clean_text(value))
 
     for section in narrative_sections:
+        section_role = str(section.get("role") or "")
+        binding_required = section.get("evidence_binding_required") is not False
         missing_fields = [
             field_name
             for field_name in REPORT_NARRATIVE_SECTION_REQUIRED_FIELDS
             if section_field_missing(section, field_name)
         ]
+        if section_role in evidence_bound_roles and binding_required:
+            missing_fields.extend(evidence_scope_contract_gaps(section))
         if missing_fields:
             section_contract_gaps.append(
                 {
@@ -2292,15 +2418,39 @@ def _build_report_quality_checks(
                     "title": section.get("title"),
                 }
             )
-        if str(section.get("role") or "") not in evidence_bound_roles:
+        if section_role not in evidence_bound_roles:
             continue
         has_fact = bool(section.get("supporting_facts"))
-        has_refs = bool(section.get("evidence_refs"))
-        if not (has_fact or has_refs):
+        evidence_refs = [
+            _clean_text(reference)
+            for reference in section.get("evidence_refs") or []
+            if _clean_text(reference)
+        ]
+        relevant_refs = [
+            reference
+            for reference in evidence_refs
+            if reference in source_evidence_by_ref
+            and evidence_matches_section(section, source_evidence_by_ref[reference])
+        ]
+        out_of_scope_refs = [
+            reference for reference in evidence_refs if reference not in relevant_refs
+        ]
+        if (not binding_required and evidence_refs) or (
+            binding_required
+            and not (
+                has_fact and evidence_refs and relevant_refs and not out_of_scope_refs
+            )
+        ):
             section_evidence_gaps.append(
                 {
                     "section_id": section.get("section_id"),
                     "title": section.get("title"),
+                    "has_supporting_facts": has_fact,
+                    "has_evidence_refs": bool(evidence_refs),
+                    "binding_required": binding_required,
+                    "relevant_ref_count": len(relevant_refs),
+                    "out_of_scope_refs": out_of_scope_refs[:20],
+                    "evidence_scope": section.get("evidence_scope") or {},
                 }
             )
     source_platforms = {
@@ -2314,6 +2464,72 @@ def _build_report_quality_checks(
         for item in source_appendix
         if isinstance(item, dict) and _clean_text(item.get("question_id"))
     }
+    available_evidence_refs = {
+        _clean_text(item.get("evidence_id"))
+        for item in source_appendix
+        if isinstance(item, dict) and _clean_text(item.get("evidence_id"))
+    }
+    referenced_evidence_refs = {
+        _clean_text(reference)
+        for row in [
+            *nodes,
+            *evidence_findings,
+            *association_actions,
+            *narrative_sections,
+        ]
+        if isinstance(row, dict)
+        for reference in row.get("evidence_refs", [])
+        if _clean_text(reference)
+    }
+    dangling_evidence_refs = sorted(referenced_evidence_refs - available_evidence_refs)
+    raw_valid_answer_count = sample_scope.get("valid_answer_count")
+    valid_answer_count_is_known = raw_valid_answer_count is not None
+    valid_answer_count = int(raw_valid_answer_count or 0)
+    response_count_overflows = [
+        {
+            "count": int(match.group(1)),
+            "text": match.group(0),
+            "source": "narrative_text",
+        }
+        for match in re.finditer(
+            r"(\d+)\s*条[^，。；：:\n]{0,16}?(?:回答|答复)",
+            narrative_text,
+        )
+        if valid_answer_count_is_known and int(match.group(1)) > valid_answer_count
+    ]
+    analysis = storyline_analysis or {}
+    structured_count_groups = [
+        ("sample_profile", analysis.get("sample_profile") or {}),
+        ("blind_spot", analysis.get("blind_spot") or {}),
+    ]
+    bounded_count_fields = {
+        "answer_count",
+        "total_answer_count",
+        "association_answer_count",
+        "brand_mention_count",
+        "brand_named_answer_count",
+        "brand_named_brand_mention_count",
+        "open_answer_count",
+        "open_brand_mention_count",
+        "risk_context_count",
+    }
+    for group_name, group in structured_count_groups:
+        if not isinstance(group, dict):
+            continue
+        for field_name in bounded_count_fields:
+            value = group.get(field_name)
+            if (
+                valid_answer_count_is_known
+                and isinstance(value, (int, float))
+                and int(value) > valid_answer_count
+            ):
+                response_count_overflows.append(
+                    {
+                        "count": int(value),
+                        "text": field_name,
+                        "source": f"storyline_analysis.{group_name}.{field_name}",
+                    }
+                )
     expected_platforms = int(platform_source_summary.get("valid_platform_count") or 0)
     if not expected_platforms:
         expected_platforms = int(platform_source_summary.get("platform_count") or 0)
@@ -2377,6 +2593,23 @@ def _build_report_quality_checks(
             "question_count": len(source_questions),
             "minimum_platforms": minimum_platforms,
             "minimum_questions": minimum_questions,
+        },
+        {
+            "key": "evidence_reference_integrity",
+            "label": "证据引用完整性",
+            "passed": bool(available_evidence_refs) and not dangling_evidence_refs,
+            "referenced_count": len(referenced_evidence_refs),
+            "available_count": len(available_evidence_refs),
+            "dangling_count": len(dangling_evidence_refs),
+            "dangling_refs": dangling_evidence_refs[:20],
+        },
+        {
+            "key": "response_count_bounds",
+            "label": "回答数分母一致性",
+            "passed": not response_count_overflows,
+            "valid_answer_count": valid_answer_count,
+            "overflow_count": len(response_count_overflows),
+            "overflows": response_count_overflows[:20],
         },
         {
             "key": "section_evidence_binding",
@@ -2616,14 +2849,14 @@ def _build_report_markdown(
     lines.extend(["", "## 证据样本", ""])
     for evidence in evidence_samples[:8]:
         lines.append(
-            f"- **{evidence.get('node_term')} / {evidence.get('platform')}**："
+            f"- **{evidence.get('node_term')} / {_report_platform_label(evidence.get('platform'))}**："
             f"{evidence.get('question')} -> {evidence.get('answer_excerpt')}"
         )
     if source_appendix:
         lines.extend(["", "## 来源附录", ""])
         for item in source_appendix[:12]:
             lines.append(
-                f"- {item.get('evidence_id')} / {item.get('platform')} / "
+                f"- {item.get('evidence_id')} / {_report_platform_label(item.get('platform'))} / "
                 f"{item.get('node_term')}：{item.get('question')}"
             )
     lines.extend(["", "## 行动清单", ""])
@@ -3220,12 +3453,13 @@ def _strategy_graph_sentence(
     for node in nodes[:3]:
         distance = int(node.get("distance_score") or 0)
         evidence_count = int(
-            node.get("evidence_count") or node.get("answer_count") or 0
+            node.get("answer_count") or node.get("evidence_count") or 0
         )
         platform_count = int(node.get("platform_count") or 0)
         parts.append(
             f"{node.get('term')}位于{node.get('orbit_label') or node.get('orbit')}，"
-            f"距离值 {distance}，证据 {evidence_count} 条，覆盖 {platform_count} 个平台"
+            f"距离值 {distance}，{_node_count_phrase(node, count=evidence_count)}，"
+            f"覆盖 {platform_count} 个平台"
         )
     return "；".join(parts) + "。"
 
@@ -3251,8 +3485,8 @@ def _strategy_brand_meaning(row: dict[str, Any]) -> str:
             "health": "健康资产已经较清晰，下一步要沉淀科学依据、产品组合和人群场景",
         }.get(lane, "这个战略词已经具备放大基础，下一步要沉淀稳定表达")
         return (
-            f"{term}有 {supportive or answer_mentions} 条正向支撑，覆盖 {platform_count} 个平台。"
-            f"{focus}。"
+            f"{term}有 {_node_count_phrase(row, count=supportive or answer_mentions)}正向支撑，"
+            f"覆盖 {platform_count} 个平台。{focus}。"
         )
     if tier == "risk_first" or status == "risk":
         focus = {
@@ -3262,7 +3496,8 @@ def _strategy_brand_meaning(row: dict[str, Any]) -> str:
             "health": "风险多来自功效和信任问题，需要先补科学依据和适用边界",
         }.get(lane, "需要先处理质疑来源，再判断能否进入正向资产")
         return (
-            f"{term}被提及时伴随 {risk_like or answer_mentions} 条风险或竞品替代语境，"
+            f"{term}被提及时伴随"
+            f"{_node_count_phrase(row, count=risk_like or answer_mentions)}风险或竞品替代语境，"
             f"{focus}。"
         )
     if tier == "evidence_building" or status == "partial":
@@ -3273,8 +3508,9 @@ def _strategy_brand_meaning(row: dict[str, Any]) -> str:
             "health": "健康词需要更多具体方案、产品组合和长期管理证据",
         }.get(lane, "这个词已有入口，但仍需补问题和证据")
         return (
-            f"{term}已有 {answer_mentions} 条回答线索，"
-            f"其中质疑或风险语境 {skeptical + risk_like} 条；{focus}。"
+            f"{term}已有 {_node_count_phrase(row, count=answer_mentions)}线索，"
+            f"其中质疑或风险语境"
+            f"{_node_count_phrase(row, count=skeptical + risk_like)}；{focus}。"
         )
     return f"{term}在本轮回答里的可用证据不足，下一轮先补题和补品牌锚定证据。"
 
@@ -3643,7 +3879,7 @@ def _combined_pillar_source_quote_lines(
         for sample in pillar.get("source_samples", []):
             if not isinstance(sample, dict):
                 continue
-            platform = _clean_text(sample.get("platform")) or "未知平台"
+            platform = _report_platform_label(sample.get("platform"))
             question = _clean_text(sample.get("question"))
             excerpt = _clean_text(
                 sample.get("answer_excerpt") or sample.get("center_context_excerpt")
@@ -3717,14 +3953,61 @@ def _storyline_refs(
 
 def _pillar_fact_line(pillar: dict[str, Any]) -> str:
     label = _clean_text(pillar.get("label")) or "四有维度"
-    answer_count = int(pillar.get("answer_mention_count") or 0)
     platform_count = int(pillar.get("platform_count") or 0)
     status = _clean_text(pillar.get("status_label")) or "待观察"
     terms = _story_terms(pillar, "node_terms", "暂无稳定节点")
     return (
-        f"{label}：{status}；回答提及 {answer_count} 条，"
+        f"{label}：{status}；{_pillar_count_phrase(pillar)}，"
         f"覆盖 {platform_count} 个平台；代表节点为{terms}。"
     )
+
+
+def _pillar_count_phrase(pillar: dict[str, Any]) -> str:
+    count = int(pillar.get("answer_mention_count") or 0)
+    if pillar.get("answer_count_is_exact") is True:
+        return f"关联 {count} 条去重回答"
+    if _clean_text(pillar.get("count_semantics")) == "known_answer_refs_lower_bound":
+        return f"至少关联 {count} 条可确认回答"
+    return f"累计 {count} 次节点提及（跨词可重复）"
+
+
+def _node_count_semantics(node: dict[str, Any]) -> str:
+    semantics = _clean_text(node.get("count_semantics"))
+    if node.get("answer_count_is_exact") is True:
+        return "distinct_answer_refs"
+    if node.get("answer_count_is_exact") is False:
+        return (
+            "known_answer_refs_lower_bound"
+            if semantics == "known_answer_refs_lower_bound"
+            else "legacy_summed_mentions"
+        )
+    if semantics in {
+        "distinct_answer_refs",
+        "known_answer_refs_lower_bound",
+        "legacy_summed_mentions",
+    }:
+        return semantics
+    if isinstance(node.get("answer_refs"), list):
+        return "distinct_answer_refs"
+    return "legacy_summed_mentions"
+
+
+def _node_count_phrase(
+    node: dict[str, Any],
+    *,
+    count: int | None = None,
+) -> str:
+    resolved_count = int(
+        count
+        if count is not None
+        else node.get("answer_count") or node.get("evidence_count") or 0
+    )
+    semantics = _node_count_semantics(node)
+    if semantics == "distinct_answer_refs":
+        return f"{resolved_count} 条回答"
+    if semantics == "known_answer_refs_lower_bound":
+        return f"至少 {resolved_count} 条可确认回答"
+    return f"{resolved_count} 次节点提及"
 
 
 def _report_mentions_any(text: str, terms: tuple[str, ...] | list[str]) -> bool:
@@ -3774,6 +4057,7 @@ def _build_story_answer_records(
                 "question": observation.question,
                 "platform": observation.platform,
                 "text": observation.answer_text,
+                "answer_identity_exact": True,
                 "question_has_center": _report_mentions_any(
                     observation.question,
                     center_aliases,
@@ -3800,18 +4084,26 @@ def _build_story_answer_records_from_source_appendix(
 ) -> list[dict[str, Any]]:
     center_aliases = _report_center_terms(center_terms)
     records: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, ...]] = set()
     for item in source_appendix:
         if not isinstance(item, dict):
             continue
-        platform = _clean_text(item.get("platform"))
+        platform = _normalize_platform(item.get("platform"))
         question = _clean_text(item.get("question"))
         text = _clean_text(
             item.get("answer_excerpt") or item.get("answer_text") or item.get("excerpt")
         )
         if not (platform and question and text):
             continue
-        key = (platform, question, text)
+        answer_id = _clean_text(item.get("answer_id"))
+        evidence_id = _clean_text(item.get("evidence_id"))
+        run_key = evidence_id.split(":", 1)[0] if ":" in evidence_id else ""
+        question_key = _clean_text(item.get("question_id")) or question
+        key = (
+            ("answer_id", answer_id)
+            if answer_id
+            else ("legacy_observation", run_key, platform, question_key)
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -3822,6 +4114,9 @@ def _build_story_answer_records_from_source_appendix(
                 "question": question,
                 "platform": platform,
                 "text": text,
+                "answer_id": answer_id,
+                "evidence_id": evidence_id,
+                "answer_identity_exact": bool(answer_id),
                 "question_has_center": _report_mentions_any(
                     question,
                     center_aliases,
@@ -3846,7 +4141,9 @@ def _build_story_sample_profile(
     records: list[dict[str, Any]],
     sample_scope: dict[str, Any],
 ) -> dict[str, Any]:
-    answer_count = len(records) or int(sample_scope.get("valid_answer_count") or 0)
+    total_answer_count = int(sample_scope.get("valid_answer_count") or 0) or len(
+        records
+    )
     platform_counts = Counter(
         _clean_text(record.get("platform"))
         for record in records
@@ -3862,8 +4159,21 @@ def _build_story_sample_profile(
         record for record in records if not record.get("question_has_center")
     ]
     brand_mentions = [record for record in records if record.get("answer_has_center")]
+    association_question_ids = {
+        _clean_text(record.get("question_id") or record.get("question"))
+        for record in brand_mentions
+        if _clean_text(record.get("question_id") or record.get("question"))
+    }
+    association_platforms = {
+        _clean_text(record.get("platform"))
+        for record in brand_mentions
+        if _clean_text(record.get("platform"))
+    }
     open_mentions = [
         record for record in open_records if record.get("answer_has_center")
+    ]
+    brand_named_mentions = [
+        record for record in brand_named if record.get("answer_has_center")
     ]
     risk_records = [
         record
@@ -3871,20 +4181,27 @@ def _build_story_sample_profile(
         if record.get("answer_has_center") and record.get("has_negative_risk_context")
     ]
     return {
-        "answer_count": answer_count,
-        "question_count": len(question_ids)
-        or int(sample_scope.get("question_count") or 0),
-        "platform_count": len(platform_counts)
-        or int(sample_scope.get("platform_count") or 0),
+        "answer_count": total_answer_count,
+        "total_answer_count": total_answer_count,
+        "question_count": int(sample_scope.get("question_count") or 0)
+        or len(question_ids),
+        "platform_count": int(sample_scope.get("platform_count") or 0)
+        or len(platform_counts),
         "platform_distribution": [
             {"platform": platform, "count": count}
             for platform, count in platform_counts.most_common()
         ],
         "brand_mention_count": len(brand_mentions),
+        "association_answer_count": len(brand_mentions),
+        "association_question_count": len(association_question_ids),
+        "association_platform_count": len(association_platforms),
+        "association_answer_count_is_exact": bool(records)
+        and all(record.get("answer_identity_exact") for record in records),
         "brand_mention_rate": (
             round(len(brand_mentions) / len(records), 4) if records else 0.0
         ),
         "brand_named_answer_count": len(brand_named),
+        "brand_named_brand_mention_count": len(brand_named_mentions),
         "open_answer_count": len(open_records),
         "open_brand_mention_count": len(open_mentions),
         "active_mention_rate": (
@@ -3902,15 +4219,27 @@ def _story_entity_ranking(
 ) -> list[dict[str, Any]]:
     rows = [
         {
+            "node_id": _clean_text(node.get("node_id")),
+            "entity_id": _clean_text(
+                node.get("lexicon_entity_id") or node.get("entity_id")
+            ),
             "term": _clean_text(node.get("term")),
             "business_tag": _clean_text(node.get("business_tag")),
             "orbit_label": _clean_text(node.get("orbit_label")),
             "answer_count": int(node.get("answer_count") or 0),
+            "answer_count_is_exact": _node_count_semantics(node)
+            == "distinct_answer_refs",
+            "count_semantics": _node_count_semantics(node),
             "platform_count": int(node.get("platform_count") or 0),
             "gravity_score": int(
                 node.get("gravity_score") or node.get("association_score") or 0
             ),
             "risk_context_count": int(node.get("risk_evidence_count") or 0),
+            "evidence_refs": [
+                _clean_text(ref)
+                for ref in node.get("evidence_refs") or []
+                if _clean_text(ref)
+            ],
         }
         for node in nodes
         if _clean_text(node.get("term"))
@@ -3929,6 +4258,7 @@ def _story_entity_ranking(
 def _story_platform_profiles(
     *,
     records: list[dict[str, Any]],
+    all_records: list[dict[str, Any]],
     platform_source_summary: dict[str, Any],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -3948,11 +4278,21 @@ def _story_platform_profiles(
                 for record in platform_records
                 if record.get("has_negative_risk_context")
             )
-            active_mentions = sum(
-                1
-                for record in platform_records
-                if not record.get("question_has_center")
-                and record.get("answer_has_center")
+            open_platform_records = [
+                record
+                for record in all_records
+                if _clean_text(record.get("platform")) == platform
+                and not record.get("question_has_center")
+            ]
+            open_answer_count = len(open_platform_records)
+            active_mentions = (
+                sum(
+                    1
+                    for record in open_platform_records
+                    if record.get("answer_has_center")
+                )
+                if open_answer_count
+                else None
             )
             transformation_count = sum(
                 1
@@ -3985,9 +4325,29 @@ def _story_platform_profiles(
                 {
                     "platform": platform,
                     "answer_count": len(platform_records),
+                    "answer_count_is_exact": all(
+                        record.get("answer_identity_exact")
+                        for record in platform_records
+                    ),
                     "risk_context_count": risk_count,
                     "active_mentions": active_mentions,
+                    "open_answer_count": open_answer_count,
                     "transformation_mentions": transformation_count,
+                    "question_ids": list(
+                        dict.fromkeys(
+                            _clean_text(record.get("question_id"))
+                            for record in platform_records
+                            if _clean_text(record.get("question_id"))
+                        )
+                    ),
+                    "evidence_refs": list(
+                        dict.fromkeys(
+                            _clean_text(ref)
+                            for record in platform_records
+                            for ref in record.get("evidence_refs") or []
+                            if _clean_text(ref)
+                        )
+                    ),
                     "profile": profile,
                     "quote": {
                         "platform": platform,
@@ -4006,9 +4366,13 @@ def _story_platform_profiles(
             {
                 "platform": _clean_text(row.get("platform")),
                 "answer_count": int(row.get("valid_answer_count") or 0),
-                "risk_context_count": len(row.get("risk_nodes") or []),
-                "active_mentions": 0,
-                "transformation_mentions": len(row.get("preferred_nodes") or []),
+                "answer_count_is_exact": True,
+                "risk_context_count": None,
+                "active_mentions": None,
+                "open_answer_count": None,
+                "transformation_mentions": None,
+                "question_ids": [],
+                "evidence_refs": [],
                 "profile": _clean_text(row.get("answer_preference"))
                 or "样本口吻待继续观察",
                 "quote": None,
@@ -4023,18 +4387,43 @@ def _story_blind_spot(
     records: list[dict[str, Any]],
     sample_profile: dict[str, Any],
 ) -> dict[str, Any]:
-    active_rate = float(sample_profile.get("active_mention_rate") or 0)
-    if active_rate < 0.05:
+    open_answer_count = int(sample_profile.get("open_answer_count") or 0)
+    active_rate = (
+        float(sample_profile.get("active_mention_rate") or 0)
+        if open_answer_count > 0
+        else None
+    )
+    if active_rate is None:
+        diagnosis = "本轮无可计算的开放问题样本，主动提及率未评估。"
+    elif active_rate < 0.05:
         diagnosis = f"{center_term}尚未进入开放问题的默认推荐列表。"
     elif active_rate < 0.1:
         diagnosis = f"{center_term}只有少量开放场景会被平台主动带出。"
     else:
         diagnosis = f"{center_term}已经在部分开放场景里出现主动提及。"
+    open_examples = [
+        {
+            "question_id": _clean_text(record.get("question_id")),
+            "platform": _clean_text(record.get("platform")),
+            "question": _clean_text(record.get("question")),
+            "excerpt": _preserve_answer_text(record.get("text")) or "",
+            "answer_has_center": bool(record.get("answer_has_center")),
+            "evidence_id": _clean_text(record.get("evidence_id")),
+            "evidence_refs": [
+                _clean_text(ref)
+                for ref in record.get("evidence_refs") or []
+                if _clean_text(ref)
+            ],
+        }
+        for record in records
+        if not record.get("question_has_center")
+    ]
     missed_examples = [
         {
             "platform": _clean_text(record.get("platform")),
             "question": _clean_text(record.get("question")),
             "excerpt": _preserve_answer_text(record.get("text")) or "",
+            "evidence_id": _clean_text(record.get("evidence_id")),
         }
         for record in records
         if not record.get("question_has_center") and not record.get("answer_has_center")
@@ -4042,12 +4431,30 @@ def _story_blind_spot(
     return {
         "diagnosis": diagnosis,
         "active_mention_rate": active_rate,
-        "open_answer_count": int(sample_profile.get("open_answer_count") or 0),
+        "open_answer_count": open_answer_count,
         "open_brand_mention_count": int(
             sample_profile.get("open_brand_mention_count") or 0
         ),
         "brand_named_answer_count": int(
             sample_profile.get("brand_named_answer_count") or 0
+        ),
+        "brand_named_brand_mention_count": int(
+            sample_profile.get("brand_named_brand_mention_count") or 0
+        ),
+        "answer_count_is_exact": bool(
+            sample_profile.get("association_answer_count_is_exact")
+        ),
+        "open_examples": open_examples[:3],
+        "evidence_refs": list(
+            dict.fromkeys(
+                _clean_text(ref)
+                for item in open_examples
+                for ref in [
+                    *(item.get("evidence_refs") or []),
+                    item.get("evidence_id"),
+                ]
+                if _clean_text(ref)
+            )
         ),
         "missed_examples": missed_examples,
     }
@@ -4072,16 +4479,44 @@ def _build_storyline_report_analysis(
             source_appendix=source_appendix,
             center_terms=center_terms,
         )
+    appendix_refs_by_answer: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for item in source_appendix or []:
+        if not isinstance(item, dict):
+            continue
+        question_key = _clean_text(item.get("question_id") or item.get("question"))
+        platform_key = _normalize_platform(item.get("platform")).lower()
+        evidence_id = _clean_text(item.get("evidence_id"))
+        if question_key and platform_key and evidence_id:
+            appendix_refs_by_answer[(question_key, platform_key)].append(evidence_id)
+    for record in records:
+        question_key = _clean_text(record.get("question_id") or record.get("question"))
+        platform_key = _normalize_platform(record.get("platform")).lower()
+        record_refs = list(
+            dict.fromkeys(appendix_refs_by_answer.get((question_key, platform_key), []))
+        )
+        if record_refs:
+            record["evidence_refs"] = record_refs
+            record["evidence_id"] = record_refs[0]
     sample_profile = _build_story_sample_profile(
         records=records,
         sample_scope=sample_scope,
     )
+    association_records = [
+        record for record in records if record.get("answer_has_center")
+    ]
     return {
         "records": records,
+        "association_records": association_records,
+        "evidence_refs": [
+            _clean_text(item.get("evidence_id"))
+            for item in (source_appendix or [])
+            if isinstance(item, dict) and _clean_text(item.get("evidence_id"))
+        ],
         "sample_profile": sample_profile,
         "entity_ranking": _story_entity_ranking(nodes),
         "platform_profiles": _story_platform_profiles(
-            records=records,
+            records=association_records,
+            all_records=records,
             platform_source_summary=platform_source_summary,
         ),
         "blind_spot": _story_blind_spot(
@@ -4099,7 +4534,7 @@ def _story_platform_distribution_line(sample_profile: dict[str, Any]) -> str:
     return (
         "平台分布："
         + "、".join(
-            f"{row.get('platform')} {row.get('count')}"
+            f"{_report_platform_label(row.get('platform'))} {row.get('count')}"
             for row in rows[:4]
             if row.get("platform")
         )
@@ -4109,7 +4544,7 @@ def _story_platform_distribution_line(sample_profile: dict[str, Any]) -> str:
 
 def _story_entity_line(rows: list[dict[str, Any]], *, limit: int = 5) -> str:
     values = [
-        f"{row.get('term')}（{row.get('answer_count')}条）"
+        f"{row.get('term')}（{_node_count_phrase(row)}）"
         for row in rows[:limit]
         if row.get("term")
     ]
@@ -4134,7 +4569,7 @@ def _story_quote_lines_from_samples(
     for sample in samples:
         if not isinstance(sample, dict):
             continue
-        platform = _clean_text(sample.get("platform")) or "未知平台"
+        platform = _report_platform_label(sample.get("platform"))
         question = _clean_text(sample.get("question"))
         q = question[:40]
         plat = _normalize_platform(sample.get("platform"))
@@ -4169,7 +4604,9 @@ def _story_quote_lines_from_profiles(
         quote = profile.get("quote")
         if not isinstance(quote, dict):
             continue
-        platform = _clean_text(quote.get("platform") or profile.get("platform"))
+        platform = _report_platform_label(
+            quote.get("platform") or profile.get("platform")
+        )
         question = _clean_text(quote.get("question"))
         excerpt = _preserve_answer_text(quote.get("excerpt"))
         if not excerpt:
@@ -4183,8 +4620,13 @@ def _story_quote_lines_from_profiles(
 
 def _story_gap_label(pillar_key: str, pillar: dict[str, Any]) -> str:
     status = _clean_text(pillar.get("status"))
+    answer_count = int(pillar.get("answer_mention_count") or 0)
+    if status in {"strong", "validated", "stable", "fully_caught"}:
+        return "已形成稳定承接"
+    if answer_count <= 0 and status in {"", "missing", "under_evidenced"}:
+        return "叙事缺位"
     if pillar_key == "have_health":
-        return "叙事层级差距"
+        return "叙事层级差距" if answer_count else "健康方案证据不足"
     if pillar_key == "have_companionship":
         return (
             "叙事被劫持"
@@ -4192,7 +4634,11 @@ def _story_gap_label(pillar_key: str, pillar: dict[str, Any]) -> str:
             else "弱信号待确认"
         )
     if pillar_key == "have_security":
-        return "叙事被反转"
+        return (
+            "叙事被反转"
+            if pillar.get("risk_terms") or "risk" in status or "obscured" in status
+            else "弱信号待确认"
+        )
     if pillar_key == "have_value":
         return (
             "叙事缺位"
@@ -4207,11 +4653,10 @@ def _story_pillar_line(pillar: dict[str, Any], key: str) -> str:
     status = _clean_text(pillar.get("status_label")) or "待观察"
     gap = _story_gap_label(key, pillar)
     terms = _story_terms(pillar, "node_terms", "代表节点待补")
-    answer_count = int(pillar.get("answer_mention_count") or 0)
     platform_count = int(pillar.get("platform_count") or 0)
     return (
         f"{label}：{status}；差距类型为{gap}；"
-        f"相关回答 {answer_count} 条，覆盖 {platform_count} 个平台；代表节点为{terms}。"
+        f"{_pillar_count_phrase(pillar)}，覆盖 {platform_count} 个平台；代表节点为{terms}。"
     )
 
 
@@ -4221,6 +4666,15 @@ def _story_metric_phrase(value: int, total: int) -> str:
     if value > total:
         return f"累计命中 {value} 次，样本回答 {total} 条"
     return f"{value} 条，占 {round(value / total * 100, 1)}%"
+
+
+def _story_pillar_metric_phrase(pillar: dict[str, Any], total: int) -> str:
+    value = int(pillar.get("answer_mention_count") or 0)
+    if pillar.get("answer_count_is_exact") is True:
+        return _story_metric_phrase(value, total)
+    if _clean_text(pillar.get("count_semantics")) == "known_answer_refs_lower_bound":
+        return f"至少 {value} 条可确认回答；完整去重数待补"
+    return f"累计命中 {value} 次节点提及；{total} 条样本回答内可跨词重复"
 
 
 def _strip_report_sentence_end(text: str) -> str:
@@ -4264,7 +4718,14 @@ def _story_entities_by_tag(
 
 
 def _story_platform_persona(profile: dict[str, Any]) -> str:
+    if any(
+        profile.get(key) is None
+        for key in ("risk_context_count", "transformation_mentions")
+    ):
+        return _clean_text(profile.get("profile")) or "样本口吻待继续观察"
     answer_count = int(profile.get("answer_count") or 0)
+    if answer_count < 3:
+        return "样本待补"
     risk_count = int(profile.get("risk_context_count") or 0)
     active_mentions = int(profile.get("active_mentions") or 0)
     transformation_mentions = int(profile.get("transformation_mentions") or 0)
@@ -4281,7 +4742,14 @@ def _story_platform_persona(profile: dict[str, Any]) -> str:
 
 
 def _story_platform_persona_description(profile: dict[str, Any]) -> str:
+    if any(
+        profile.get(key) is None
+        for key in ("risk_context_count", "transformation_mentions")
+    ):
+        return "当前产物未保存可计算的风险与转型分母。"
     answer_count = int(profile.get("answer_count") or 0)
+    if answer_count < 3:
+        return "品牌关联样本不足 3 条，仅展示原文，不判断稳定口吻。"
     risk_count = int(profile.get("risk_context_count") or 0)
     active_mentions = int(profile.get("active_mentions") or 0)
     transformation_mentions = int(profile.get("transformation_mentions") or 0)
@@ -4298,18 +4766,45 @@ def _story_platform_persona_description(profile: dict[str, Any]) -> str:
 
 
 def _story_platform_sentence(profile: dict[str, Any]) -> str:
-    platform = _clean_text(profile.get("platform")) or "未知平台"
+    platform = _report_platform_label(profile.get("platform"))
     persona = _story_platform_persona(profile)
     desc = _story_platform_persona_description(profile)
     answer_count = int(profile.get("answer_count") or 0)
-    risk_count = int(profile.get("risk_context_count") or 0)
-    active_mentions = int(profile.get("active_mentions") or 0)
-    transformation_mentions = int(profile.get("transformation_mentions") or 0)
+    risk_value = profile.get("risk_context_count")
+    active_value = profile.get("active_mentions")
+    transformation_value = profile.get("transformation_mentions")
+    risk_text = str(int(risk_value or 0)) if risk_value is not None else "未评估"
+    active_text = str(int(active_value or 0)) if active_value is not None else "未评估"
+    transformation_text = (
+        str(int(transformation_value or 0))
+        if transformation_value is not None
+        else "未评估"
+    )
     return (
         f"{platform}｜{persona}。{desc}"
-        f"（回答 {answer_count} 条，风险语境 {risk_count} 条，"
-        f"转型叙事 {transformation_mentions} 条，主动带出品牌 {active_mentions} 条）"
+        f"（品牌关联原文片段 {answer_count} 条，"
+        f"风险语境 {risk_text}{' 条' if risk_value is not None else ''}，"
+        f"转型叙事 {transformation_text}{' 条' if transformation_value is not None else ''}，"
+        f"主动带出品牌 {active_text}{' 条' if active_value is not None else ''}）"
     )
+
+
+def _report_platform_label(value: Any) -> str:
+    normalized = _normalize_platform(value)
+    return {
+        "deepseek": "DeepSeek",
+        "kimi": "Kimi",
+        "doubao": "豆包",
+        "豆包": "豆包",
+        "yuanbao": "元宝",
+        "元宝": "元宝",
+        "腾讯元宝": "元宝",
+        "tencent yuanbao": "元宝",
+        "tencent_yuanbao": "元宝",
+        "hunyuan": "腾讯混元",
+        "腾讯混元": "腾讯混元",
+        "chatgpt": "ChatGPT",
+    }.get(normalized.lower(), _clean_text(value) or "未知平台")
 
 
 def _story_clean_action_lines(
@@ -4366,18 +4861,50 @@ def _build_storyline_report_sections(
         if isinstance(item, dict)
     ]
     valid_answers = int(
-        sample_profile.get("answer_count")
-        or sample_scope.get("valid_answer_count")
+        sample_scope.get("valid_answer_count")
+        or sample_profile.get("answer_count")
         or 0
     )
     question_count = int(
-        sample_profile.get("question_count") or sample_scope.get("question_count") or 0
+        sample_scope.get("question_count") or sample_profile.get("question_count") or 0
+    )
+    linked_answer_count = int(sample_profile.get("association_answer_count") or 0)
+    linked_question_count = int(sample_profile.get("association_question_count") or 0)
+    linked_answer_count_is_exact = bool(
+        sample_profile.get("association_answer_count_is_exact")
     )
     platform_count = int(
         sample_profile.get("platform_count") or sample_scope.get("platform_count") or 0
     )
-    active_rate = float(blind_spot.get("active_mention_rate") or 0)
+    open_answer_count = int(blind_spot.get("open_answer_count") or 0)
+    active_rate = (
+        float(blind_spot.get("active_mention_rate") or 0)
+        if open_answer_count > 0
+        else None
+    )
+    active_rate_text = (
+        f"{round(active_rate * 100, 1)}%（分母：{open_answer_count} "
+        f"{'条开放问题回答' if linked_answer_count_is_exact else '个开放问题原文片段'}）"
+        if active_rate is not None
+        else "未评估（分母：0）"
+    )
     risk_rate = float(sample_profile.get("risk_context_rate") or 0)
+    risk_rate_text = (
+        f"{round(risk_rate * 100, 1)}%（分母：{linked_answer_count} "
+        f"{'条品牌关联回答' if linked_answer_count_is_exact else '个品牌关联原文片段'}）"
+        if linked_answer_count
+        else "未评估（分母：0）"
+    )
+    linked_sample_claim = (
+        f"其中进入品牌关联判断：{linked_question_count} 个问题，{linked_answer_count} 条回答。"
+        if linked_answer_count_is_exact
+        else f"其中可核验品牌关联原文片段：{linked_question_count} 个问题，{linked_answer_count} 个片段。"
+    )
+    linked_sample_sentence = (
+        f"其中 {linked_question_count} 个问题、{linked_answer_count} 条回答进入品牌关联判断。"
+        if linked_answer_count_is_exact
+        else f"其中 {linked_question_count} 个问题形成 {linked_answer_count} 个可核验品牌关联原文片段。"
+    )
     asset_rows = _story_entities_by_tag(
         entity_ranking,
         exclude_tags=("风险认知", "竞争关系"),
@@ -4419,86 +4946,303 @@ def _build_storyline_report_sections(
         if profile.get("platform")
     ]
     entity_fact_lines = [
-        f"{row.get('term')}：提及 {row.get('answer_count')} 条，覆盖 {row.get('platform_count')} 个平台，图谱位置为{row.get('orbit_label') or row.get('business_tag')}。"
+        f"{row.get('term')}：{_node_count_phrase(row)}，覆盖 {row.get('platform_count')} 个平台，图谱位置为{row.get('orbit_label') or row.get('business_tag')}。"
         for row in (asset_rows or entity_ranking)[:5]
         if row.get("term")
     ]
     blind_examples = [
-        f"{item.get('platform')}｜{item.get('question')}｜回答未主动提及{center_term}"
-        for item in blind_spot.get("missed_examples") or []
+        (
+            f"{_report_platform_label(item.get('platform'))}｜{item.get('question')}｜"
+            + (
+                f"回答主动提及{center_term}"
+                if item.get("answer_has_center")
+                else f"回答未主动提及{center_term}"
+            )
+        )
+        for item in blind_spot.get("open_examples") or []
         if item.get("question")
     ]
-    health_count = int(health.get("answer_mention_count") or 0)
-    companionship_count = int(companionship.get("answer_mention_count") or 0)
-    security_count = int(security.get("answer_mention_count") or 0)
-    value_count = int(value.get("answer_mention_count") or 0)
     health_gap = _story_gap_label("have_health", health)
     companionship_gap = _story_gap_label("have_companionship", companionship)
     security_gap = _story_gap_label("have_security", security)
     value_gap = _story_gap_label("have_value", value)
+    pillar_rows = [health, companionship, security, value]
+    pillar_status_summary = "；".join(
+        f"{_clean_text(pillar.get('label')) or '四有维度'}："
+        f"{_clean_text(pillar.get('status_label')) or '待观察'}"
+        for pillar in pillar_rows
+    )
+    pillar_takeaway = f"四有当前呈现为：{pillar_status_summary}。"
+    pillar_paragraphs = [
+        (
+            f"**{_clean_text(pillar.get('label')) or '四有维度'} — "
+            f"{_clean_text(pillar.get('status_label')) or '待观察'}**。"
+            f"本周期{_pillar_count_phrase(pillar)}，"
+            f"覆盖 {int(pillar.get('platform_count') or 0)} 个平台；"
+            f"代表节点为{_story_terms(pillar, 'node_terms', '待补充')}；"
+            f"差距判断为{_story_gap_label(key, pillar)}。"
+        )
+        for key, pillar in zip(
+            ("have_health", "have_companionship", "have_security", "have_value"),
+            pillar_rows,
+        )
+    ]
+    visibility_diagnosis = _clean_text(blind_spot.get("diagnosis")) or (
+        "本轮无可计算的开放问题样本，主动提及率未评估。"
+        if active_rate is None
+        else f"开放问题主动提及率为 {active_rate_text}。"
+    )
+    low_visibility = active_rate is not None and active_rate < 0.1
     platform_focus = _join_report_terms(
         [
-            profile.get("platform")
+            _report_platform_label(profile.get("platform"))
             for profile in platform_profiles[:4]
             if profile.get("platform")
         ],
         "平台样本待补",
     )
+    valid_platform_names = [
+        _report_platform_label(name)
+        for name in platform_source_summary.get("platform_names") or []
+        if _clean_text(name)
+    ] or [
+        _report_platform_label(profile.get("platform"))
+        for profile in platform_profiles
+        if _clean_text(profile.get("platform"))
+    ]
+    if len(valid_platform_names) > 1:
+        platform_story = f"{_join_report_terms(valid_platform_names, '有效平台')}呈现不同的品牌叙述。"
+    elif valid_platform_names:
+        platform_story = (
+            f"本轮仅{valid_platform_names[0]}有有效品牌关联样本，暂不能判断跨平台差异。"
+        )
+    else:
+        platform_story = "本轮没有有效品牌关联平台样本，暂不能判断平台差异。"
     risk_terms_text = _join_report_terms(risk_terms, "风险语境待继续确认")
+    pillar_refs = list(
+        dict.fromkeys(
+            ref for pillar in pillar_rows for ref in _storyline_refs(pillar, {}) if ref
+        )
+    )
+    risk_refs = list(
+        dict.fromkeys(
+            _clean_text(ref)
+            for node in [
+                *(risk_summary.get("risk_nodes") or []),
+                *(risk_summary.get("competition_nodes") or []),
+            ]
+            if isinstance(node, dict)
+            for ref in node.get("evidence_refs") or []
+            if _clean_text(ref)
+        )
+    )
+    action_refs = list(
+        dict.fromkeys(
+            _clean_text(ref)
+            for action in association_actions
+            if isinstance(action, dict)
+            for ref in action.get("evidence_refs") or []
+            if _clean_text(ref)
+        )
+    )
+    asset_refs = list(
+        dict.fromkeys(
+            _clean_text(ref)
+            for row in asset_rows
+            for ref in row.get("evidence_refs") or []
+            if _clean_text(ref)
+        )
+    )
+    asset_terms = [
+        _clean_text(row.get("term"))
+        for row in asset_rows
+        if _clean_text(row.get("term"))
+    ]
+    asset_entity_ids = [
+        _clean_text(row.get("entity_id"))
+        for row in asset_rows
+        if _clean_text(row.get("entity_id"))
+    ]
+    pillar_terms = list(
+        dict.fromkeys(
+            _clean_text(term)
+            for pillar in pillar_rows
+            for term in [
+                *(pillar.get("node_terms") or []),
+                *(pillar.get("risk_terms") or []),
+                *(pillar.get("strategy_terms") or []),
+            ]
+            if _clean_text(term)
+        )
+    )
+    risk_entity_ids = list(
+        dict.fromkeys(
+            _clean_text(node.get("lexicon_entity_id") or node.get("entity_id"))
+            for node in [
+                *(risk_summary.get("risk_nodes") or []),
+                *(risk_summary.get("competition_nodes") or []),
+            ]
+            if isinstance(node, dict)
+            and _clean_text(node.get("lexicon_entity_id") or node.get("entity_id"))
+        )
+    )
+    platform_refs = list(
+        dict.fromkeys(
+            _clean_text(ref)
+            for profile in platform_profiles[:4]
+            for ref in profile.get("evidence_refs") or []
+            if _clean_text(ref)
+        )
+    )
+    action_terms = list(
+        dict.fromkeys(
+            _clean_text(action.get("node_term"))
+            for action in association_actions
+            if isinstance(action, dict) and _clean_text(action.get("node_term"))
+        )
+    )
+    action_entity_ids = list(
+        dict.fromkeys(
+            _clean_text(action.get("lexicon_entity_id") or action.get("entity_id"))
+            for action in association_actions
+            if isinstance(action, dict)
+            and _clean_text(action.get("lexicon_entity_id") or action.get("entity_id"))
+        )
+    )
+    blind_refs = list(
+        dict.fromkeys(
+            _clean_text(ref)
+            for ref in blind_spot.get("evidence_refs") or []
+            if _clean_text(ref)
+        )
+    )
+    core_refs = list(dict.fromkeys([*asset_refs, *pillar_refs, *risk_refs]))
+    core_section_refs = core_refs[:24]
+    archive_section_refs = asset_refs[:24] or core_section_refs
+    pillar_section_refs = list(
+        dict.fromkeys(
+            [
+                *_storyline_refs(health, {}),
+                *_storyline_refs(companionship, {}),
+                *_storyline_refs(security, {}),
+                *_storyline_refs(value, {}),
+            ]
+        )
+    )
+    blind_section_refs = blind_refs[:24] if active_rate is not None else []
+    platform_section_refs = platform_refs[:24]
+    action_section_refs = action_refs[:24]
+    platform_question_ids = list(
+        dict.fromkeys(
+            _clean_text(question_id)
+            for profile in platform_profiles[:4]
+            for question_id in profile.get("question_ids") or []
+            if _clean_text(question_id)
+        )
+    )
+    blind_count_unit = (
+        "条回答" if linked_answer_count_is_exact else "个按平台与问题去重的原文观察"
+    )
     return [
         {
             "section_id": "core_verdict",
+            "evidence_contract_id": "core_verdict.v1",
+            "evidence_scope": {
+                "evidence_ids": core_section_refs,
+                "entity_ids": list(
+                    dict.fromkeys([*asset_entity_ids, *risk_entity_ids])
+                ),
+                "node_terms": list(
+                    dict.fromkeys([*asset_terms, *pillar_terms, *risk_terms])
+                ),
+            },
             "render_strategy_rows": False,
             "role": "executive_summary",
             "title": "核心判断",
             "reader_question": "这一轮 AI 到底怎样理解安利？",
             "takeaway": (
-                f"最致命发现：开放问题主动提及率只有 {round(active_rate * 100, 1)}%。"
-                f"{center_term}不会在健康、社群、退休这些话题里被自然联想到。"
-                f"{center_term}是一个被问才答的品牌，不是一个被主动推荐的品牌。"
+                f"{visibility_diagnosis} 主动提及率为 {active_rate_text}。"
+                if active_rate is not None
+                else "本轮无可计算的开放问题样本，主动提及率未评估，不据此判断品牌是否会被主动推荐。"
             ),
             "claims": [
                 f"样本：{question_count} 个问题，{valid_answers} 条有效回答，覆盖 {platform_count} 个平台。",
-                f"开放问题主动提及：{blind_spot.get('open_brand_mention_count', 0)} / {blind_spot.get('open_answer_count', 0)}。",
-                f"品牌相关回答中的风险语境占比约 {round(risk_rate * 100, 1)}%。",
-                "四种差距：有健康停在产品层；有陪伴高可见低可信；有保障被风险牵制；有价值仍在场外。",
+                linked_sample_claim,
+                (
+                    f"开放问题主动提及：{blind_spot.get('open_brand_mention_count', 0)} / {open_answer_count}。"
+                    if active_rate is not None
+                    else "开放问题主动提及：未评估（本轮无可计算样本）。"
+                ),
+                f"品牌相关回答中的风险语境占比：{risk_rate_text}。",
+                f"四有状态：{pillar_status_summary}。",
             ],
             "paragraphs": [
                 (
                     f"AI 对{center_term}的认知集中在三个层级。"
-                    f"这一判断来自 {question_count} 个问题、{valid_answers} 条有效回答、{platform_count} 个平台的抓取。"
+                    f"本轮共抓取 {question_count} 个问题、{valid_answers} 条有效回答、{platform_count} 个平台；"
+                    + linked_sample_sentence
                 ),
                 (
                     f"第一层，{center_term}＝{top_entities}。"
                     "AI 记住了安利的产品和品类，但还没进到长期健康管理方案和生活方式。"
                 ),
                 (
-                    f"第二层，{center_term}＝直销＋社群。"
-                    f"AI 知道安利有社群和事业机会，随后接上的高频风险词是{risk_terms_text}。"
+                    f"第二层，{center_term}的关系与模式联想。"
+                    + (
+                        f"当前与社群或事业机会一同出现的风险词是{risk_terms_text}。"
+                        if risk_terms
+                        else "本轮没有形成可验证的高频风险词。"
+                    )
                 ),
                 (
-                    f"第三层，{center_term}＝争议品牌。"
-                    f"品牌相关回答里，风险语境占比约 {round(risk_rate * 100, 1)}%，正向信息和风险提醒同时出现。"
+                    f"第三层，{center_term}的风险语境观察。"
+                    + (
+                        f"品牌相关回答里，风险语境占比为 {risk_rate_text}，正向信息和风险提醒同时出现。"
+                        if linked_answer_count >= 5 and risk_rate > 0
+                        else "当前品牌关联样本不足以形成强风险标签，只保留描述性观察。"
+                    )
                 ),
             ],
-            "so_what": "品牌团队先修正 AI 档案的第一层标签，再处理开放问题缺席和风险语境牵制。",
+            "so_what": (
+                "品牌团队先修正 AI 档案的第一层标签，再处理开放问题缺席和风险语境牵制。"
+                if low_visibility
+                else (
+                    "品牌团队持续验证已出现的开放场景入口，并观察四有状态是否稳定。"
+                    if active_rate is not None
+                    else "品牌团队先补齐开放问题样本，再判断是否存在主动提及缺口。"
+                )
+            ),
             "supporting_facts": [
                 _story_platform_distribution_line(sample_profile),
                 *entity_fact_lines[:2],
                 *platform_quotes[:1],
             ],
-            "evidence_refs": [],
-            "next_probe": "下一轮沿用同一题库，看开放问题主动提及率、风险语境占比和核心实体排行是否变化。",
+            "evidence_refs": core_section_refs,
+            "next_probe": (
+                "下一轮沿用同一题库，看开放问题主动提及率、风险语境占比和核心实体排行是否变化。"
+                if active_rate is not None
+                else "下一轮先补充开放问题样本，再评估主动提及率。"
+            ),
         },
         {
             "section_id": "ai_archive",
+            "evidence_contract_id": "ai_archive.v1",
+            "evidence_scope": {
+                "evidence_ids": archive_section_refs,
+                "entity_ids": list(
+                    dict.fromkeys([*asset_entity_ids, *risk_entity_ids])
+                ),
+                "node_terms": list(
+                    dict.fromkeys([*asset_terms, *pillar_terms, *risk_terms])
+                ),
+            },
             "render_strategy_rows": False,
             "role": "asset_finding",
             "title": f"{center_term}的 AI 档案里写了什么",
             "reader_question": "平台给安利贴上的默认标签是什么？",
             "takeaway": (
-                f"AI 记住了{center_term}卖什么，没记住{center_term}想成为什么。"
-                f"档案里是{top_entities}，不是健康方案和美好生活。"
+                f"AI 档案前排联想是{top_entities}。"
+                f"四有结构化状态为：{pillar_status_summary}。"
             ),
             "claims": platform_claims[:4] or [f"解析节点 {len(nodes)} 个。"],
             "paragraphs": [
@@ -4507,8 +5251,8 @@ def _build_storyline_report_sections(
                     f"这些词决定 AI 解释{center_term}时的第一反应。"
                 ),
                 (
-                    "健康资产已经有基础，但社群和事业机会经常跟模式、收入、风险一起出现。"
-                    "四有战略要先处理这张既有档案。"
+                    f"四有战略的结构化状态为：{pillar_status_summary}。"
+                    "品牌团队按已稳定、待补证和受风险牵制三类处理，而不预设某一维度必然成立或缺位。"
                 ),
                 (
                     f"{platform_focus}给出的口吻不同。"
@@ -4521,48 +5265,29 @@ def _build_storyline_report_sections(
                 *entity_fact_lines[:3],
                 *platform_quotes[:2],
             ],
-            "evidence_refs": [],
+            "evidence_refs": archive_section_refs,
             "next_probe": "下一轮看高频实体是否从产品和模式标签，转向方案、社群边界和认证证据。",
         },
         {
             "section_id": "value_pillars",
+            "evidence_contract_id": "value_pillars.v1",
+            "evidence_scope": {
+                "evidence_ids": pillar_section_refs,
+                "node_terms": pillar_terms,
+            },
             "render_strategy_rows": False,
             "role": "opportunity_finding",
             "title": "四个价值支柱，在 AI 叙事里是什么状态",
             "reader_question": "四有分别被接住、牵制、反转还是缺席？",
-            "takeaway": (
-                "四有里只有有健康进了 AI 档案，"
-                "有陪伴、有保障、有价值都还卡在档案外面。"
-            ),
+            "takeaway": (pillar_takeaway),
             "claims": [
-                f"有健康：差距类型为{health_gap}；{_story_metric_phrase(health_count, valid_answers)}；代表节点为{_story_terms(health, 'node_terms', '健康相关节点')}。",
-                f"有陪伴：差距类型为{companionship_gap}；{_story_metric_phrase(companionship_count, valid_answers)}；代表节点为{_story_terms(companionship, 'node_terms', '社群和关系线索')}。",
-                f"有保障：差距类型为{security_gap}；{_story_metric_phrase(security_count, valid_answers)}；风险入口为{_story_terms(security, 'risk_terms', risk_terms_text)}。",
-                f"有价值：差距类型为{value_gap}；{_story_metric_phrase(value_count, valid_answers)}；线索为{_story_terms(value, 'node_terms', '价值感线索')}。",
+                f"有健康：差距类型为{health_gap}；{_story_pillar_metric_phrase(health, valid_answers)}；代表节点为{_story_terms(health, 'node_terms', '健康相关节点')}。",
+                f"有陪伴：差距类型为{companionship_gap}；{_story_pillar_metric_phrase(companionship, valid_answers)}；代表节点为{_story_terms(companionship, 'node_terms', '社群和关系线索')}。",
+                f"有保障：差距类型为{security_gap}；{_story_pillar_metric_phrase(security, valid_answers)}；风险入口为{_story_terms(security, 'risk_terms', risk_terms_text)}。",
+                f"有价值：差距类型为{value_gap}；{_story_pillar_metric_phrase(value, valid_answers)}；线索为{_story_terms(value, 'node_terms', '价值感线索')}。",
             ],
-            "paragraphs": [
-                (
-                    f"**有健康 — 站稳了，但停在产品层**。"
-                    f"代表节点是{_story_terms(health, 'node_terms', '健康相关节点')}。"
-                    "平台说产品、成分、营养组合，没说长期健康管理方案、生活方式、持续服务。"
-                ),
-                (
-                    f"**有陪伴 — 高可见，低可信**。"
-                    f"出现了{_story_terms(companionship, 'node_terms', '社群和关系线索')}。"
-                    "平台认得出社群，看不到真实陪伴场景、参与边界、非销售案例。"
-                ),
-                (
-                    f"**有保障 — 被风险语境笼罩**。"
-                    f"被{_story_terms(security, 'risk_terms', '信任、合规和销售方式问题')}牵制。"
-                    "回答一进入销售方式、收入边界、合规提醒，保障感就展不开。"
-                ),
-                (
-                    f"**有价值 — 叙事缺位**。"
-                    f"目前依赖{_story_terms(value, 'node_terms', '人生再出发和价值感线索')}。"
-                    "要等保障感松动，再用真实人物故事和社会价值逐步建立。"
-                ),
-            ],
-            "so_what": "四有要按差距类型处理：升级健康叙事，外显陪伴场景，先修复保障，再铺价值。",
+            "paragraphs": pillar_paragraphs,
+            "so_what": "四有按结构化状态和证据覆盖逐项处理；已稳定的维持复测，薄弱或受风险牵制的优先补证。",
             "supporting_facts": [
                 *_dedupe_report_lines(
                     [
@@ -4573,30 +5298,46 @@ def _build_storyline_report_sections(
                     limit=5,
                 ),
             ],
-            "evidence_refs": [
-                *_storyline_refs(health, {}),
-                *_storyline_refs(companionship, {}),
-                *_storyline_refs(security, {}),
-                *_storyline_refs(value, {}),
-            ],
+            "evidence_refs": pillar_section_refs,
             "next_probe": "下一轮看有健康是否进入方案层，有陪伴是否减少销售旧认知伴随，有保障风险语境是否下降。",
         },
         {
             "section_id": "ai_blind_spot",
+            "evidence_contract_id": "ai_blind_spot.v1",
+            "evidence_scope": {
+                "evidence_ids": blind_section_refs,
+                "question_ids": list(
+                    dict.fromkeys(
+                        _clean_text(item.get("question_id"))
+                        for item in blind_spot.get("open_examples") or []
+                        if _clean_text(item.get("question_id"))
+                    )
+                ),
+            },
             "render_strategy_rows": False,
             "role": "risk_finding",
-            "title": f"{center_term}的 AI 盲区：不问就不说",
+            "evidence_binding_required": active_rate is not None,
+            "title": (
+                f"{center_term}的 AI 盲区：不问就不说"
+                if low_visibility
+                else (
+                    f"{center_term}的 AI 盲区与开放问题可见度"
+                    if active_rate is not None
+                    else f"{center_term}的开放问题样本：本轮未评估"
+                )
+            ),
             "reader_question": "不点名安利时，平台会主动想到它吗？",
             "takeaway": (
-                f"{center_term}在 AI 的默认推荐列表里不存在。"
-                f"用户不问{center_term}时，平台不会主动推荐。"
-                f"开放问题主动提及率只有 {round(active_rate * 100, 1)}%。"
+                f"{visibility_diagnosis} 主动提及率为 {active_rate_text}。"
+                if active_rate is not None
+                else "本轮无可计算的开放问题样本，主动提及率未评估。"
             ),
             "claims": [
-                f"含品牌名问题回答：{blind_spot.get('brand_named_answer_count', 0)} 条。",
-                f"开放问题回答：{blind_spot.get('open_answer_count', 0)} 条。",
-                f"开放问题主动提及：{blind_spot.get('open_brand_mention_count', 0)} 条。",
-                f"主动提及率：{round(active_rate * 100, 1)}%。",
+                f"含品牌名问题样本：{blind_spot.get('brand_named_answer_count', 0)} {blind_count_unit}。",
+                f"其中回答提到品牌：{blind_spot.get('brand_named_brand_mention_count', 0)} {blind_count_unit}。",
+                f"开放问题样本：{blind_spot.get('open_answer_count', 0)} {blind_count_unit}。",
+                f"开放问题主动提及：{blind_spot.get('open_brand_mention_count', 0)} {blind_count_unit}。",
+                f"主动提及率：{active_rate_text}。",
             ],
             "paragraphs": [
                 (
@@ -4605,30 +5346,68 @@ def _build_storyline_report_sections(
                     "才是更关键的可见度。"
                 ),
                 (
-                    f"本轮开放问题主动提及率 {round(active_rate * 100, 1)}%。"
-                    "这个数字长期偏低，品牌就会停在被点名才出现的状态。"
+                    (
+                        f"本轮开放问题主动提及率 {active_rate_text}。"
+                        + (
+                            "当前仍偏低，需要继续扩大自然联想入口。"
+                            if low_visibility
+                            else "当前已形成部分主动提及，应继续验证其场景稳定性。"
+                        )
+                    )
+                    if active_rate is not None
+                    else "本轮没有可计算的开放问题回答，不能判断品牌是否停在被点名才出现的状态。"
                 ),
                 (
-                    f"能带出{center_term}的入口通常来自已站稳的相关话题。"
-                    f"健康生活社群、长期健康管理、抗衰方案这类题，"
-                    f"是最值得观察的入口。"
+                    (
+                        f"能带出{center_term}的入口通常来自已站稳的相关话题。"
+                        f"健康生活社群、长期健康管理、抗衰方案这类题，"
+                        f"是最值得观察的入口。"
+                    )
+                    if active_rate is not None
+                    else "补充健康、社群和人生阶段的开放问题后，再识别可能带出品牌的入口。"
                 ),
             ],
-            "so_what": "盲区需要靠开放场景内容解决，把安利嵌进用户原本会问的健康、社群和人生阶段问题。",
-            "supporting_facts": blind_examples[:3]
-            or [
-                f"开放问题主动提及 {blind_spot.get('open_brand_mention_count', 0)} 条。"
-            ],
-            "evidence_refs": [],
-            "next_probe": "下一轮保留开放问题组，目标是主动提及率超过 10%，并记录触发提及的具体场景。",
+            "so_what": (
+                "盲区需要靠开放场景内容解决，把安利嵌进用户原本会问的健康、社群和人生阶段问题。"
+                if low_visibility
+                else (
+                    "保留开放问题组持续复测，确认主动提及来自稳定场景而非偶发样本。"
+                    if active_rate is not None
+                    else "先补充开放问题样本，再决定是否需要针对开放场景补内容。"
+                )
+            ),
+            "supporting_facts": (
+                blind_examples[:3]
+                or [
+                    f"开放问题主动提及 {blind_spot.get('open_brand_mention_count', 0)} 条。"
+                ]
+                if active_rate is not None
+                else ["本轮无可计算的开放问题样本。"]
+            ),
+            "evidence_refs": blind_section_refs,
+            "next_probe": (
+                "下一轮保留开放问题组，目标是主动提及率超过 10%，并记录触发提及的具体场景。"
+                if low_visibility
+                else (
+                    "下一轮沿用同一开放问题组，验证主动提及率和触发场景是否稳定。"
+                    if active_rate is not None
+                    else "下一轮先补充开放问题样本，再评估主动提及率。"
+                )
+            ),
         },
         {
             "section_id": "platform_difference",
+            "evidence_contract_id": "platform_difference.v1",
+            "evidence_scope": {
+                "evidence_ids": platform_section_refs,
+                "question_ids": platform_question_ids,
+                "platforms": valid_platform_names,
+            },
             "render_strategy_rows": False,
             "role": "asset_finding",
             "title": "平台差异",
             "reader_question": "哪个平台更容易给安利完整叙事，哪个平台风险更重？",
-            "takeaway": f"同一个{center_term}，三个平台讲三个版本的故事——谁讲转型，谁讲风险，谁讲数据。",
+            "takeaway": f"同一个{center_term}，{platform_story}",
             "claims": platform_claims[:4] or ["平台样本待补。"],
             "paragraphs": [
                 (
@@ -4642,7 +5421,7 @@ def _build_storyline_report_sections(
                     "还是把话题带回旧认知。"
                 ),
                 (
-                    f"本轮有效平台是{_join_report_terms(platform_source_summary.get('platform_names') or [], '平台样本待补')}。"
+                    f"本轮有效平台是{_join_report_terms(valid_platform_names, '平台样本待补')}。"
                     "平台组合固定后，平台缺口才不会被读成品牌变化。"
                 ),
             ],
@@ -4651,38 +5430,62 @@ def _build_storyline_report_sections(
                 *platform_claims[:2],
                 *platform_quotes[:2],
             ],
-            "evidence_refs": [],
+            "evidence_refs": platform_section_refs,
             "next_probe": "下一轮按平台比较风险语境、转型叙事和主动提及，判断哪类内容真正改变回答口吻。",
         },
         {
             "section_id": "data_to_action",
+            "evidence_contract_id": "data_to_action.v1",
+            "evidence_scope": {
+                "evidence_ids": action_section_refs,
+                "entity_ids": action_entity_ids,
+                "node_terms": action_terms,
+            },
             "render_strategy_rows": False,
             "role": "action_finding",
             "title": "从数据到行动",
             "reader_question": "品牌团队这周先做哪三件事？",
-            "takeaway": "先修档案，再开盲区，最后解死结——本周只做这三件事。",
+            "takeaway": (
+                "先修档案，再开盲区，最后解死结——本周只做这三件事。"
+                if active_rate is not None
+                else "先修已有档案与风险证据，并补齐开放问题样本后再判断盲区。"
+            ),
             "claims": [
                 '问题一：高可见度 ≠ 高认可度。健康、社群、抗衰被提及很多，但 AI 提到时总带"但是"。',
-                f"问题二：{center_term}不在 AI 的默认推荐列表里。开放问题主动提及率只有 {round(active_rate * 100, 1)}%。",
-                f"问题三：品牌故事被拆成碎片。三个平台讲三个版本的{center_term}。",
+                (
+                    f"问题二：{center_term}不在 AI 的默认推荐列表里。开放问题主动提及率只有 {active_rate_text}。"
+                    if active_rate is not None
+                    else "问题二：本轮无可计算的开放问题样本，主动提及率未评估。"
+                ),
+                f"问题三：品牌故事在不同平台可能被拆成碎片。{platform_story}",
             ],
             "paragraphs": [
                 "行动不按词逐项补材料。这周只按三个问题排优先级。",
                 *action_paragraphs[:3],
                 (
-                    "做完这三件事后，只看图谱有没有变：方案词有没有向内移，"
-                    "开放问题主动提及有没有上升，风险语境有没有下降。"
+                    (
+                        "做完这三件事后，只看图谱有没有变：方案词有没有向内移，"
+                        "开放问题主动提及有没有上升，风险语境有没有下降。"
+                    )
+                    if active_rate is not None
+                    else "补齐开放问题样本后，再建立主动提及率基线；本轮只观察图谱位置和风险语境。"
                 ),
             ],
             "so_what": "报告行动要压缩成少数可复测动作，并在图谱和原文里验证。",
             "supporting_facts": [
-                f"主动提及率 {round(active_rate * 100, 1)}%。",
-                f"风险语境占比 {round(risk_rate * 100, 1)}%。",
+                f"主动提及率 {active_rate_text}。",
+                f"风险语境占比 {risk_rate_text}。",
                 f"优先行动：{_join_report_terms(action_titles, '本周行动待补')}。",
-                f"风险节点 {risk_summary.get('risk_count', 0)} 个，竞品参照 {risk_summary.get('competition_count', 0)} 个。",
+                f"风险与竞争关系共 {risk_summary.get('risk_count', 0)} 个，"
+                f"其中风险认知 {len(risk_summary.get('risk_nodes') or [])} 个、"
+                f"竞品参照 {risk_summary.get('competition_count', 0)} 个。",
             ],
-            "evidence_refs": [],
-            "next_probe": "下一轮固定同一题库，新增三类年度抓手题，并比较图谱位置、主动提及率和风险语境。",
+            "evidence_refs": action_section_refs,
+            "next_probe": (
+                "下一轮固定同一题库，新增三类年度抓手题，并比较图谱位置、主动提及率和风险语境。"
+                if active_rate is not None
+                else "下一轮固定同一题库并补充开放问题样本，再比较图谱位置和风险语境。"
+            ),
         },
     ]
 
@@ -4742,15 +5545,18 @@ def _with_period_change_section(
         return sections
 
     changes = [
-        item
-        for item in period_view.get("change_top5") or []
-        if isinstance(item, dict)
+        item for item in period_view.get("change_top5") or [] if isinstance(item, dict)
     ][:5]
     current_period = (
         period_view.get("current_period")
         if isinstance(period_view.get("current_period"), dict)
         else {}
     )
+    if (
+        int(current_period.get("valid_answer_count") or 0) <= 0
+        or int(previous_period.get("valid_answer_count") or 0) <= 0
+    ):
+        return sections
     comparison_notice = _clean_text(period_view.get("comparison_notice"))
     change_lines = [
         _clean_text(item.get("explanation"))
@@ -4787,9 +5593,7 @@ def _with_period_change_section(
         ],
         "evidence_refs": list(
             dict.fromkeys(
-                ref
-                for item in changes
-                for ref in item.get("evidence_refs") or []
+                ref for item in changes for ref in item.get("evidence_refs") or []
             )
         ),
         "next_probe": "下一周期沿用可比问题口径，继续观察这些联想的提及比例与轨道位置。",
@@ -5203,13 +6007,29 @@ def _build_calibrated_report_narrative_sections(
 def _build_calibrated_report_markdown(
     *,
     title: str,
+    sample_scope: dict[str, Any],
+    sample_profile: dict[str, Any],
     narrative_sections: list[dict[str, Any]],
     strategy_validation: list[dict[str, Any]],
     nodes: list[dict[str, Any]],
     platform_source_summary: dict[str, Any],
     source_appendix: list[dict[str, Any]],
 ) -> str:
-    lines = [f"# {title}", ""]
+    total_questions = int(sample_scope.get("question_count") or 0)
+    total_answers = int(sample_scope.get("valid_answer_count") or 0)
+    total_platforms = int(sample_scope.get("platform_count") or 0)
+    association_questions = int(sample_profile.get("association_question_count") or 0)
+    association_answers = int(sample_profile.get("association_answer_count") or 0)
+    lines = [
+        f"# {title}",
+        "",
+        (
+            f"**样本口径：总样本：{total_questions}问/{total_answers}答/"
+            f"{total_platforms}平台；品牌关联子样本："
+            f"{association_questions}问/{association_answers}答。**"
+        ),
+        "",
+    ]
     for section in narrative_sections:
         lines.extend([f"## {section.get('title')}", ""])
         takeaway = _clean_text(section.get("takeaway"))
@@ -5247,13 +6067,13 @@ def _build_calibrated_report_markdown(
     lines.extend(["## 附录：平台样本", ""])
     for row in platform_source_summary.get("platforms", [])[:8]:
         lines.append(
-            f"- {row.get('platform')}：有效回答 {row.get('valid_answer_count', 0)} 条；"
+            f"- {_report_platform_label(row.get('platform'))}：有效回答 {row.get('valid_answer_count', 0)} 条；"
             f"{row.get('answer_preference', '')}"
         )
     lines.extend(["", "## 附录：问题与原文摘录", ""])
     appendix_rows: dict[tuple[str, str, str], set[str]] = {}
     for item in source_appendix:
-        platform = _clean_text(item.get("platform"))
+        platform = _report_platform_label(item.get("platform"))
         question = _clean_text(item.get("question"))
         excerpt = _clean_text(item.get("answer_excerpt"))
         if not (platform and question and excerpt):
@@ -5283,9 +6103,6 @@ def _ensure_report_strategy_storyline(
     source_appendix: list[dict[str, Any]],
     strategy_storyline: dict[str, Any],
 ) -> dict[str, Any]:
-    if isinstance(strategy_storyline, dict) and strategy_storyline.get("pillars"):
-        return strategy_storyline
-
     from app.services.amway_entity_calibration_service import (
         _build_four_have_strategy_storyline,
     )
@@ -5299,7 +6116,9 @@ def _ensure_report_strategy_storyline(
         platform_summary=platform_source_summary,
         source_appendix=source_appendix,
     )
-    return generated if isinstance(generated, dict) else {}
+    if isinstance(generated, dict) and generated.get("pillars"):
+        return generated
+    return strategy_storyline if isinstance(strategy_storyline, dict) else {}
 
 
 def _build_report_from_calibrated_input(
@@ -5454,19 +6273,28 @@ def _build_report_from_calibrated_input(
             "tracking_status_label": tracking_projection.get("status_label"),
             "tracking_round_label": tracking_projection.get("round_label"),
         }
-    question_definition = (
+    generated_question_definition = _build_question_definition(
+        center_terms=resolved_center_terms,
+        question_bank=question_bank,
+        sample_scope=sample_scope,
+    )
+    provided_question_definition = (
         report_input.get("question_scope")
         if isinstance(report_input.get("question_scope"), dict)
         else (
             projection.get("question_definition")
             if isinstance(projection.get("question_definition"), dict)
-            else _build_question_definition(
-                center_terms=resolved_center_terms,
-                question_bank=question_bank,
-                sample_scope=sample_scope,
-            )
+            else {}
         )
     )
+    question_definition = {
+        **generated_question_definition,
+        **{
+            key: value
+            for key, value in provided_question_definition.items()
+            if value not in (None, "", [])
+        },
+    }
     strategy_storyline = _ensure_report_strategy_storyline(
         center_terms=resolved_center_terms,
         sample_scope=sample_scope,
@@ -5521,9 +6349,14 @@ def _build_report_from_calibrated_input(
         evidence_findings=evidence_findings,
         association_actions=association_actions,
         source_appendix=source_appendix,
+        nodes=nodes,
+        sample_scope=sample_scope,
+        storyline_analysis=storyline_analysis,
     )
     full_markdown = _build_calibrated_report_markdown(
         title=title,
+        sample_scope=sample_scope,
+        sample_profile=storyline_analysis.get("sample_profile") or {},
         narrative_sections=narrative_sections,
         strategy_validation=strategy_validation,
         nodes=nodes,

@@ -181,21 +181,20 @@ class ApiService {
     try {
       const error = await response.clone().json();
       const detail = error?.detail ?? error?.message;
-      if (typeof detail === 'string' && detail.trim()) {
-        return detail;
+      if (typeof detail === 'string') {
+        const safeDetail = detail.trim();
+        if (
+          safeDetail
+          && safeDetail.length <= 240
+          && !/<(?:html|body|script)|traceback|stack trace|[A-Z]:\\|\/srv\//i.test(safeDetail)
+        ) {
+          return safeDetail;
+        }
       }
     } catch {
-      // Fall back to text for file/HTML error responses.
+      // Non-JSON proxy and HTML errors are intentionally hidden from the UI.
     }
-
-    try {
-      const text = await response.text();
-      if (text.trim()) return text.trim();
-    } catch {
-      // Ignore body parsing failures and use the status code below.
-    }
-
-    return `Request failed: ${response.status}`;
+    return `请求失败（HTTP ${response.status}）`;
   }
 
   private async ensureSuccessfulResponse(response: Response): Promise<void> {

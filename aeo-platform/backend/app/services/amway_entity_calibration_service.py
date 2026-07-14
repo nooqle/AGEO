@@ -20,7 +20,7 @@ from app.services.amway_entity_extraction_service import (
 )
 
 
-CALIBRATION_SCHEMA_VERSION = "2026-06-15"
+CALIBRATION_SCHEMA_VERSION = "2026-07-14"
 RISK_ORBIT = "risk_shadow"
 STRATEGY_ENTITY_TYPES = {"BrandStrategy", "FourValue", "FlowerDimension"}
 EXCLUDED_RELATION_TYPES = {"MARKET_CONTEXT_ONLY", "RISK_DENIED"}
@@ -282,6 +282,8 @@ class AmwayEntityCalibrationService:
             source_appendix=source_appendix,
         )
         report_input = {
+            "contract_version": CALIBRATION_SCHEMA_VERSION,
+            "count_semantics": "distinct_answer_refs",
             "question_scope": _build_question_scope(question_bank),
             "platform_scope": platform_summary,
             "association_map": association_map,
@@ -297,14 +299,14 @@ class AmwayEntityCalibrationService:
         projection = {
             "center_terms": association_map["center_terms"],
             "nodes": nodes,
-            "evidence_samples": evidence_samples[:120],
+            "evidence_samples": evidence_samples,
             "question_bank": question_bank[:200],
             "platform_comparison": platform_summary.get("platforms", []),
             "association_actions": association_actions,
             "question_definition": report_input["question_scope"],
             "platform_source_summary": platform_summary,
-            "evidence_findings": evidence_findings[:80],
-            "source_appendix": source_appendix[:80],
+            "evidence_findings": evidence_findings,
+            "source_appendix": source_appendix,
             "strategy_validation": strategy_validation,
             "strategy_storyline": strategy_storyline,
             "risk_map": risk_map,
@@ -417,6 +419,7 @@ class AmwayEntityCalibrationService:
             entity = self.registry.require_entity(acc.entity_id)
             if entity.entity_type in {"CenterBrand", "MarketContext"}:
                 continue
+            acc = self._risk_scoped_accumulator(entity, acc)
             score_components = _score_accumulator(
                 acc,
                 total_valid_answers=total_valid_answers,
@@ -461,6 +464,7 @@ class AmwayEntityCalibrationService:
                 orbit = RISK_ORBIT
                 orbit_label = _risk_orbit_label(entity)
             node_id = f"node_{_safe_node_id(acc.entity_id)}"
+            display_term = _node_display_term(entity=entity, is_risk=is_risk)
             node_evidence_ids: list[str] = []
             maturity_tier, maturity_label = _maturity_for(
                 score=score,
@@ -473,6 +477,7 @@ class AmwayEntityCalibrationService:
                 evidence_payload = _evidence_payload(
                     evidence_id=evidence_id,
                     node_id=node_id,
+                    node_term=display_term,
                     signal=signal,
                 )
                 evidence_samples.append(evidence_payload)
@@ -481,7 +486,7 @@ class AmwayEntityCalibrationService:
                 "node_id": node_id,
                 "entity_id": acc.entity_id,
                 "entity_type": acc.entity_type,
-                "term": acc.entity_name,
+                "term": display_term,
                 "normalized_expressions": [
                     item for item, _count in acc.matched_texts.most_common(8) if item
                 ],
@@ -506,6 +511,9 @@ class AmwayEntityCalibrationService:
                 "is_risk_term": is_risk,
                 "is_target_term": acc.term_origin == "strategy",
                 "answer_count": len([item for item in acc.answer_ids if item]),
+                "answer_refs": sorted(item for item in acc.answer_ids if item),
+                "answer_count_is_exact": True,
+                "count_semantics": "distinct_answer_refs",
                 "platform_count": len([item for item in acc.platforms if item]),
                 "platform_distribution": dict(acc.platforms),
                 "stance_summary": stance_summary,
@@ -521,7 +529,12 @@ class AmwayEntityCalibrationService:
                 "evidence_count": len(acc.signals),
                 "evidence_strength": _evidence_strength(acc),
                 "source": "answer_parsed",
-                "orbit_reason": _orbit_reason(acc, score, is_risk),
+                "orbit_reason": _orbit_reason(
+                    acc,
+                    score,
+                    is_risk,
+                    display_term=display_term,
+                ),
                 "priority_rank": _node_priority_rank(
                     score=score,
                     is_risk=is_risk,
@@ -532,6 +545,20 @@ class AmwayEntityCalibrationService:
             nodes.append(node)
         nodes.sort(key=_node_sort_key)
         return nodes, evidence_samples
+
+    def _risk_scoped_accumulator(
+        self,
+        entity: AmwayEntityDefinition,
+        acc: _EntityAccumulator,
+    ) -> _EntityAccumulator:
+        if entity.entity_id != "evidence_regulation" or not _has_risk_relation(acc):
+            return acc
+        risk_signals = [
+            signal
+            for signal in acc.signals
+            if _signal_stance(signal) in {"skeptical", "risk", "competitive"}
+        ]
+        return self._build_accumulators(risk_signals).get(acc.entity_id, acc)
 
     def _build_strategy_validation(
         self,
@@ -638,6 +665,9 @@ class AmwayEntityCalibrationService:
                         )[:6]
                     ],
                     "answer_mention_count": answer_mentions,
+                    "answer_refs": sorted(acc.answer_ids) if acc else [],
+                    "answer_count_is_exact": True,
+                    "count_semantics": "distinct_answer_refs",
                     "platform_count": len(platform_distribution),
                     "platform_distribution": platform_distribution,
                     "stance_summary": stance_summary,
@@ -892,15 +922,15 @@ def _context_adjusted_score(
             26,
             10 + caution_like * 2 + max(caution_like - supportive, 0) * 2,
         )
-        return max(28, raw_score - penalty)
+        return min(raw_score, max(28, raw_score - penalty))
     if caution_like >= 1 and caution_like >= max(round(supportive * 0.5), 1):
         penalty = min(18, 6 + caution_like * 2)
-        return max(36, raw_score - penalty)
+        return min(raw_score, max(36, raw_score - penalty))
     if _has_accumulator_negative_context(acc):
         if caution_like >= max(supportive, 1):
-            return max(32, raw_score - 16)
+            return min(raw_score, max(32, raw_score - 16))
         if caution_like:
-            return max(40, raw_score - 10)
+            return min(raw_score, max(40, raw_score - 10))
     return raw_score
 
 
@@ -1120,6 +1150,12 @@ def _risk_orbit_label(entity: AmwayEntityDefinition) -> str:
     return "风险关系"
 
 
+def _node_display_term(*, entity: AmwayEntityDefinition, is_risk: bool) -> str:
+    if is_risk and entity.entity_id == "evidence_regulation":
+        return "监管合规质疑"
+    return entity.canonical_name
+
+
 def _business_tag(acc: _EntityAccumulator, score: int, is_risk: bool) -> str:
     if is_risk:
         if acc.entity_type == "Competitor":
@@ -1182,6 +1218,7 @@ def _evidence_payload(
     *,
     evidence_id: str,
     node_id: str,
+    node_term: str,
     signal: dict[str, Any],
 ) -> dict[str, Any]:
     context = (
@@ -1192,7 +1229,7 @@ def _evidence_payload(
     return {
         "evidence_id": evidence_id,
         "node_id": node_id,
-        "node_term": signal.get("entity_name"),
+        "node_term": node_term,
         "entity_id": signal.get("entity_id"),
         "entity_type": signal.get("entity_type"),
         "answer_id": signal.get("answer_id"),
@@ -1237,7 +1274,13 @@ def _evidence_strength(acc: _EntityAccumulator) -> str:
     return "single_platform"
 
 
-def _orbit_reason(acc: _EntityAccumulator, score: int, is_risk: bool) -> str:
+def _orbit_reason(
+    acc: _EntityAccumulator,
+    score: int,
+    is_risk: bool,
+    *,
+    display_term: str,
+) -> str:
     answer_count = len([item for item in acc.answer_ids if item])
     platform_count = len([item for item in acc.platforms if item])
     if is_risk:
@@ -1245,31 +1288,31 @@ def _orbit_reason(acc: _EntityAccumulator, score: int, is_risk: bool) -> str:
             scenes = _join_terms(_top_counter_values(acc.opportunity_points, 2))
             scene_text = f"，主要出现在{scenes}场景" if scenes else ""
             return (
-                f"{acc.entity_name}被 {answer_count} 条回答提到，覆盖 "
+                f"{display_term}被 {answer_count} 条回答提到，覆盖 "
                 f"{platform_count} 个平台{scene_text}。它代表竞争或替代选择，"
                 "需要和具体问题语境一起查看。"
             )
         return (
-            f"{acc.entity_name}被 {answer_count} 条回答提到，覆盖 "
+            f"{display_term}被 {answer_count} 条回答提到，覆盖 "
             f"{platform_count} 个平台，应进入风险关系单独查看。"
         )
     if score >= 60:
         return (
-            f"{acc.entity_name}已经被 {answer_count} 条回答稳定带回品牌，"
+            f"{display_term}已经被 {answer_count} 条回答稳定带回品牌，"
             f"覆盖 {platform_count} 个平台。"
         )
     if score >= 50:
         return (
-            f"{acc.entity_name}已有 {answer_count} 条回答证据，覆盖 "
+            f"{display_term}已有 {answer_count} 条回答证据，覆盖 "
             f"{platform_count} 个平台，属于近端机会，下一步要补直接证据。"
         )
     if score >= 35:
         return (
-            f"{acc.entity_name}已有 {answer_count} 条回答证据，但平台和问题覆盖还弱，"
+            f"{display_term}已有 {answer_count} 条回答证据，但平台和问题覆盖还弱，"
             "属于远端机会，需要先补场景和样本。"
         )
     return (
-        f"{acc.entity_name}已有 {answer_count} 条回答证据，"
+        f"{display_term}已有 {answer_count} 条回答证据，"
         "当前仍适合继续观察和补充样本。"
     )
 
@@ -1633,8 +1676,33 @@ def _priority_node_card(
     rank: int,
     focus_type: str,
 ) -> dict[str, Any]:
-    evidence_count = int(node.get("evidence_count") or 0)
+    evidence_count = int(node.get("answer_count") or node.get("evidence_count") or 0)
     platform_count = int(node.get("platform_count") or 0)
+    answer_count_is_exact = node.get("answer_count_is_exact") is True or (
+        node.get("answer_count_is_exact") is not False
+        and (
+            node.get("count_semantics") == "distinct_answer_refs"
+            or isinstance(node.get("answer_refs"), list)
+        )
+    )
+    count_semantics = (
+        "distinct_answer_refs"
+        if answer_count_is_exact
+        else (
+            "known_answer_refs_lower_bound"
+            if node.get("count_semantics") == "known_answer_refs_lower_bound"
+            else "legacy_summed_mentions"
+        )
+    )
+    count_phrase = (
+        f"{evidence_count} 条回答"
+        if count_semantics == "distinct_answer_refs"
+        else (
+            f"至少 {evidence_count} 条可确认回答"
+            if count_semantics == "known_answer_refs_lower_bound"
+            else f"{evidence_count} 次节点提及"
+        )
+    )
     scenes = _join_terms(
         [
             str(item)
@@ -1660,11 +1728,12 @@ def _priority_node_card(
         "maturity_tier": node.get("maturity_tier"),
         "score": node.get("gravity_score") or node.get("closeness_score"),
         "evidence_count": evidence_count,
+        "answer_count_is_exact": answer_count_is_exact,
+        "count_semantics": count_semantics,
         "platform_count": platform_count,
         "scene_hint": scenes,
         "reason": (
-            f"{evidence_count} 条回答、{platform_count} 个平台提及，"
-            f"主要出现在{scenes}。"
+            f"{count_phrase}、{platform_count} 个平台提及，" f"主要出现在{scenes}。"
         ),
         "recommended_action": action,
         "evidence_refs": list(node.get("evidence_samples") or [])[:4],
@@ -1833,12 +1902,17 @@ def _build_source_appendix(
 ) -> list[dict[str, Any]]:
     question_by_id = {_clean_text(item.get("id")): item for item in question_bank}
     rows: list[dict[str, Any]] = []
-    for evidence in _select_diverse_evidence_samples(evidence_samples, limit=120):
+    for evidence in _select_diverse_evidence_samples(
+        evidence_samples, limit=len(evidence_samples)
+    ):
         question_id = _clean_text(evidence.get("question_id"))
         question = question_by_id.get(question_id, {})
         rows.append(
             {
                 "evidence_id": evidence.get("evidence_id"),
+                "answer_id": evidence.get("answer_id"),
+                "entity_id": evidence.get("entity_id"),
+                "entity_type": evidence.get("entity_type"),
                 "question_id": question_id,
                 "question": evidence.get("question"),
                 "platform": evidence.get("platform"),
@@ -1887,7 +1961,13 @@ def _build_four_have_strategy_storyline(
     value = _find_pillar(pillars, "have_value")
     verdict = {
         "center_term": center_terms[0] if center_terms else "安利",
-        "headline": "四有在 AI 叙事中呈现不均衡：有健康最先被接住，有陪伴出现萌芽，有保障受风险遮蔽，有价值仍缺少稳定入口。",
+        "headline": (
+            "四有当前状态："
+            f"有健康{health.get('status_label') or '待观察'}；"
+            f"有陪伴{companionship.get('status_label') or '待观察'}；"
+            f"有保障{security.get('status_label') or '待观察'}；"
+            f"有价值{value.get('status_label') or '待观察'}。"
+        ),
         "health_status": health.get("status_label"),
         "companionship_status": companionship.get("status_label"),
         "security_status": security.get("status_label"),
@@ -1943,6 +2023,66 @@ def _build_four_have_strategy_storyline(
             "reading": "风险和竞品被放回四有叙事：竞品主要作为有健康升级参照，传销/拉人头等风险解释有保障受遮蔽的原因。",
         },
     }
+
+
+def _distinct_answer_mention_count(
+    rows: list[dict[str, Any]],
+    *,
+    reference_key: str,
+) -> int:
+    return _answer_count_measure(rows, reference_key=reference_key)[0]
+
+
+def _answer_count_measure(
+    rows: list[dict[str, Any]],
+    *,
+    reference_key: str,
+) -> tuple[int, str, bool]:
+    modes: list[str] = []
+    answer_refs: set[str] = set()
+    declared_counts: list[int] = []
+    for row in rows:
+        raw_refs = row.get(reference_key)
+        refs = {
+            _clean_text(reference)
+            for reference in raw_refs or []
+            if _clean_text(reference)
+        }
+        answer_refs.update(refs)
+        declared_count = int(
+            row.get("answer_mention_count")
+            or row.get("mention_answer_count")
+            or row.get("answer_count")
+            or 0
+        )
+        semantics = _clean_text(row.get("count_semantics"))
+        is_exact = row.get("answer_count_is_exact")
+        if semantics == "known_answer_refs_lower_bound":
+            mode = "lower_bound"
+        elif semantics == "legacy_summed_mentions" or is_exact is False:
+            mode = "legacy"
+        elif isinstance(raw_refs, list) and (
+            semantics == "distinct_answer_refs"
+            or is_exact is True
+            or (not semantics and is_exact is None)
+        ):
+            mode = "exact"
+        else:
+            mode = "legacy"
+        modes.append(mode)
+        if mode == "exact":
+            declared_counts.append(len(refs))
+        elif mode == "lower_bound":
+            declared_counts.append(max(declared_count, len(refs)))
+        else:
+            declared_counts.append(declared_count)
+
+    if modes and all(mode == "exact" for mode in modes):
+        return len(answer_refs), "distinct_answer_refs", True
+    if modes and all(mode in {"exact", "lower_bound"} for mode in modes):
+        lower_bound = max([len(answer_refs), *declared_counts], default=0)
+        return lower_bound, "known_answer_refs_lower_bound", False
+    return sum(declared_counts), "legacy_summed_mentions", False
 
 
 def _build_four_have_pillar(
@@ -2022,6 +2162,11 @@ def _build_four_have_pillar(
         ],
         limit=4,
     )
+    answer_measure_rows = [*matched_strategy_rows, *positive_nodes]
+    answer_count, count_semantics, answer_count_is_exact = _answer_count_measure(
+        answer_measure_rows,
+        reference_key="answer_refs",
+    )
     return {
         "key": rule.get("key"),
         "label": rule.get("label"),
@@ -2041,10 +2186,9 @@ def _build_four_have_pillar(
             _clean_text(row.get("strategy_term")) for row in matched_strategy_rows[:8]
         ],
         "sample_questions": sample_questions,
-        "answer_mention_count": sum(
-            int(row.get("answer_mention_count") or 0) for row in matched_strategy_rows
-        )
-        or sum(int(node.get("answer_count") or 0) for node in positive_nodes),
+        "answer_mention_count": answer_count,
+        "answer_count_is_exact": answer_count_is_exact,
+        "count_semantics": count_semantics,
         "platform_count": len(platform_distribution),
         "platform_distribution": platform_distribution,
         "evidence_refs": evidence_refs,
@@ -2060,9 +2204,10 @@ def _four_have_status(
     risk_nodes: list[dict[str, Any]],
     competition_nodes: list[dict[str, Any]],
 ) -> tuple[str, str]:
-    answer_mentions = sum(
-        int(row.get("answer_mention_count") or 0) for row in strategy_rows
-    ) or sum(int(node.get("answer_count") or 0) for node in positive_nodes)
+    answer_mentions = _distinct_answer_mention_count(
+        [*strategy_rows, *positive_nodes],
+        reference_key="answer_refs",
+    )
     risk_count = sum(int(node.get("answer_count") or 0) for node in risk_nodes)
     if rule_key == "have_health":
         if answer_mentions >= 8 or positive_nodes:

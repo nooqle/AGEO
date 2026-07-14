@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.utils import repair_mojibake
 from app.models.brand_intelligence import (
     BrandCitationSource,
     BrandCompetitorEntity,
@@ -32,7 +33,9 @@ from app.services.brand_domain_canonicalization import (
 
 INTERNAL_EVIDENCE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"prompt|debug|trace|chain[-_ ]?of[-_ ]?thought", re.IGNORECASE),
-    re.compile(r"web[_\s-]*search(?:\s*工具)?|调用工具|工具调用|浏览器工具", re.IGNORECASE),
+    re.compile(
+        r"web[_\s-]*search(?:\s*工具)?|调用工具|工具调用|浏览器工具", re.IGNORECASE
+    ),
     re.compile(r"推理过程|思考过程|内部过程|调度日志|模型过程"),
     re.compile(r"作为\s*AI|我将|首先我需要|接下来我会"),
 )
@@ -134,7 +137,9 @@ class BrandKnowledgeGraphProjectionService:
             citation
             for citation in valid_citations
             if _matches_official_domain(citation.domain, official_domains)
-            or _matches_official_domain(_normalize_domain(citation.url), official_domains)
+            or _matches_official_domain(
+                _normalize_domain(citation.url), official_domains
+            )
         ]
         official_rate = (
             len(official_citations) / len(valid_citations) if valid_citations else None
@@ -396,7 +401,7 @@ class BrandKnowledgeGraphProjectionService:
                 content_topics=content_topics,
                 unmentioned_answer_samples=unmentioned_answer_samples,
                 recommendation_tasks=recommendation_tasks,
-            )
+            ),
         }
         graph_projection = self._graph_projection(
             entity=entity,
@@ -1296,7 +1301,10 @@ class BrandKnowledgeGraphProjectionService:
                     "content_format": "待确认事项",
                     "content_directions": [],
                     "distribution_targets": [],
-                    "execution_steps": ["确认已有事项。", "再决定是否生成内容或补充样本。"],
+                    "execution_steps": [
+                        "确认已有事项。",
+                        "再决定是否生成内容或补充样本。",
+                    ],
                     "content_generation_brief": "",
                     "evidence_refs": [],
                 }
@@ -1535,8 +1543,12 @@ class BrandKnowledgeGraphProjectionService:
             for domain in (official_detail.get("official_domains") or [])
             if domain
         ]
-        official_citation_count = int(official_detail.get("official_citation_count") or 0)
-        official_node_domain = official_domains[0] if official_domains else primary_official_domain(entity)
+        official_citation_count = int(
+            official_detail.get("official_citation_count") or 0
+        )
+        official_node_domain = (
+            official_domains[0] if official_domains else primary_official_domain(entity)
+        )
         add_node(
             f"official_domain:{official_node_domain or entity.id}",
             "official_domain",
@@ -1628,10 +1640,11 @@ class BrandKnowledgeGraphProjectionService:
                 business_meaning=f"把已提及品牌的回答拆成{label}样本。",
                 evidence_count=int(sentiment_summary.get(key) or 0),
             )
-            for sample_index, sample in enumerate((sentiment_detail.get(key) or [])[:2]):
+            for sample_index, sample in enumerate(
+                (sentiment_detail.get(key) or [])[:2]
+            ):
                 sample_node_id = (
-                    f"answer_sample:{key}:"
-                    f"{sample.get('answer_id') or sample_index}"
+                    f"answer_sample:{key}:" f"{sample.get('answer_id') or sample_index}"
                 )
                 sample_text = _preview(
                     str(
@@ -1717,8 +1730,7 @@ def _metric_business_meaning(key: str, metric: dict[str, Any]) -> str:
         sufficiency = metric.get("sample_sufficiency") or {}
         if sufficiency.get("is_comparable") is False:
             return str(
-                sufficiency.get("rank_reason")
-                or "当前样本不足，排名只能作为观察。"
+                sufficiency.get("rank_reason") or "当前样本不足，排名只能作为观察。"
             )
         return "在同一批问题和平台下比较品牌与竞品的提及率。"
     if key == "official_citation_rate":
@@ -2085,7 +2097,7 @@ def _unique_domains(citations: list[BrandCitationSource], limit: int = 5) -> lis
 
 
 def _preview(value: Any, limit: int) -> str:
-    text = _repair_mojibake(str(value or ""))
+    text = repair_mojibake(str(value or ""))
     text = _strip_internal_evidence_text(text)
     text = " ".join(text.split())
     if len(text) <= limit:
@@ -2128,32 +2140,6 @@ def _strip_internal_evidence_text(value: str) -> str:
     if any(pattern.search(text) for pattern in INTERNAL_EVIDENCE_PATTERNS):
         return ""
     return text
-
-
-def _repair_mojibake(value: str) -> str:
-    text = str(value or "")
-    if not text:
-        return ""
-    if not any(marker in text for marker in ("Ã", "Â", "â", "å", "ç", "è", "\x80")):
-        return text
-    try:
-        repaired = text.encode("latin1").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return text
-    if _readability_score(repaired) > _readability_score(text) + 3:
-        return repaired
-    return text
-
-
-def _readability_score(value: str) -> int:
-    cjk_count = sum(1 for char in value if "\u4e00" <= char <= "\u9fff")
-    mojibake_penalty = sum(
-        value.count(marker) for marker in ("Ã", "Â", "â", "å", "ç", "è")
-    )
-    control_penalty = sum(
-        1 for char in value if ord(char) < 32 or 127 <= ord(char) <= 159
-    )
-    return cjk_count * 2 - mojibake_penalty - control_penalty
 
 
 def _question_text_for_answer(

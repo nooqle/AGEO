@@ -612,6 +612,7 @@ export interface OntologyRecommendationTaskResponse {
   priority_rank?: number;
   association_score?: number;
   gravity_score?: number;
+  raw_gravity_score?: number;
   closeness_score?: number;
   distance_score?: number;
   frequency_score?: number;
@@ -625,6 +626,9 @@ export interface OntologyRecommendationTaskResponse {
   is_risk_term?: boolean;
   is_target_term?: boolean;
   answer_count?: number;
+  answer_refs?: string[];
+  answer_count_is_exact?: boolean;
+  count_semantics?: 'distinct_answer_refs' | 'known_answer_refs_lower_bound' | 'legacy_summed_mentions' | string;
   platform_count?: number;
   platform_distribution?: Record<string, number>;
   primary_audience_segments?: string[];
@@ -632,8 +636,13 @@ export interface OntologyRecommendationTaskResponse {
   primary_life_stages?: string[];
   primary_opportunity_points?: string[];
   relation_type_distribution?: Record<string, number>;
+  supportive_evidence_count?: number;
+  skeptical_evidence_count?: number;
+  risk_evidence_count?: number;
+  competitive_evidence_count?: number;
   trigger_questions?: string[];
   evidence_samples?: string[];
+  evidence_refs?: string[];
   evidence_count?: number;
     evidence_strength?: string;
     orbit_reason?: string;
@@ -647,6 +656,8 @@ export interface OntologyRecommendationTaskResponse {
 
 export interface OntologyAssociationCircleEvidence {
   evidence_id: string;
+  entity_id?: string;
+  lexicon_entity_id?: string;
   node_id?: string;
   node_term?: string;
   platform?: string;
@@ -667,6 +678,7 @@ export interface OntologyAssociationCircleEvidence {
   answer_excerpt?: string;
   answer_position?: string;
   relation_type?: string;
+  context_polarity?: string;
   evidence_strength?: string;
 }
 
@@ -840,6 +852,9 @@ export interface OntologyAssociationCircleStrategyValidation {
   question_count?: number;
   question_refs?: string[];
   answer_mention_count?: number;
+  answer_refs?: string[];
+  answer_count_is_exact?: boolean;
+  count_semantics?: 'distinct_answer_refs' | 'known_answer_refs_lower_bound' | 'legacy_summed_mentions' | string;
   platform_count?: number;
   platform_distribution?: Record<string, number>;
   related_node_ids?: string[];
@@ -863,6 +878,32 @@ export interface OntologyAssociationCircleStrategyValidation {
   review_status?: string;
 }
 
+export interface OntologyAssociationCircleStrategyPillar {
+  key?: 'have_health' | 'have_companionship' | 'have_security' | 'have_value' | string;
+  label?: string;
+  status?: string;
+  status_label?: string;
+  answer_mention_count?: number;
+  answer_count_is_exact?: boolean;
+  count_semantics?: string;
+  platform_count?: number;
+  platform_distribution?: Record<string, number>;
+  node_terms?: string[];
+  risk_terms?: string[];
+  competition_terms?: string[];
+  strategy_terms?: string[];
+  evidence_refs?: string[];
+}
+
+export interface OntologyAssociationCircleStrategyStoryline {
+  framework?: string;
+  pillars?: OntologyAssociationCircleStrategyPillar[];
+  verdict?: Record<string, unknown>;
+  weekly_actions?: Array<Record<string, unknown>>;
+  platform_scope?: Record<string, unknown>;
+  risk_absorption?: Record<string, unknown>;
+}
+
 export interface OntologyAssociationCirclePriorityItem {
   rank?: number;
   node_id?: string;
@@ -872,6 +913,9 @@ export interface OntologyAssociationCirclePriorityItem {
   maturity_tier?: string;
   score?: number;
   evidence_count?: number;
+  answer_refs?: string[];
+  answer_count_is_exact?: boolean;
+  count_semantics?: 'distinct_answer_refs' | 'known_answer_refs_lower_bound' | 'legacy_summed_mentions' | string;
   platform_count?: number;
   scene_hint?: string;
   reason?: string;
@@ -900,16 +944,38 @@ export interface OntologyAssociationCircleAnalysisTraceItem {
 
 export interface OntologyAssociationCircleSourceAppendixItem {
   evidence_id?: string;
+  answer_id?: string;
+  entity_id?: string;
+  lexicon_entity_id?: string;
+  entity_type?: string;
   node_term?: string;
   platform?: string;
   question_id?: string;
   question?: string;
   answer_excerpt?: string;
+  relation_type?: string;
+  context_polarity?: string;
   audience_segment?: string;
   life_scene?: string;
   opportunity_point?: string;
   probe_type?: string;
   platform_valid_answer_count?: number;
+}
+
+export interface OntologyAssociationCircleBlindSpotMetrics {
+  diagnosis?: string;
+  active_mention_rate?: number | null;
+  open_answer_count?: number;
+  open_brand_mention_count?: number;
+  brand_named_answer_count?: number;
+  brand_named_brand_mention_count?: number;
+  answer_count_is_exact?: boolean;
+}
+
+export interface OntologyAssociationCircleStorylineAnalysis {
+  sample_profile?: Record<string, unknown>;
+  blind_spot?: OntologyAssociationCircleBlindSpotMetrics;
+  evidence_refs?: string[];
 }
 
 export interface OntologyAssociationCircleProjection {
@@ -930,7 +996,8 @@ export interface OntologyAssociationCircleProjection {
   evidence_findings?: OntologyAssociationCircleEvidenceFinding[];
   report_outline?: OntologyAssociationCircleReportOutlineItem[];
   strategy_validation?: OntologyAssociationCircleStrategyValidation[];
-  strategy_storyline?: Record<string, unknown>;
+  strategy_storyline?: OntologyAssociationCircleStrategyStoryline;
+  storyline_analysis?: OntologyAssociationCircleStorylineAnalysis;
   analysis_tool_trace?: OntologyAssociationCircleAnalysisTraceItem[];
   source_appendix?: OntologyAssociationCircleSourceAppendixItem[];
   copy_constraints?: Record<string, unknown>;

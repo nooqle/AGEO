@@ -15,19 +15,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_db
+from app.core.utils import repair_mojibake
 from app.models.brand_intelligence_run import BrandIntelligenceRun
 from app.models.entity import Entity
 from app.models.monitoring_plan import MonitoringQuestionSet, QuestionSetStatus
 from app.services.access_scope_service import AccessScopeService
-from app.services.amway_circle_tracking_service import \
-    AmwayCircleTrackingService
+from app.services.amway_circle_tracking_service import AmwayCircleTrackingService
 from app.services.amway_entity_lexicon_service import AmwayEntityLexiconService
 from app.services.brand_association_circle_variant import (
     is_amway_association_entity,
 )
 from app.services.monitoring_plan_service import MonitoringPlanService
 from app.services.organization_feature_service import (
-    FEATURE_AMWAYCHINA_CONSOLE, feature_enabled_for_account)
+    FEATURE_AMWAYCHINA_CONSOLE,
+    feature_enabled_for_account,
+)
 
 router = APIRouter(prefix="/amwaychina", tags=["amwaychina"])
 
@@ -413,7 +415,9 @@ async def list_amway_question_sets(
         .all()
     )
     for run in run_rows:
-        input_scope = run.input_scope if isinstance(run.input_scope, dict) else {}
+        input_scope = repair_mojibake(
+            run.input_scope if isinstance(run.input_scope, dict) else {}
+        )
         questions = input_scope.get("uploaded_questions")
         if not isinstance(questions, list) or not questions:
             continue

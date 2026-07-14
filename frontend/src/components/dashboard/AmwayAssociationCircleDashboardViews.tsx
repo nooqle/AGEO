@@ -1,9 +1,13 @@
 ﻿import { useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import {
+  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   Download,
+  Orbit,
   RefreshCw,
+  ShieldAlert,
   Upload,
   X,
 } from 'lucide-react';
@@ -12,6 +16,7 @@ import type {
   OntologyAssociationCircleEvidence,
   OntologyAssociationCircleEvidenceFinding,
   OntologyAssociationCircleAnalysisTraceItem,
+  OntologyAssociationCircleBlindSpotMetrics,
   OntologyAssociationCircleNarrativeSection,
   OntologyAssociationCircleNode,
   OntologyAssociationCirclePlatformSourceSummary,
@@ -23,6 +28,9 @@ import type {
   OntologyAssociationCircleQuestion,
   OntologyAssociationCircleSourceAppendixItem,
   OntologyAssociationCircleStrategyValidation,
+  OntologyAssociationCircleStrategyPillar,
+  OntologyAssociationCircleStrategyStoryline,
+  OntologyAssociationCircleStorylineAnalysis,
   OntologyWorldSummary,
 } from '@/types/ontology';
 import {
@@ -37,6 +45,8 @@ type AssociationMapMode = 'associations' | 'risk';
 type AssociationMapViewMode = 'flat' | 'spatial';
 type OrbitDistanceBand = 'near' | 'bridge' | 'far' | 'risk';
 type AssociationNodeFilterKey = 'stable' | 'opportunity' | 'watch';
+const DEFAULT_OVERVIEW_HIGHLIGHT_LIMIT = 28;
+const FOCUSED_TRACK_LABEL_LIMIT = 10;
 type ReportNarrativeSection = {
   sectionId?: string;
   title: string;
@@ -52,12 +62,16 @@ type ReportNarrativeSection = {
 
 type OrbitEvidenceItem = {
   evidence_id?: string;
+  entity_id?: string;
+  lexicon_entity_id?: string;
   node_id?: string;
   node_term?: string;
   platform?: string;
   question_id?: string;
   question?: string;
   answer_excerpt?: string;
+  relation_type?: string;
+  context_polarity?: string;
 };
 
 type PlatformEvidenceSummary = {
@@ -69,7 +83,7 @@ type PlatformEvidenceSummary = {
 };
 
 const DEFAULT_CENTER_TERMS = ['安利', '安利中国', '纽崔莱'];
-const REPORT_SERIF_FONT = 'ui-serif, "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif';
+const REPORT_SERIF_FONT = '"PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif';
 const QUESTION_PAGE_SIZE = 8;
 
 export function AssociationProjectionLoadingPanel({ centerTerm }: { centerTerm: string }) {
@@ -121,7 +135,7 @@ function QuestionUploadButton({
 }) {
   return (
     <label
-      className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[var(--brand-border)] bg-[var(--bg-primary)] text-sm font-medium text-[var(--brand-primary)] hover:bg-[var(--brand-bg)] ${
+      className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[var(--brand-border)] bg-[var(--bg-primary)] text-sm font-medium text-[var(--brand-primary)] hover:bg-[var(--brand-bg)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--brand-primary)] ${
         compact ? 'h-9 px-3' : 'px-4 py-2'
       }`}
     >
@@ -189,6 +203,7 @@ export function CommercialOrbitView({
   const [mapMode, setMapMode] = useState<AssociationMapMode>('associations');
   const [activeNodeFilters, setActiveNodeFilters] = useState<AssociationNodeFilterKey[]>([]);
   const [hoverTrackFilter, setHoverTrackFilter] = useState<AssociationNodeFilterKey | null>(null);
+  const externalReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const viewMode: AssociationMapViewMode = 'flat';
   const riskGroup = groups.find((group) => group.key === 'risk') || null;
   const riskNodes = riskGroup?.nodes || [];
@@ -197,13 +212,13 @@ export function CommercialOrbitView({
   const filterOptions = buildAssociationNodeFilterOptions(associationGroups);
   const activeTrackFilter = activeNodeFilters[0] || null;
   const activeTrackGroupKey = trackFilterToGroupKey(activeTrackFilter);
-  const visibleGroups = mapMode === 'risk'
+  const focusGroups = mapMode === 'risk'
     ? (riskGroup ? [riskGroup] : [])
     : activeTrackGroupKey
       ? associationGroups.filter((group) => group.key === activeTrackGroupKey)
       : associationGroups;
-  const strongest = visibleGroups.find((group) => group.key === 'strong')?.nodes[0] || null;
-  const opportunity = visibleGroups.find((group) => group.key === 'growth')?.nodes[0] || visibleGroups.find((group) => group.key === 'story')?.nodes[0] || null;
+  const strongest = focusGroups.find((group) => group.key === 'strong')?.nodes[0] || null;
+  const opportunity = focusGroups.find((group) => group.key === 'growth')?.nodes[0] || focusGroups.find((group) => group.key === 'story')?.nodes[0] || null;
   const selectedGroupKey = selectedNode ? classifyAssociationNode(selectedNode) : null;
   const selectedRiskNodeVisible = selectedGroupKey === 'risk' && (
     mapMode === 'risk' || showDefaultRiskNodes
@@ -231,11 +246,11 @@ export function CommercialOrbitView({
     opportunity: associationGroups.find((group) => group.key === 'growth')?.nodes.length || 0,
     watch: associationGroups.find((group) => group.key === 'story')?.nodes.length || 0,
   };
-  const previewTrackFilter = hoverTrackFilter || activeTrackFilter;
-  const visibleNodeCount = previewTrackFilter
-    ? trackCounts[previewTrackFilter]
-    : totalDefaultNodeCount;
+  const visibleNodeCount = activeTrackFilter
+    ? trackCounts[activeTrackFilter]
+    : Math.min(totalDefaultNodeCount, DEFAULT_OVERVIEW_HIGHLIGHT_LIMIT);
   const updateNodeFilters = (nextFilters: AssociationNodeFilterKey[]) => {
+    setHoverTrackFilter(null);
     setActiveNodeFilters(nextFilters);
     if (
       selectedNode
@@ -248,42 +263,46 @@ export function CommercialOrbitView({
   };
   const closeRiskView = () => {
     setMapMode('associations');
+    setHoverTrackFilter(null);
+    setActiveNodeFilters([]);
     onSelectNode(null);
   };
   const openRiskView = () => {
     setMapMode('risk');
     setHoverTrackFilter(null);
+    setActiveNodeFilters([]);
     onSelectNode(null);
+  };
+  const revealNode = (nodeId: string | null, returnFocusTarget?: HTMLButtonElement) => {
+    if (!nodeId) {
+      onSelectNode(null);
+      return;
+    }
+    const node = groups.flatMap((group) => group.nodes).find((item) => item.node_id === nodeId);
+    if (!node) return;
+    externalReturnFocusRef.current = returnFocusTarget || null;
+    const groupKey = classifyAssociationNode(node);
+    setHoverTrackFilter(null);
+    if (groupKey === 'risk') {
+      setMapMode('risk');
+      setActiveNodeFilters([]);
+    } else {
+      setMapMode('associations');
+      setActiveNodeFilters([groupKeyToTrackFilter(groupKey)]);
+    }
+    onSelectNode(nodeId);
   };
 
   return (
     <section className="space-y-5">
       <section className="space-y-5">
         <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-5 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border-subtle)] px-5 py-3">
             <div>
-              <h2 className="text-2xl font-semibold">
-                {mapMode === 'risk' ? `${centerTerm} 风险认知关系图` : `${centerTerm} 品牌联想圈层图`}
+              <h2 className="text-xl font-semibold tracking-tight">
+                {mapMode === 'risk' ? `${centerTerm} 风险与竞争关系图` : `${centerTerm} 品牌联想圈层图`}
               </h2>
-              <p className="mt-1 text-sm text-[var(--text-tertiary)]">
-                {mapMode === 'risk'
-                  ? '当前只展开风险认知：看回答如何把品牌带向需要澄清的旧认知，以及这些风险来自哪些语境。'
-                  : '每条轨道是一种关系状态：绿色稳定，黄色可拉近，灰色待观察，红色为风险关系。'}
-              </p>
               <OrbitMapReadingGuide mapMode={mapMode} />
-              {mapMode === 'associations' && totalAssociationNodeCount > 0 ? (
-                <AssociationNodeFilterBar
-                  options={filterOptions}
-                  activeFilters={activeNodeFilters}
-                  totalCount={totalDefaultNodeCount}
-                  visibleCount={visibleNodeCount}
-                  riskCount={riskNodes.length}
-                  previewFilter={hoverTrackFilter}
-                  onChange={updateNodeFilters}
-                  onPreviewChange={setHoverTrackFilter}
-                  onOpenRiskView={openRiskView}
-                />
-              ) : null}
               {isLivePreview ? (
                 <LiveExtractionStatusStrip
                   answerCount={liveStats.answerCount}
@@ -295,24 +314,33 @@ export function CommercialOrbitView({
                   currentStage={liveCurrentStage}
                 />
               ) : null}
-            </div>
-            <div className="flex flex-wrap justify-end gap-2 text-xs text-[var(--text-secondary)]">
-              {isLivePreview && targetPlatformNames.length ? (
-                <InfoPill label="目标平台" value={String(targetPlatformNames.length)} />
+              {mapMode === 'associations' && totalAssociationNodeCount > 0 ? (
+                <AssociationNodeFilterBar
+                  options={filterOptions}
+                  activeFilters={activeNodeFilters}
+                  totalCount={totalDefaultNodeCount}
+                  visibleCount={visibleNodeCount}
+                  previewFilter={hoverTrackFilter}
+                  onChange={updateNodeFilters}
+                  onPreviewChange={setHoverTrackFilter}
+                />
               ) : null}
-              <InfoPill label="有效回答" value={String(sampleAnswerCount(sampleScope) || '-')} />
-              <InfoPill label="有效平台" value={String(samplePlatformCount(sampleScope) || '-')} />
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <AssociationMapModeControl
+                mode={mapMode}
+                riskCount={riskNodes.length}
+                onChange={(mode) => mode === 'risk' ? openRiskView() : closeRiskView()}
+              />
+              <div className="flex flex-wrap justify-end gap-2 text-xs text-[var(--text-secondary)]">
+                <InfoPill label="有效回答" value={String(sampleAnswerCount(sampleScope) || '-')} />
+                <InfoPill label="有效平台" value={String(samplePlatformCount(sampleScope) || '-')} />
+              </div>
             </div>
           </div>
-          <PriorityFocusStrip
-            summary={prioritySummary}
-            groups={groups}
-            onSelectNode={onSelectNode}
-            onOpenRiskView={openRiskView}
-          />
           <CommercialOrbitMap
             centerTerm={centerTerm}
-            groups={visibleGroups}
+            groups={mapMode === 'risk' ? (riskGroup ? [riskGroup] : []) : associationGroups}
             mapMode={mapMode}
             viewMode={viewMode}
             riskNodes={riskNodes}
@@ -327,14 +355,23 @@ export function CommercialOrbitView({
             liveProgressMessage={liveProgressMessage}
             liveCurrentStage={liveCurrentStage}
             selectedNodeId={focusNode?.node_id === selectedNodeId ? selectedNodeId : null}
+            restoreExternalFocus={() => {
+              if (!externalReturnFocusRef.current?.isConnected) return false;
+              externalReturnFocusRef.current.focus();
+              return true;
+            }}
             isLivePreview={isLivePreview}
-            onSelectNode={onSelectNode}
+            onSelectNode={revealNode}
             onOpenRiskView={openRiskView}
             onExitRiskView={closeRiskView}
             activeTrackFilter={activeTrackFilter}
             hoverTrackFilter={hoverTrackFilter}
-            onHoverTrackFilterChange={setHoverTrackFilter}
-            onTrackFilterChange={(track) => updateNodeFilters(activeTrackFilter === track ? [] : [track])}
+          />
+          <PriorityFocusStrip
+            summary={prioritySummary}
+            groups={groups}
+            onSelectNode={revealNode}
+            onOpenRiskView={openRiskView}
           />
         </div>
       </section>
@@ -402,18 +439,24 @@ function PriorityFocusStrip({
 }: {
   summary?: OntologyAssociationCirclePrioritySummary | null;
   groups: AssociationMapGroup[];
-  onSelectNode: (nodeId: string | null) => void;
+  onSelectNode: (nodeId: string | null, returnFocusTarget?: HTMLButtonElement) => void;
   onOpenRiskView: () => void;
 }) {
-  const fallbackRisks = groups.find((group) => group.key === 'risk')?.nodes || [];
+  const fallbackRiskGroup = groups.find((group) => group.key === 'risk')?.nodes || [];
+  const fallbackRisks = fallbackRiskGroup.filter((node) => !isCompetitorNode(node));
+  const fallbackCompetitors = fallbackRiskGroup.filter(isCompetitorNode);
   const fallbackOpportunities = [
     ...(groups.find((group) => group.key === 'growth')?.nodes || []),
     ...(groups.find((group) => group.key === 'story')?.nodes || []),
   ];
-  const riskItems = priorityItemsOrFallback(summary?.top_risks, fallbackRisks, 'risk');
+  const riskItems = priorityItemsOrFallback(
+    summary?.top_risks?.filter((item) => item.focus_type !== 'competitor' && item.business_tag !== '竞争关系'),
+    fallbackRisks,
+    'risk',
+  );
   const competitorItems = priorityItemsOrFallback(
     summary?.top_competitors,
-    fallbackRisks.filter((node) => node.business_tag === '竞争关系'),
+    fallbackCompetitors,
     'competitor',
   );
   const opportunityItems = priorityItemsOrFallback(summary?.top_opportunities, fallbackOpportunities, 'opportunity');
@@ -476,7 +519,7 @@ function PriorityColumn({
   emptyText: string;
   items: OntologyAssociationCirclePriorityItem[];
   tone: 'risk' | 'competitor' | 'opportunity';
-  onSelectNode: (nodeId: string | null) => void;
+  onSelectNode: (nodeId: string | null, returnFocusTarget?: HTMLButtonElement) => void;
 }) {
   const color = tone === 'risk'
     ? 'var(--error)'
@@ -494,7 +537,7 @@ function PriorityColumn({
           <button
             key={`${title}-${item.node_id || item.term || index}`}
             type="button"
-            onClick={() => item.node_id && onSelectNode(item.node_id)}
+            onClick={(event) => item.node_id && onSelectNode(item.node_id, event.currentTarget)}
             className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-left transition hover:border-[var(--brand-border)] hover:bg-[var(--brand-bg)]"
           >
             <div className="flex items-center justify-between gap-2">
@@ -502,7 +545,7 @@ function PriorityColumn({
                 {item.rank ? `${item.rank}. ` : ''}{item.term || '待命名节点'}
               </span>
               <span className="shrink-0 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-0.5 text-[11px] text-[var(--text-tertiary)]">
-                {item.evidence_count || 0} 条
+                {nodeCountPhrase(item, item.evidence_count || 0)}
               </span>
             </div>
             <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-secondary)]">
@@ -524,7 +567,22 @@ function priorityItemsOrFallback(
   nodes: OntologyAssociationCircleNode[],
   focusType: OntologyAssociationCirclePriorityItem['focus_type'],
 ): OntologyAssociationCirclePriorityItem[] {
-  if (Array.isArray(items) && items.length) return items.slice(0, 3);
+  if (Array.isArray(items) && items.length) {
+    return items.slice(0, 3).map((item) => {
+      const matchingNode = nodes.find((node) => (
+        (item.node_id && node.node_id === item.node_id)
+        || (item.term && node.term === item.term)
+      ));
+      if (!matchingNode) return item;
+      return {
+        ...item,
+        evidence_count: nodeEvidenceCount(matchingNode),
+        answer_refs: matchingNode.answer_refs,
+        answer_count_is_exact: matchingNode.answer_count_is_exact,
+        count_semantics: matchingNode.count_semantics,
+      };
+    });
+  }
   return nodes.slice(0, 3).map((node, index) => ({
     rank: index + 1,
     node_id: node.node_id,
@@ -533,6 +591,9 @@ function priorityItemsOrFallback(
     business_tag: node.business_tag,
     score: node.gravity_score || node.closeness_score || node.association_score,
     evidence_count: nodeEvidenceCount(node),
+    answer_refs: node.answer_refs,
+    answer_count_is_exact: node.answer_count_is_exact,
+    count_semantics: node.count_semantics,
     platform_count: nodePlatformCount(node),
     scene_hint: (node.primary_opportunity_points || [])[0] || '',
     recommended_action: focusType === 'risk' ? '先看原文语境和澄清证据' : '补问题和证据',
@@ -568,16 +629,14 @@ function OrbitMapReadingGuide({ mapMode }: { mapMode: AssociationMapMode }) {
     );
   }
   return (
-    <div className="mt-3 grid max-w-5xl gap-2 text-xs text-[var(--text-secondary)] xl:grid-cols-2">
-      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 leading-5">
-        <span className="font-semibold text-[var(--text-primary)]">读图：</span>
-        轨道越靠近中心，回答越容易把词带回品牌。悬停轨道带临时聚焦，点击轨道锁定，点击节点查看关系证据。
-      </div>
-      <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2">
-        <OrbitGuidePill label="绿" text="稳定轨" tone="strong" />
-        <OrbitGuidePill label="黄" text="机会轨" tone="growth" />
-        <OrbitGuidePill label="灰" text="观察轨" tone="story" />
-        <OrbitGuidePill label="红" text="风险关系" tone="risk" />
+    <div className="mt-2 flex max-w-5xl flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+      <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5">
+        <OrbitGuidePill label="稳定" text="已绑定" tone="strong" />
+        <OrbitGuidePill label="机会" text="可拉近" tone="growth" />
+        <OrbitGuidePill label="观察" text="待补证" tone="story" />
+        <OrbitGuidePill label="战略" text="方形" tone="strong" marker="square" />
+        <OrbitGuidePill label="回答" text="圆形" marker="circle" />
+        <OrbitGuidePill label="大小" text="节点出现量" marker="scale" />
       </div>
     </div>
   );
@@ -587,15 +646,28 @@ function OrbitGuidePill({
   label,
   text,
   tone = 'neutral',
+  marker = 'circle',
 }: {
   label: string;
   text: string;
   tone?: 'strong' | 'growth' | 'story' | 'risk' | 'neutral';
+  marker?: 'circle' | 'square' | 'scale';
 }) {
   const color = orbitGuideToneColor(tone);
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 py-1">
-      <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+      {marker === 'scale' ? (
+        <span className="inline-flex h-3 w-4 items-end justify-center gap-0.5" aria-hidden="true">
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+          <span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />
+        </span>
+      ) : (
+        <span
+          className="h-2.5 w-2.5"
+          style={{ background: color, borderRadius: marker === 'square' ? '3px' : '9999px' }}
+          aria-hidden="true"
+        />
+      )}
       <span className="font-medium" style={{ color }}>{label}</span>
       <span>{text}</span>
     </span>
@@ -615,21 +687,17 @@ function AssociationNodeFilterBar({
   activeFilters,
   totalCount,
   visibleCount,
-  riskCount,
   previewFilter,
   onChange,
   onPreviewChange,
-  onOpenRiskView,
 }: {
   options: AssociationNodeFilterOption[];
   activeFilters: AssociationNodeFilterKey[];
   totalCount: number;
   visibleCount: number;
-  riskCount: number;
   previewFilter: AssociationNodeFilterKey | null;
   onChange: (filters: AssociationNodeFilterKey[]) => void;
   onPreviewChange: (filter: AssociationNodeFilterKey | null) => void;
-  onOpenRiskView: () => void;
 }) {
   const allActive = activeFilters.length === 0;
   const toggleFilter = (key: AssociationNodeFilterKey) => {
@@ -664,9 +732,9 @@ function AssociationNodeFilterBar({
             aria-pressed={active}
             disabled={!option.count}
             title={option.hint}
-            onMouseEnter={() => onPreviewChange(option.key)}
+            onMouseEnter={() => onPreviewChange(active ? null : option.key)}
             onMouseLeave={() => onPreviewChange(null)}
-            onFocus={() => onPreviewChange(option.key)}
+            onFocus={() => onPreviewChange(active ? null : option.key)}
             onBlur={() => onPreviewChange(null)}
             onClick={() => toggleFilter(option.key)}
             className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${
@@ -681,20 +749,41 @@ function AssociationNodeFilterBar({
           </button>
         );
       })}
+      <span className="ml-auto text-[var(--text-secondary)]">重点标注 {visibleCount} / 全部节点 {totalCount}</span>
+    </div>
+  );
+}
+
+function AssociationMapModeControl({
+  mode,
+  riskCount,
+  onChange,
+}: {
+  mode: AssociationMapMode;
+  riskCount: number;
+  onChange: (mode: AssociationMapMode) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-1" aria-label="图谱模式">
       <button
         type="button"
-        disabled={!riskCount}
-        title="进入风险认知关系图"
-        onClick={onOpenRiskView}
-        className="rounded-full border px-2.5 py-1 font-medium text-[var(--evidence-risk)] transition disabled:cursor-not-allowed disabled:opacity-45"
-        style={{
-          borderColor: 'color-mix(in srgb, var(--evidence-risk) 30%, var(--border-subtle) 70%)',
-          background: 'var(--bg-primary)',
-        }}
+        aria-pressed={mode === 'associations'}
+        onClick={() => onChange('associations')}
+        className={`inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition duration-200 ease-out ${mode === 'associations' ? 'bg-[var(--bg-primary)] text-[var(--brand-primary)] shadow-sm' : 'text-[var(--text-secondary)]'}`}
       >
-        风险关系 {riskCount}
+        <Orbit size={14} strokeWidth={1.8} />
+        联想总览
       </button>
-      <span className="ml-auto text-[var(--text-tertiary)]">显示 {visibleCount} / {totalCount}</span>
+      <button
+        type="button"
+        aria-pressed={mode === 'risk'}
+        disabled={!riskCount}
+        onClick={() => onChange('risk')}
+        className={`inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition duration-200 ease-out disabled:cursor-not-allowed disabled:opacity-45 ${mode === 'risk' ? 'bg-[var(--bg-primary)] text-[var(--evidence-risk)] shadow-sm' : 'text-[var(--text-secondary)]'}`}
+      >
+        <ShieldAlert size={14} strokeWidth={1.8} />
+        风险与竞争 {riskCount}
+      </button>
     </div>
   );
 }
@@ -759,14 +848,13 @@ function CommercialOrbitMap({
   liveProgressMessage,
   liveCurrentStage,
   selectedNodeId,
+  restoreExternalFocus,
   isLivePreview,
   onSelectNode,
   onOpenRiskView,
   onExitRiskView,
   activeTrackFilter,
   hoverTrackFilter,
-  onHoverTrackFilterChange,
-  onTrackFilterChange,
 }: {
   centerTerm: string;
   groups: AssociationMapGroup[];
@@ -784,74 +872,167 @@ function CommercialOrbitMap({
   liveProgressMessage?: string | null;
   liveCurrentStage?: string | null;
   selectedNodeId: string | null;
+  restoreExternalFocus: () => boolean;
   isLivePreview?: boolean;
   onSelectNode: (nodeId: string | null) => void;
   onOpenRiskView: () => void;
   onExitRiskView: () => void;
   activeTrackFilter: AssociationNodeFilterKey | null;
   hoverTrackFilter: AssociationNodeFilterKey | null;
-  onHoverTrackFilterChange: (track: AssociationNodeFilterKey | null) => void;
-  onTrackFilterChange: (track: AssociationNodeFilterKey) => void;
 }) {
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const [mapSize, setMapSize] = useState({ width: 1440, height: 680 });
+  useEffect(() => {
+    const element = mapRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setMapSize({ width, height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const collisionXScale = Math.min(1, mapSize.height / Math.max(1, mapSize.width));
+  const collisionMinGap = clampNumber(4800 / Math.max(1, mapSize.height), 7, 13);
   const entries = mapMode === 'risk'
     ? buildRiskMapEntries(riskNodes)
-    : buildCommercialOrbitEntries(groups, showDefaultRiskNodes ? riskNodes : []);
+    : buildCommercialOrbitEntries(
+        groups,
+        showDefaultRiskNodes ? riskNodes : [],
+        collisionXScale,
+        collisionMinGap,
+      );
   const focusNodeId = selectedNodeId || focusNode?.node_id || null;
   const isRiskMode = mapMode === 'risk';
   const isSpatialMode = !isRiskMode && viewMode === 'spatial';
-  const focusTrackFilter = hoverTrackFilter || activeTrackFilter;
-  const focusGroupKey = trackFilterToGroupKey(focusTrackFilter);
+  const trackBandFocusFilter = activeTrackFilter || hoverTrackFilter;
+  const focusTrackFilter = activeTrackFilter;
+  const focusGroupKey = trackFilterToGroupKey(activeTrackFilter);
   const selectedFocusNodeId = selectedNodeId || null;
   const selectedEntry = selectedNodeId
     ? entries.find((entry) => entry.node.node_id === selectedNodeId) || null
     : null;
+  const overviewHighlightedNodeIds = new Set(
+    [...entries]
+      .sort((left, right) => (
+        nodeEvidenceCount(right.node) * 2 + nodeClosenessValue(right.node)
+        - nodeEvidenceCount(left.node) * 2 - nodeClosenessValue(left.node)
+      ))
+      .slice(0, DEFAULT_OVERVIEW_HIGHLIGHT_LIMIT)
+      .map((entry) => entry.node.node_id),
+  );
+  const focusedTrackLabelNodeIds = new Set(
+    focusGroupKey
+      ? entries
+          .filter((entry) => entry.groupKey === focusGroupKey)
+          .sort((left, right) => (
+            nodeEvidenceCount(right.node) * 2 + nodeClosenessValue(right.node)
+            - nodeEvidenceCount(left.node) * 2 - nodeClosenessValue(left.node)
+          ))
+          .slice(0, focusGroupKey === 'strong' ? undefined : FOCUSED_TRACK_LABEL_LIMIT)
+          .map((entry) => entry.node.node_id)
+      : [],
+  );
+  const [keyboardNodeId, setKeyboardNodeId] = useState<string | null>(null);
+  const keyboardEntryIds = entries
+    .filter((entry) => {
+      const focused = entry.node.node_id === selectedFocusNodeId;
+      const trackFocused = orbitFocusedEntry(entry, focusGroupKey);
+      const mutedByTrack = Boolean(focusTrackFilter) && !trackFocused;
+      const mutedByOverview = !isRiskMode
+        && !focusTrackFilter
+        && !focused
+        && !overviewHighlightedNodeIds.has(entry.node.node_id);
+      return !mutedByTrack && !mutedByOverview;
+    })
+    .map((entry) => entry.node.node_id);
+  const activeKeyboardNodeId = keyboardEntryIds.includes(keyboardNodeId || '')
+    ? keyboardNodeId
+    : selectedFocusNodeId && keyboardEntryIds.includes(selectedFocusNodeId)
+      ? selectedFocusNodeId
+      : keyboardEntryIds[0] || null;
+  const moveKeyboardFocus = (currentNodeId: string, direction: number | 'first' | 'last') => {
+    const currentIndex = Math.max(0, keyboardEntryIds.indexOf(currentNodeId));
+    const nextIndex = direction === 'first'
+      ? 0
+      : direction === 'last'
+        ? keyboardEntryIds.length - 1
+        : (currentIndex + direction + keyboardEntryIds.length) % keyboardEntryIds.length;
+    const nextNodeId = keyboardEntryIds[nextIndex];
+    if (!nextNodeId) return;
+    setKeyboardNodeId(nextNodeId);
+    window.requestAnimationFrame(() => {
+      const buttons = mapRef.current?.querySelectorAll<HTMLButtonElement>('[data-amway-orbit-node="true"]');
+      Array.from(buttons || []).find((button) => button.dataset.nodeId === nextNodeId)?.focus();
+    });
+  };
+  const canvasWidthPercent = selectedEntry ? 64 : 100;
+  const associationXScale = Math.min(
+    1,
+    mapSize.height / Math.max(1, mapSize.width * canvasWidthPercent / 100),
+  );
   const selectedNodeForInsight = selectedEntry?.node || null;
+  const selectedNodeTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const closeNodeInsight = () => {
+    const mapFocusTarget = selectedNodeTriggerRef.current;
+    onSelectNode(null);
+    window.requestAnimationFrame(() => {
+      if (!restoreExternalFocus()) mapFocusTarget?.focus();
+    });
+  };
   const liveStats = readLiveExtractionStats(sampleScope);
   const liveSamples = isLivePreview
     ? buildLiveExtractionStreamSamples(sourceAppendix, evidenceSamples).slice(0, 4)
     : [];
   return (
     <div
+      ref={mapRef}
       data-amway-orbit-map="true"
-      className={`relative min-h-[720px] overflow-hidden bg-[var(--bg-secondary)] lg:min-h-[780px] 2xl:min-h-[860px] ${
+      className={`amway-orbit-surface relative min-h-[380px] overflow-hidden lg:min-h-[640px] 2xl:min-h-[680px] ${
         isSpatialMode ? 'isolate' : ''
       }`}
       style={isSpatialMode ? { perspective: '1200px' } : undefined}
     >
       <OrbitLiveAnimationStyle />
+      <p className="sr-only">图谱重点节点可用方向键、Home 和 End 键移动。</p>
       <svg
-        className="absolute inset-0 h-full w-full"
+        className="pointer-events-none absolute inset-y-0 left-0 h-full"
+        style={{ width: `${canvasWidthPercent}%` }}
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
         aria-hidden="true"
       >
-        <defs>
-          <radialGradient id="amway-orbit-core" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="var(--brand-bg)" stopOpacity="0.72" />
-            <stop offset="64%" stopColor="var(--brand-bg)" stopOpacity="0.26" />
-            <stop offset="100%" stopColor="var(--bg-secondary)" stopOpacity="0" />
-          </radialGradient>
-        </defs>
         {isRiskMode ? (
           <>
-            <line x1="50" y1="39" x2="50" y2="57" stroke="var(--error)" strokeWidth="0.34" strokeDasharray="1.2 1.2" opacity="0.58" />
+            <line
+              x1="50"
+              y1="30"
+              x2="50"
+              y2="61"
+              stroke="var(--error)"
+              strokeWidth={selectedFocusNodeId ? 0.42 : 0.28}
+              strokeDasharray={selectedFocusNodeId ? undefined : '1.2 1.2'}
+              opacity={selectedFocusNodeId ? 0.86 : 0.62}
+            />
             {entries.map((entry) => (
               <line
                 key={`risk-link-${entry.node.node_id}`}
+                className={entry.node.node_id === selectedFocusNodeId ? 'amway-orbit-link-active' : undefined}
+                pathLength="1"
                 x1="50"
-                y1="57"
+                y1="61"
                 x2={entry.left}
                 y2={entry.top}
                 stroke="var(--error)"
-                strokeWidth={entry.node.node_id === selectedFocusNodeId ? 0.32 : 0.12}
+                strokeWidth={entry.node.node_id === selectedFocusNodeId ? 0.4 : 0.17}
                 strokeDasharray={entry.node.node_id === selectedFocusNodeId ? undefined : '0.8 1.2'}
-                opacity={entry.node.node_id === selectedFocusNodeId ? 0.58 : 0.08}
+                opacity={entry.node.node_id === selectedFocusNodeId ? 0.82 : 0.12}
               />
             ))}
           </>
         ) : isSpatialMode ? (
           <>
-            <ellipse cx="50" cy="53" rx="21" ry="7.2" fill="url(#amway-orbit-core)" stroke="var(--brand-border)" strokeWidth="0.2" />
+            <ellipse cx="50" cy="53" rx="21" ry="7.2" fill="var(--brand-bg)" fillOpacity="0.48" stroke="var(--brand-border)" strokeWidth="0.2" />
             <ellipse cx="50" cy="53" rx="24" ry="8.4" fill="none" stroke="var(--brand-border)" strokeOpacity="0.7" strokeWidth="0.18" />
             <ellipse cx="50" cy="53" rx="35" ry="12.3" fill="none" stroke="var(--border-subtle)" strokeWidth="0.15" strokeDasharray="0.8 1" />
             <ellipse cx="50" cy="53" rx="47" ry="16.8" fill="none" stroke="var(--border-subtle)" strokeWidth="0.15" />
@@ -871,99 +1052,78 @@ function CommercialOrbitMap({
           </>
         ) : (
           <>
-            <ellipse cx="50" cy="50" rx="22" ry="16" fill="url(#amway-orbit-core)" stroke="var(--brand-border)" strokeWidth="0.18" pointerEvents="none" />
+            <ellipse cx="50" cy="50" rx={22 * associationXScale} ry="22" fill="var(--brand-bg)" fillOpacity="0.42" stroke="var(--brand-border)" strokeWidth="0.18" pointerEvents="none" />
             <OrbitTrackBand
               track="watch"
-              rx={47}
-              ry={33.8}
-              strokeWidth={5.4}
-              focusTrackFilter={focusTrackFilter}
+              rx={47 * associationXScale}
+              ry={47}
+              strokeWidth={4.2}
+              focusTrackFilter={trackBandFocusFilter}
             />
             <OrbitTrackBand
               track="opportunity"
-              rx={35}
-              ry={25.2}
-              strokeWidth={4.9}
-              focusTrackFilter={focusTrackFilter}
+              rx={35 * associationXScale}
+              ry={35}
+              strokeWidth={3.8}
+              focusTrackFilter={trackBandFocusFilter}
             />
             <OrbitTrackBand
               track="stable"
-              rx={24}
-              ry={17.3}
-              strokeWidth={4.4}
-              focusTrackFilter={focusTrackFilter}
+              rx={24 * associationXScale}
+              ry={24}
+              strokeWidth={3.4}
+              focusTrackFilter={trackBandFocusFilter}
             />
-            <OrbitTrackHitEllipse
-              track="watch"
-              rx={47}
-              ry={33.8}
-              activeTrackFilter={activeTrackFilter}
-              onHoverChange={onHoverTrackFilterChange}
-              onTrackFilterChange={onTrackFilterChange}
-            />
-            <OrbitTrackHitEllipse
-              track="opportunity"
-              rx={35}
-              ry={25.2}
-              activeTrackFilter={activeTrackFilter}
-              onHoverChange={onHoverTrackFilterChange}
-              onTrackFilterChange={onTrackFilterChange}
-            />
-            <OrbitTrackHitEllipse
-              track="stable"
-              rx={24}
-              ry={17.3}
-              activeTrackFilter={activeTrackFilter}
-              onHoverChange={onHoverTrackFilterChange}
-              onTrackFilterChange={onTrackFilterChange}
-            />
-            {entries.map((entry) => (
-              <line
-                key={`ray-${entry.node.node_id}`}
-                x1="50"
-                y1="50"
-                x2={entry.left}
-                y2={entry.top}
-                stroke={entry.node.node_id === selectedFocusNodeId ? selectedRelationLineColor(entry.groupKey) : 'transparent'}
-                strokeWidth={entry.node.node_id === selectedFocusNodeId ? 0.34 : 0}
-                opacity={entry.node.node_id === selectedFocusNodeId ? 0.72 : 0}
-                pointerEvents="none"
-              />
-            ))}
+            {entries.map((entry) => {
+              const position = orbitScreenPosition(entry, associationXScale, false);
+              return (
+                <line
+                  key={`ray-${entry.node.node_id}`}
+                  className={entry.node.node_id === selectedFocusNodeId ? 'amway-orbit-link-active' : undefined}
+                  pathLength="1"
+                  x1="50"
+                  y1="50"
+                  x2={position.left}
+                  y2={position.top}
+                  stroke={entry.node.node_id === selectedFocusNodeId ? selectedRelationLineColor(entry.groupKey) : 'transparent'}
+                  strokeWidth={entry.node.node_id === selectedFocusNodeId ? 0.34 : 0}
+                  opacity={entry.node.node_id === selectedFocusNodeId ? 0.72 : 0}
+                  pointerEvents="none"
+                />
+              );
+            })}
           </>
         )}
       </svg>
       <button
         type="button"
         onClick={isRiskMode ? onExitRiskView : () => onSelectNode(null)}
-        className={`absolute left-1/2 z-20 flex h-40 w-40 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border-2 border-[var(--brand-primary)] bg-[var(--brand-bg)] text-center shadow-sm ${
-          isRiskMode ? 'top-[39%]' : isSpatialMode ? 'top-[53%]' : 'top-1/2'
+        className={`absolute z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border-2 border-[var(--brand-primary)] bg-[var(--brand-bg)] text-center shadow-sm ${
+          isRiskMode ? 'top-[30%] h-32 w-32' : isSpatialMode ? 'top-[53%] h-40 w-40' : 'top-1/2 h-40 w-40'
         }`}
+        style={{ left: `${canvasWidthPercent / 2}%` }}
       >
         <span className="text-xs text-[var(--brand-primary)]">中心品牌</span>
-        <span className="mt-2 text-3xl font-semibold text-[var(--brand-primary)]">{centerTerm}</span>
+        <span className="mt-2 text-3xl font-semibold tracking-tight text-[var(--brand-primary)]">{centerTerm}</span>
       </button>
       {isRiskMode ? (
         <>
           <div
-            aria-label={`风险认知中心，${riskNodes.length} 个节点`}
-            className="absolute left-1/2 top-[57%] z-20 flex h-28 w-28 -translate-x-1/2 -translate-y-1/2 select-none flex-col items-center justify-center rounded-full border-2 border-[var(--error)] bg-[var(--bg-primary)] text-center text-[var(--error)] shadow-sm"
+            aria-label={`风险与竞争中心，${riskNodes.length} 个节点`}
+            className="absolute top-[61%] z-20 flex h-24 w-24 -translate-x-1/2 -translate-y-1/2 select-none flex-col items-center justify-center rounded-full border-2 border-[var(--error)] bg-[var(--bg-primary)] text-center text-[var(--error)] shadow-sm"
+            style={{ left: `${canvasWidthPercent / 2}%` }}
           >
-            <span className="text-xs">风险认知</span>
+            <span className="text-xs">风险与竞争</span>
             <span className="mt-1 text-2xl font-semibold">{riskNodes.length}</span>
             <span className="mt-1 text-[11px] text-[var(--text-tertiary)]">个节点</span>
-          </div>
-          <div className="absolute left-5 top-5 z-40 max-w-[280px] rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]/92 px-4 py-3 text-sm leading-6 text-[var(--text-secondary)] shadow-sm">
-            <p className="font-semibold text-[var(--error)]">风险关系读法</p>
-            <p className="mt-1">
-              先看外围风险词的分布，再点击具体风险词查看问题、平台和原文语境。
-            </p>
           </div>
           <button
             type="button"
             onClick={onExitRiskView}
-            className="absolute right-5 top-5 z-40 rounded-xl border border-[var(--brand-border)] bg-[var(--brand-bg)] px-4 py-2 text-sm font-semibold text-[var(--brand-primary)] shadow-sm hover:bg-[var(--bg-primary)]"
+            className="absolute right-5 top-5 z-40 inline-flex items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3.5 py-2 text-sm font-semibold text-[var(--text-secondary)] shadow-sm transition duration-200 ease-out hover:border-[var(--brand-border)] hover:text-[var(--brand-primary)]"
+            style={selectedNodeForInsight ? { right: 'calc(min(520px, 36vw) + 1.25rem)' } : undefined}
           >
+            <ArrowLeft size={15} strokeWidth={1.8} />
             退出风险聚焦
           </button>
         </>
@@ -974,11 +1134,11 @@ function CommercialOrbitMap({
               type="button"
               onClick={onOpenRiskView}
               className={`absolute left-[15%] top-[74%] flex h-24 w-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border-2 border-[var(--error)] bg-[var(--bg-primary)] text-center text-[var(--error)] shadow-sm transition hover:scale-105 hover:bg-[var(--bg-secondary)] ${
-                focusTrackFilter ? 'z-10 opacity-25 saturate-50' : 'z-30 opacity-100'
+                focusTrackFilter ? 'z-10 opacity-25 saturate-50' : 'z-50 opacity-100'
               }`}
-              title={`聚焦查看 ${riskNodes.length} 个风险认知节点`}
+              title={`聚焦查看 ${riskNodes.length} 个风险与竞争节点`}
             >
-              <span className="text-xs">风险认知</span>
+              <span className="text-xs">风险与竞争</span>
               <span className="mt-1 text-2xl font-semibold">{riskNodes.length}</span>
               <span className="mt-1 text-[11px] text-[var(--text-tertiary)]">聚焦查看</span>
             </button>
@@ -1005,47 +1165,89 @@ function CommercialOrbitMap({
         sourceAppendix={sourceAppendix}
         strategyTerms={strategyTerms}
         sampleScope={sampleScope}
-        onClose={() => onSelectNode(null)}
+        onClose={closeNodeInsight}
       />
       {entries.length ? entries.map((entry) => {
         const selected = selectedNodeId === entry.node.node_id;
         const focused = entry.node.node_id === selectedFocusNodeId;
         const trackFocused = orbitFocusedEntry(entry, focusGroupKey);
         const mutedByTrack = Boolean(focusTrackFilter) && !trackFocused;
+        const mutedByOverview = !isRiskMode
+          && !focusTrackFilter
+          && !focused
+          && !overviewHighlightedNodeIds.has(entry.node.node_id);
         const depth = isSpatialMode ? spatialDepthForEntry(entry) : 1;
         const origin = nodeOriginRead(entry.node, strategyTerms);
+        const position = orbitScreenPosition(entry, associationXScale, isRiskMode || isSpatialMode);
+        const labelVisible = focusGroupKey
+          ? focusedTrackLabelNodeIds.has(entry.node.node_id)
+          : entry.labelPriority;
         return (
           <button
             key={entry.node.node_id}
             type="button"
+            data-amway-orbit-node="true"
+            data-node-id={entry.node.node_id}
+            tabIndex={mutedByTrack || mutedByOverview || entry.node.node_id !== activeKeyboardNodeId ? -1 : 0}
+            aria-hidden={mutedByTrack || mutedByOverview ? true : undefined}
             onFocus={(event) => {
-              onSelectNode(entry.node.node_id);
-              scrollOrbitMapIntoView(event.currentTarget);
+              selectedNodeTriggerRef.current = event.currentTarget;
+              setKeyboardNodeId(entry.node.node_id);
+            }}
+            onKeyDown={(event) => {
+              const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                ? 1
+                : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                  ? -1
+                  : event.key === 'Home'
+                    ? 'first'
+                    : event.key === 'End'
+                      ? 'last'
+                      : null;
+              if (direction === null) return;
+              event.preventDefault();
+              moveKeyboardFocus(entry.node.node_id, direction);
             }}
             onClick={(event) => {
+              selectedNodeTriggerRef.current = event.currentTarget;
               onSelectNode(entry.node.node_id);
               scrollOrbitMapIntoView(event.currentTarget);
             }}
-            className={`group absolute z-30 h-11 w-11 -translate-x-1/2 -translate-y-1/2 rounded-full transition duration-200 hover:z-40 hover:scale-105 ${
-              selected ? 'ring-2 ring-[var(--brand-border)] ring-offset-2 ring-offset-[var(--bg-secondary)]' : ''
-            } ${mutedByTrack ? 'pointer-events-none' : ''} ${isLivePreview ? 'amway-orbit-live-node' : ''}`}
+            className={`amway-orbit-node group absolute z-30 rounded-full transition-[width,height,transform,opacity,filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:z-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--brand-primary)] ${
+              focusTrackFilter ? 'h-8 w-8' : 'h-11 w-11'
+            } ${
+              selected
+                ? isRiskMode
+                  ? 'ring-2 ring-[var(--error)] ring-offset-2 ring-offset-[var(--bg-secondary)]'
+                  : 'ring-2 ring-[var(--brand-border)] ring-offset-2 ring-offset-[var(--bg-secondary)]'
+                : ''
+            } ${mutedByTrack || mutedByOverview ? 'pointer-events-none' : ''} ${isLivePreview ? 'amway-orbit-live-node' : ''}`}
             style={{
-              left: `${entry.left}%`,
-              top: `${entry.top}%`,
-              zIndex: mutedByTrack ? 18 : isSpatialMode ? Math.round(20 + entry.top) : undefined,
-              transform: `translate(-50%, -50%) scale(${depth})`,
+              left: `${position.left * canvasWidthPercent / 100}%`,
+              top: `${position.top}%`,
+              zIndex: mutedByTrack || mutedByOverview
+                ? 10
+                : selected
+                  ? 40
+                  : isSpatialMode
+                    ? Math.round(20 + entry.top)
+                    : 30,
+              transform: `translate(-50%, -50%) scale(${depth * (selected ? 1.06 : 1)})`,
               animationDelay: isLivePreview ? `${nodeAnimationDelay(entry.node.node_id)}ms` : undefined,
-              opacity: mutedByTrack ? 0 : 1,
+              opacity: mutedByTrack ? 0.14 : mutedByOverview ? 0.2 : 1,
             }}
             title={`${entry.node.term}：${relationshipRead(entry.node).headline}`}
           >
             <span
-              className="absolute left-1/2 top-1/2 rounded-full shadow-sm transition duration-200 group-hover:shadow-md"
+              className="pointer-events-none absolute left-1/2 top-1/2 rounded-full shadow-sm transition-[box-shadow,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:shadow-md"
               style={{
                 transform: 'translate(-50%, -50%)',
                 width: entry.size,
                 height: entry.size,
-                background: orbitNodeFillColor(entry, focusGroupKey),
+                borderRadius: origin.kind === 'strategy' ? '28%' : '9999px',
+                background: focused
+                  ? orbitToneColor(entry.groupKey)
+                  : orbitNodeFillColor(entry, focusGroupKey),
                 opacity: focused || trackFocused ? 1 : 0.76,
                 boxShadow: focused
                   ? `0 0 0 8px ${orbitHaloColor(entry.groupKey)}`
@@ -1055,9 +1257,11 @@ function CommercialOrbitMap({
               }}
             />
             <span
-              className={`pointer-events-none absolute left-1/2 top-[calc(100%+6px)] inline-flex min-w-max -translate-x-1/2 items-center gap-1.5 rounded-full border bg-[var(--bg-primary)] px-2.5 py-1 text-xs font-medium shadow-sm transition duration-200 ${
-                !mutedByTrack && (focused || trackFocused || entry.labelPriority) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-              } hidden sm:inline-flex`}
+              className={`amway-orbit-node-label absolute left-1/2 top-[calc(100%+6px)] inline-flex min-w-max -translate-x-1/2 items-center gap-1.5 rounded-full border bg-[var(--bg-primary)] px-2.5 py-1 text-xs font-medium shadow-sm transition duration-200 ${
+                !mutedByTrack && (focused || labelVisible)
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100'
+              } pointer-events-none hidden sm:inline-flex`}
               style={{
                 borderColor: focused ? orbitToneColor(entry.groupKey) : 'var(--border-subtle)',
                 color: focused ? orbitToneColor(entry.groupKey) : 'var(--text-secondary)',
@@ -1090,6 +1294,34 @@ function CommercialOrbitMap({
 function OrbitLiveAnimationStyle() {
   return (
     <style>{`
+      .amway-orbit-surface {
+        background-color: var(--bg-primary);
+        background-image: radial-gradient(circle, color-mix(in srgb, var(--text-tertiary) 15%, transparent) 0 0.7px, transparent 0.8px);
+        background-size: 22px 22px;
+      }
+      .amway-orbit-surface::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 4%, transparent), color-mix(in srgb, var(--brand-bg) 18%, transparent));
+        opacity: 0.28;
+      }
+      @keyframes amwayOrbitLinkDraw {
+        from { stroke-dashoffset: 1; opacity: 0.22; }
+        to { stroke-dashoffset: 0; }
+      }
+      .amway-orbit-link-active {
+        stroke-dasharray: 1;
+        animation: amwayOrbitLinkDraw 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+      @keyframes amwayNodeInsightEnter {
+        from { opacity: 0; transform: translateX(18px); }
+        to { opacity: 1; transform: translateX(0); }
+      }
+      .amway-node-insight-enter {
+        animation: amwayNodeInsightEnter 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
       @keyframes amwayOrbitNodeIn {
         0% {
           opacity: 0;
@@ -1104,23 +1336,18 @@ function OrbitLiveAnimationStyle() {
           transform: translate(-50%, -50%) scale(1);
         }
       }
-      @keyframes amwayOrbitPulse {
-        0%, 100% {
-          box-shadow: 0 0 0 0 rgba(31, 122, 107, 0.18);
-        }
-        50% {
-          box-shadow: 0 0 0 9px rgba(31, 122, 107, 0);
-        }
-      }
       .amway-orbit-live-node {
         animation: amwayOrbitNodeIn 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }
-      .amway-orbit-live-node > span:first-child {
-        animation: amwayOrbitPulse 1600ms cubic-bezier(0.25, 1, 0.5, 1) infinite;
+      .amway-orbit-node:focus .amway-orbit-node-label {
+        opacity: 1 !important;
       }
       @media (prefers-reduced-motion: reduce) {
-        .amway-orbit-live-node,
-        .amway-orbit-live-node > span:first-child {
+        .amway-orbit-live-node {
+          animation: none !important;
+        }
+        .amway-orbit-link-active,
+        .amway-node-insight-enter {
           animation: none !important;
         }
       }
@@ -1156,6 +1383,7 @@ function OrbitTrackBand({
         strokeOpacity={faded ? 0.025 : active ? 0.18 : 0.07}
         strokeWidth={strokeWidth}
         pointerEvents="none"
+        style={{ transition: 'stroke-opacity 220ms cubic-bezier(0.22, 1, 0.36, 1)' }}
       />
       <ellipse
         cx="50"
@@ -1166,49 +1394,18 @@ function OrbitTrackBand({
         stroke={color}
         strokeOpacity={faded ? 0.05 : active ? 0.82 : 0.28}
         strokeWidth={active ? 0.34 : 0.16}
+        strokeDasharray={trackLinePattern(track)}
         pointerEvents="none"
+        style={{ transition: 'stroke-opacity 220ms cubic-bezier(0.22, 1, 0.36, 1)' }}
       />
     </>
   );
 }
 
-function OrbitTrackHitEllipse({
-  track,
-  rx,
-  ry,
-  activeTrackFilter,
-  onHoverChange,
-  onTrackFilterChange,
-}: {
-  track: AssociationNodeFilterKey;
-  rx: number;
-  ry: number;
-  activeTrackFilter: AssociationNodeFilterKey | null;
-  onHoverChange: (track: AssociationNodeFilterKey | null) => void;
-  onTrackFilterChange: (track: AssociationNodeFilterKey) => void;
-}) {
-  return (
-    <ellipse
-      cx="50"
-      cy="50"
-      rx={rx}
-      ry={ry}
-      fill="none"
-      stroke="transparent"
-      strokeWidth="7"
-      pointerEvents="stroke"
-      tabIndex={0}
-      role="button"
-      aria-pressed={activeTrackFilter === track}
-      aria-label={`聚焦${trackLabel(track)}`}
-      onMouseEnter={() => onHoverChange(track)}
-      onMouseLeave={() => onHoverChange(null)}
-      onFocus={() => onHoverChange(track)}
-      onBlur={() => onHoverChange(null)}
-      onClick={() => onTrackFilterChange(track)}
-      style={{ cursor: 'pointer', outline: 'none' }}
-    />
-  );
+function trackLinePattern(track: AssociationNodeFilterKey) {
+  if (track === 'opportunity') return '1.2 0.8';
+  if (track === 'watch') return '0.35 0.75';
+  return undefined;
 }
 
 function LiveExtractionMapPanel({
@@ -1264,7 +1461,7 @@ function LiveExtractionMapPanel({
           {samples.map((sample) => (
             <div key={sampleKey(sample)} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]/86 px-3 py-2 text-xs leading-5">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold text-[var(--text-primary)]">{sample.node_term || '新实体'}</span>
+                <span className="font-semibold text-[var(--text-primary)]">{commercialReportCopy(sample.node_term || '新实体')}</span>
                 <span className="text-[var(--text-tertiary)]">{platformLabel(sample.platform || '')}</span>
               </div>
               <p className="mt-1 max-h-10 overflow-hidden text-[var(--text-secondary)]">
@@ -1317,6 +1514,16 @@ function OrbitNodeInsightPanel({
   sampleScope: Record<string, unknown>;
   onClose: () => void;
 }) {
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!node) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    closeButtonRef.current?.focus();
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [node, onClose]);
   if (!node) {
     return null;
   }
@@ -1327,18 +1534,32 @@ function OrbitNodeInsightPanel({
   const questionCount = sampleQuestionCount(sampleScope);
   const totalAnswerCount = sampleAnswerCount(sampleScope);
   const mentionAnswerCount = nodeEvidenceCount(node) || evidence.length;
+  const mentionCountPhrase = nodeCountPhrase(node, mentionAnswerCount);
   const relatedQuestionCount = distinctEvidenceQuestionCount(evidence);
   const platformNames = nodePlatformNames(node, evidence);
   const platformSummaries = buildPlatformEvidenceSummaries(node, evidence);
   const sampledEvidence = sampleEvidenceAcrossPlatforms(evidence, 4);
   const hasLargeEvidenceSet = mentionAnswerCount > 5;
+  const scoreBreakdown = nodeScoreBreakdown(node);
+  const finalClosenessScore = scoreNumber(
+    node.closeness_score ?? node.association_score ?? node.gravity_score,
+  );
+  const rawClosenessScore = typeof node.raw_gravity_score === 'number'
+    ? scoreNumber(node.raw_gravity_score)
+    : null;
+  const calibrationDelta = rawClosenessScore === null
+    ? null
+    : finalClosenessScore - rawClosenessScore;
+  const competitionScoped = groupKey === 'risk' && isCompetitorNode(node);
+  const riskScoped = groupKey === 'risk' && !competitionScoped;
+  const usesContextPenalty = ['BrandStrategy', 'FourValue', 'FlowerDimension'].includes(String(node.entity_type || ''));
   return (
     <aside
-      className="absolute inset-4 z-50 overflow-hidden rounded-[22px] border border-[var(--border-subtle)] bg-[rgba(250,248,242,0.88)] shadow-sm lg:inset-7"
+      className="amway-node-insight-enter absolute inset-y-0 right-0 z-50 w-full max-w-[520px] overflow-hidden border-l border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-sm lg:w-[clamp(440px,36vw,520px)]"
       aria-label={`${node.term}节点解读`}
     >
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] bg-[rgba(250,248,242,0.72)] px-5 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] bg-[var(--bg-report)] px-5 py-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span
@@ -1353,15 +1574,20 @@ function OrbitNodeInsightPanel({
               </span>
               <span
                 className="rounded-full border px-2 py-1 text-xs font-medium"
-                style={orbitDistanceBandChipStyle(distanceBand)}
+                style={competitionScoped ? {
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--bg-secondary)',
+                  color: 'var(--text-secondary)',
+                } : orbitDistanceBandChipStyle(distanceBand)}
               >
-                {orbitDistanceBandLabel(distanceBand)}
+                {competitionScoped ? '竞品参照' : orbitDistanceBandLabel(distanceBand)}
               </span>
               <span className="text-xs text-[var(--text-tertiary)]">{relationshipRead(node).label}</span>
             </div>
             <h3 className="mt-2 truncate text-2xl font-semibold">{node.term}</h3>
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             aria-label="关闭节点解读"
             onClick={onClose}
@@ -1371,50 +1597,97 @@ function OrbitNodeInsightPanel({
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 gap-4 p-4 lg:grid-cols-[minmax(340px,440px)_minmax(0,1fr)]">
-          <div className="min-h-0 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]/95 p-5 shadow-sm">
-            <InsightSection
-              title={`它和${centerTerm}的关系`}
-              text={nodeBrandRelationText(node, centerTerm, origin)}
-            />
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-5 py-1">
+            <InsightLayer index="01" label="认知" title="关系意味着什么">
+              <p>{nodeBrandRelationText(node, centerTerm, origin)}</p>
+              <p className="mt-3 border-l-2 border-[var(--brand-primary)] pl-3 font-medium text-[var(--text-primary)]">
+                {nodeBrandImplicationText(node, centerTerm, origin)}
+              </p>
+            </InsightLayer>
 
-            <InsightSection
-              title="为什么在这个圈"
-              text={orbitBandExplanationText(node, distanceBand)}
-            />
+            <InsightLayer index="02" label="理知" title="如何计算并进入这条轨道">
+              <p>{orbitBandExplanationText(node, distanceBand)}</p>
+              {groupKey !== 'risk' ? (
+                <>
+                  <div className="mt-4 grid gap-2 rounded-lg bg-[var(--bg-secondary)] px-3 py-3 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+                    <div>
+                      <div className="text-xs text-[var(--text-tertiary)]">五项基础加权值</div>
+                      <div className="mt-1 text-lg font-semibold tabular-nums text-[var(--text-primary)]">
+                        {rawClosenessScore === null ? '历史数据未保存' : `${rawClosenessScore} / 100`}
+                      </div>
+                    </div>
+                    <span className="hidden text-[var(--text-tertiary)] sm:inline" aria-hidden="true">→</span>
+                    <div className="sm:text-right">
+                      <div className="text-xs text-[var(--text-tertiary)]">语境与样本校准后贴近值</div>
+                      <div className="mt-1 text-xl font-semibold tabular-nums text-[var(--brand-primary)]">
+                        {finalClosenessScore} / 100
+                      </div>
+                      <div className="text-xs text-[var(--text-tertiary)]">
+                        距离值 {scoreNumber(node.distance_score)}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
+                    基础加权值 = 回答频率 30% + 回答位置 20% + 品牌关系 20% + 场景覆盖 15% + 平台一致性 15%。
+                    {usesContextPenalty
+                      ? '战略类节点随后按回答语境与低样本置信度校准，得到最终贴近值。'
+                      : '该节点类型不使用语境惩罚；系统只在低样本时收紧置信度，语境计数用于解释而不直接改分。'}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
+                    {rawClosenessScore === null
+                      ? '这份历史产物未保存基础分，因此不反推校准差值；最终轨道以当次后端产物为准。'
+                      : `${usesContextPenalty ? '本次语境与样本校准差值' : '本次低样本校准差值'} ${calibrationDelta && calibrationDelta > 0 ? '+' : ''}${calibrationDelta || 0} 分；语境证据为支持 ${scoreNumber(node.supportive_evidence_count)}、质疑 ${scoreNumber(node.skeptical_evidence_count)}、风险 ${scoreNumber(node.risk_evidence_count)}、竞争 ${scoreNumber(node.competitive_evidence_count)} 条${usesContextPenalty ? '。' : '，仅用于解释。'}`}
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                    {scoreBreakdown.map((item) => (
+                      <div key={item.label} className="border-t border-[var(--border-subtle)] pt-2">
+                        <div className="text-[11px] text-[var(--text-tertiary)]">{item.label} · {item.weight}</div>
+                        <div className="mt-1 font-semibold tabular-nums text-[var(--text-primary)]">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="mt-4 rounded-lg bg-[var(--status-error-bg)] px-3 py-3 text-xs leading-5 text-[var(--text-secondary)]">
+                  {riskRoutingExplanationText(node, sampledEvidence.length > 0)}
+                </div>
+              )}
+            </InsightLayer>
 
-            <InsightSection
-              title="证据是否验证了它"
-              text={nodeEvidenceSummaryText({
-                term: node.term,
-                questionCount,
-                totalAnswerCount,
-                mentionAnswerCount,
-                relatedQuestionCount,
-                platformNames,
-              })}
-            />
-
-            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-              <InsightMetric label="样本问题" value={String(questionCount || '-')} />
-              <InsightMetric label="提及回答" value={String(mentionAnswerCount || '-')} />
-              <InsightMetric label="覆盖平台" value={String(platformNames.length || nodePlatformCount(node) || '-')} />
-            </div>
-
-            <InsightSection
-              title="这意味着什么"
-              text={nodeBrandImplicationText(node, centerTerm, origin)}
-              emphasized
-            />
+            <InsightLayer index="03" label="感知" title="具体证据数据">
+              <p>
+                {nodeEvidenceSummaryText({
+                  term: node.term,
+                  questionCount,
+                  totalAnswerCount,
+                  mentionAnswerCount,
+                  node,
+                  relatedQuestionCount,
+                  platformNames,
+                  riskScoped,
+                  competitionScoped,
+                })}
+              </p>
+              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                <InsightMetric label="样本问题" value={String(questionCount || '-')} />
+                <InsightMetric label={nodeCountMetricLabel(node)} value={String(mentionAnswerCount || '-')} />
+                <InsightMetric label="覆盖平台" value={String(platformNames.length || nodePlatformCount(node) || '-')} />
+              </div>
+            </InsightLayer>
           </div>
 
-          <div className="min-h-0 overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]/88 p-5 shadow-sm">
+          <div className="mt-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <div className="text-xs font-medium text-[var(--text-tertiary)]">平台倾向与抽样原文</div>
                 <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
                   {hasLargeEvidenceSet
-                    ? `${mentionAnswerCount} 条回答提及，先看平台分布，再看每个平台的代表性片段。`
+                    ? competitionScoped
+                      ? `${mentionCountPhrase}将它作为竞争或替代参照，先看平台分布，再看每个平台的代表性片段。`
+                      : riskScoped
+                      ? `${mentionCountPhrase}形成质疑或风险语境，先看平台分布，再看每个平台的代表性片段。`
+                      : `${mentionCountPhrase}，先看平台分布，再看每个平台的代表性片段。`
                     : '样本量较少，直接查看平台样例。'}
                 </p>
               </div>
@@ -1424,7 +1697,7 @@ function OrbitNodeInsightPanel({
             </div>
 
             {platformSummaries.length ? (
-              <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+              <div className="mt-4 grid grid-cols-2 gap-2">
                 {platformSummaries.map((item) => (
                   <div key={item.platform} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2">
                     <div className="flex items-center justify-between gap-2">
@@ -1474,29 +1747,79 @@ function OrbitNodeInsightPanel({
   );
 }
 
-function InsightSection({
+function InsightLayer({
+  index,
+  label,
   title,
-  text,
-  emphasized = false,
+  children,
 }: {
+  index: string;
+  label: string;
   title: string;
-  text: string;
-  emphasized?: boolean;
+  children: ReactNode;
 }) {
   return (
-    <section
-      className={`mt-4 rounded-xl px-3 py-2 text-sm leading-6 ${
-        emphasized
-          ? 'bg-[var(--brand-bg)] text-[var(--brand-primary)]'
-          : 'border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-primary)]'
-      }`}
-    >
-      <div className={`text-xs font-medium ${emphasized ? 'text-[var(--brand-primary)]' : 'text-[var(--text-tertiary)]'}`}>
-        {title}
+    <section className="border-t border-[var(--border-subtle)] py-5 first:border-t-0">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 w-7 shrink-0 text-[11px] font-semibold tabular-nums tracking-[0.14em] text-[var(--brand-primary)]">
+          {index}
+        </span>
+        <div>
+          <div className="text-[11px] font-semibold tracking-[0.16em] text-[var(--brand-primary)]">{label}</div>
+          <h4 className="mt-1 text-base font-semibold text-[var(--text-primary)]">{title}</h4>
+        </div>
       </div>
-      <p className="mt-1">{text}</p>
+      <div className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">{children}</div>
     </section>
   );
+}
+
+function nodeScoreBreakdown(node: OntologyAssociationCircleNode) {
+  const rows: Array<{ label: string; weight: string; score?: number }> = [
+    { label: '回答频率', weight: '30%', score: node.frequency_score },
+    { label: '回答位置', weight: '20%', score: node.position_score },
+    { label: '品牌关系', weight: '20%', score: node.relation_type_score },
+    { label: '场景覆盖', weight: '15%', score: node.scene_coverage_score },
+    { label: '平台一致', weight: '15%', score: node.model_consistency_score },
+  ];
+  return rows.map((row) => ({
+    ...row,
+    value: typeof row.score === 'number' ? String(Math.round(row.score)) : '-',
+  }));
+}
+
+function riskRoutingExplanationText(
+  node: OntologyAssociationCircleNode,
+  hasReadableEvidence: boolean,
+) {
+  const relationLabels: Record<string, string> = {
+    LINKED_TO_CENTER_BRAND: '连接中心品牌',
+    MENTIONED_IN_QUESTION: '问题中提及',
+    MENTIONED_IN_ANSWER: '回答中提及',
+    SUPPORTED_BY_SUBBRAND: '子品牌支撑',
+    SUPPORTED_BY_PRODUCT: '产品支撑',
+    COMPARED_WITH: '对比关系',
+    MAPS_TO_STRATEGY: '映射品牌战略',
+    MAPS_TO_FLOWER_DIMENSION: '映射美好生活维度',
+    BACKED_BY_EVIDENCE: '证据支撑',
+    CARRIED_BY_TOUCHPOINT: '触点承载',
+    NOT_CONNECTED: '尚未连接品牌',
+    MARKET_CONTEXT_ONLY: '仅市场语境',
+    RISKS_AS: '风险关联',
+    RISK_DENIED: '风险澄清',
+    COMPETES_WITH: '竞争参照',
+  };
+  const relations = Object.entries(node.relation_type_distribution || {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([key, count]) => `${relationLabels[key] || key} ${count} 次`)
+    .join('、');
+  const evidenceQualification = hasReadableEvidence
+    ? '下方保留了可核对的代表性原文。'
+    : '本期只保留统计关系，未保留可读原文，不能据此展示原文支持。';
+  if (isCompetitorNode(node)) {
+    return `竞争参照不按正向贴近值强弱分轨。系统依据竞品实体与 COMPETES_WITH 关系单独展示；本节点识别到${relations || '竞争或替代关系'}。${evidenceQualification}`;
+  }
+  return `风险节点不按正向贴近值强弱分轨。系统依据风险实体标记、回答关系类型与负向语境单独路由；本节点识别到${relations || '风险实体或语境信号'}。${evidenceQualification}`;
 }
 
 function InsightMetric({ label, value }: { label: string; value: string }) {
@@ -1520,9 +1843,23 @@ interface CommercialOrbitEntry {
   labelPriority: boolean;
 }
 
+function orbitScreenPosition(
+  entry: CommercialOrbitEntry,
+  associationXScale: number,
+  isRiskMode: boolean,
+) {
+  if (isRiskMode) return { left: entry.left, top: entry.top };
+  return {
+    left: 50 + (entry.left - 50) * associationXScale,
+    top: entry.top,
+  };
+}
+
 function buildCommercialOrbitEntries(
   groups: AssociationMapGroup[],
   defaultRiskNodes: OntologyAssociationCircleNode[] = [],
+  associationXScale = 1,
+  collisionMinGap = 6.2,
 ): CommercialOrbitEntry[] {
   const rawEntries: Array<{
     node: OntologyAssociationCircleNode;
@@ -1543,60 +1880,75 @@ function buildCommercialOrbitEntries(
       groupIndex: index,
     })),
   ];
-  const totalEntries = Math.max(rawEntries.length, 1);
-  const entries = rawEntries.map(({ node, groupKey, groupIndex }, index) => {
+  const layoutEntries = [...rawEntries].sort((left, right) => (
+    nodeEvidenceCount(right.node) * 2 + nodeClosenessValue(right.node)
+    - nodeEvidenceCount(left.node) * 2 - nodeClosenessValue(left.node)
+  ));
+  const totalEntries = Math.max(layoutEntries.length, 1);
+  const defaultLabels = new Set(
+    layoutEntries
+      .slice(0, 16)
+      .map((entry) => entry.node),
+  );
+  const entries = layoutEntries.map(({ node, groupKey, groupIndex }, index) => {
     const angle = orbitDistributedAngle(groupKey, index, groupIndex, totalEntries);
     const distanceBand = orbitDistanceBandForNode(groupKey, node);
     const radius = orbitRadiusForNode(distanceBand, node, groupIndex);
     const radians = (angle * Math.PI) / 180;
-    const evidence = nodeEvidenceCount(node);
-    const gravity = nodeClosenessValue(node);
     const size = nodeVisualSize(node, groupKey);
     return {
       node,
       groupKey,
       distanceBand,
       left: clampNumber(50 + Math.cos(radians) * radius, 2, 98),
-      top: clampNumber(50 + Math.sin(radians) * radius * 0.72, 8, 92),
+      top: clampNumber(50 + Math.sin(radians) * radius, 2, 98),
       angle,
       radius,
       size,
-      labelPriority: distanceBand === 'risk'
-        ? groupIndex < 2
-        : groupIndex < 3 || gravity >= 58 || evidence >= 20 || distanceBand === 'near',
+      labelPriority: defaultLabels.has(node),
     };
   });
   return separateOrbitEntries(entries, {
-    minGap: 6.2,
-    maxIterations: 10,
+    minGap: collisionMinGap,
+    maxIterations: 18,
     leftBounds: [2, 98],
-    topBounds: [8, 92],
+    topBounds: [2, 98],
+    xScale: associationXScale,
   });
 }
 
 function buildRiskMapEntries(riskNodes: OntologyAssociationCircleNode[]): CommercialOrbitEntry[] {
   const total = Math.max(riskNodes.length, 1);
+  const sideCount = Math.ceil(total / 2);
+  const defaultLabels = new Set(
+    [...riskNodes]
+      .sort((left, right) => nodeEvidenceCount(right) - nodeEvidenceCount(left))
+      .slice(0, 16),
+  );
   const entries: CommercialOrbitEntry[] = riskNodes.map((node, index) => {
-    const angle = total > 1 ? 18 + (144 * index) / (total - 1) : 90;
-    const radians = (angle * Math.PI) / 180;
-    const radius = 29 + [0, 5.2, 2.6, 7][index % 4];
+    const side = index % 2 === 0 ? -1 : 1;
+    const row = Math.floor(index / 2);
+    const progress = sideCount > 1 ? row / (sideCount - 1) : 0.5;
+    const horizontalOffset = 29 + Math.sin(progress * Math.PI) * 5;
+    const angle = side < 0 ? 180 : 0;
+    const radius = horizontalOffset;
     return {
       node,
       groupKey: 'risk',
       distanceBand: 'risk',
-      left: clampNumber(50 + Math.cos(radians) * radius, 12, 88),
-      top: clampNumber(57 + Math.sin(radians) * radius * 0.72, 60, 86),
+      left: clampNumber(50 + side * horizontalOffset, 8, 92),
+      top: clampNumber(33 + progress * 52, 30, 87),
       angle,
       radius,
       size: 13 + Math.min(18, Math.max(0, nodeEvidenceCount(node) / 2.6)),
-      labelPriority: index < 8 || nodeEvidenceCount(node) >= 20,
+      labelPriority: defaultLabels.has(node),
     };
   });
   return separateOrbitEntries(entries, {
     minGap: 6.2,
     maxIterations: 10,
-    leftBounds: [10, 90],
-    topBounds: [58, 88],
+    leftBounds: [7, 93],
+    topBounds: [29, 88],
   });
 }
 
@@ -1644,7 +1996,7 @@ function orbitDistanceBandForNode(groupKey: AssociationMapGroupKey, node: Ontolo
 
 function orbitRadiusForNode(distanceBand: OrbitDistanceBand, node: OntologyAssociationCircleNode, index: number) {
   const distance = effectiveDistanceForBand(node, distanceBand);
-  const lane = orbitRadiusLane(distanceBand, index);
+  const lane = distanceBand === 'risk' ? orbitRadiusLane(distanceBand, index) : 0;
   if (distanceBand === 'risk') {
     const evidence = nodeEvidenceCount(node);
     const platform = nodePlatformCount(node);
@@ -1686,6 +2038,7 @@ function separateOrbitEntries(
     maxIterations: number;
     leftBounds: [number, number];
     topBounds: [number, number];
+    xScale?: number;
   },
 ) {
   const placed: CommercialOrbitEntry[] = [];
@@ -1694,15 +2047,20 @@ function separateOrbitEntries(
     for (let attempt = 0; attempt < options.maxIterations; attempt += 1) {
       let adjusted = false;
       placed.forEach((previous) => {
-        const distance = orbitEntryDistance(next, previous);
+        const distance = orbitEntryDistance(next, previous, options.xScale);
         const requiredGap = orbitEntryRequiredGap(next, previous, options.minGap);
         if (distance >= requiredGap) return;
         const fallbackAngle = ((placed.length + attempt + 1) * 43 * Math.PI) / 180;
-        const dx = next.left - previous.left || Math.cos(fallbackAngle);
+        const xScale = options.xScale || 1;
+        const dx = (next.left - previous.left) * xScale || Math.cos(fallbackAngle);
         const dy = next.top - previous.top || Math.sin(fallbackAngle);
         const length = Math.max(0.01, Math.sqrt(dx * dx + dy * dy));
         const push = requiredGap - distance + 0.55;
-        const nextLeft = clampNumber(next.left + (dx / length) * push, options.leftBounds[0], options.leftBounds[1]);
+        const nextLeft = clampNumber(
+          next.left + (dx / length) * push / xScale,
+          options.leftBounds[0],
+          options.leftBounds[1],
+        );
         const nextTop = clampNumber(next.top + (dy / length) * push * 0.86, options.topBounds[0], options.topBounds[1]);
         const atHorizontalBound = nextLeft === options.leftBounds[0] || nextLeft === options.leftBounds[1];
         const tangentPush = atHorizontalBound
@@ -1718,7 +2076,7 @@ function separateOrbitEntries(
       });
       if (!adjusted) break;
     }
-    if (placed.some((previous) => orbitEntriesCollide(next, previous, options.minGap))) {
+    if (placed.some((previous) => orbitEntriesCollide(next, previous, options.minGap, options.xScale))) {
       next = findOpenOrbitPosition(next, placed, options);
     }
     placed.push(next);
@@ -1733,12 +2091,15 @@ function findOpenOrbitPosition(
     minGap: number;
     leftBounds: [number, number];
     topBounds: [number, number];
+    xScale?: number;
   },
 ) {
-  const angleOffsets = [0, 18, -18, 36, -36, 54, -54, 72, -72, 96, -96, 126, -126, 162, -162, 180];
+  const angleOffsets = [
+    0, 9, -9, 18, -18, 27, -27, 36, -36, 54, -54, 72, -72, 96, -96, 126, -126, 162, -162, 180,
+  ];
   const radiusOffsets = orbitFallbackRadiusOffsets(entry.distanceBand);
   let best = entry;
-  let bestScore = orbitPositionScore(entry, placed, options.minGap);
+  let bestScore = orbitPositionScore(entry, placed, options.minGap, options.xScale);
   angleOffsets.forEach((angleOffset) => {
     radiusOffsets.forEach((radiusOffset) => {
       const angle = entry.angle + angleOffset;
@@ -1751,9 +2112,9 @@ function findOpenOrbitPosition(
         angle,
         radius,
         left: clampNumber(50 + Math.cos(radians) * radius, options.leftBounds[0], options.leftBounds[1]),
-        top: clampNumber(centerTop + Math.sin(radians) * radius * 0.72, options.topBounds[0], options.topBounds[1]),
+        top: clampNumber(centerTop + Math.sin(radians) * radius, options.topBounds[0], options.topBounds[1]),
       }, options.leftBounds, options.topBounds);
-      const score = orbitPositionScore(candidate, placed, options.minGap);
+      const score = orbitPositionScore(candidate, placed, options.minGap, options.xScale);
       if (score > bestScore) {
         best = candidate;
         bestScore = score;
@@ -1764,9 +2125,9 @@ function findOpenOrbitPosition(
 }
 
 function orbitFallbackRadiusOffsets(distanceBand: OrbitDistanceBand) {
-  if (distanceBand === 'near') return [0, -1.8, 1.8, -3, 3];
-  if (distanceBand === 'bridge') return [0, -2, 2, -3.2, 3.2];
-  if (distanceBand === 'far') return [0, -2.2, 2.2, -3.6, 3.6];
+  if (distanceBand === 'near') return [0, -1.2, 1.2, -2.4, 2.4];
+  if (distanceBand === 'bridge') return [0, -1.4, 1.4, -2.8, 2.8];
+  if (distanceBand === 'far') return [0, -1.6, 1.6, -3.2, 3.2];
   return [0, -3, 3, -5, 5];
 }
 
@@ -1785,36 +2146,46 @@ function constrainOrbitEntryToBand(
 ): CommercialOrbitEntry {
   const centerTop = entry.distanceBand === 'risk' ? 57 : 50;
   const dx = entry.left - 50;
-  const dy = (entry.top - centerTop) / 0.72;
+  const dy = entry.top - centerTop;
   const currentRadius = Math.sqrt(dx * dx + dy * dy);
   const [minRadius, maxRadius] = orbitRadiusBoundsForBand(entry.distanceBand);
-  const radius = clampNumber(currentRadius || entry.radius, minRadius, maxRadius);
+  const radius = clampNumber(entry.radius, minRadius, maxRadius);
   const radians = currentRadius > 0 ? Math.atan2(dy, dx) : (entry.angle * Math.PI) / 180;
   return {
     ...entry,
     angle: (radians * 180) / Math.PI,
     radius,
     left: clampNumber(50 + Math.cos(radians) * radius, leftBounds[0], leftBounds[1]),
-    top: clampNumber(centerTop + Math.sin(radians) * radius * 0.72, topBounds[0], topBounds[1]),
+    top: clampNumber(centerTop + Math.sin(radians) * radius, topBounds[0], topBounds[1]),
   };
 }
 
-function orbitPositionScore(entry: CommercialOrbitEntry, placed: CommercialOrbitEntry[], minGap: number) {
+function orbitPositionScore(
+  entry: CommercialOrbitEntry,
+  placed: CommercialOrbitEntry[],
+  minGap: number,
+  xScale = 1,
+) {
   if (!placed.length) return Number.POSITIVE_INFINITY;
   return placed.reduce((score, previous) => {
     const requiredGap = orbitEntryRequiredGap(entry, previous, minGap);
-    const distance = orbitEntryDistance(entry, previous);
+    const distance = orbitEntryDistance(entry, previous, xScale);
     return Math.min(score, distance / requiredGap);
   }, Number.POSITIVE_INFINITY);
 }
 
-function orbitEntriesCollide(left: CommercialOrbitEntry, right: CommercialOrbitEntry, minGap: number) {
-  return orbitEntryDistance(left, right) < orbitEntryRequiredGap(left, right, minGap);
+function orbitEntriesCollide(
+  left: CommercialOrbitEntry,
+  right: CommercialOrbitEntry,
+  minGap: number,
+  xScale = 1,
+) {
+  return orbitEntryDistance(left, right, xScale) < orbitEntryRequiredGap(left, right, minGap);
 }
 
-function orbitEntryDistance(left: CommercialOrbitEntry, right: CommercialOrbitEntry) {
-  const dx = left.left - right.left;
-  const dy = (left.top - right.top) * 1.18;
+function orbitEntryDistance(left: CommercialOrbitEntry, right: CommercialOrbitEntry, xScale = 1) {
+  const dx = (left.left - right.left) * xScale;
+  const dy = left.top - right.top;
   return Math.sqrt(dx * dx + dy * dy);
 }
 
@@ -1878,24 +2249,7 @@ function nodeVisualSize(node: OntologyAssociationCircleNode, groupKey: Associati
 function nodeVisualDistanceValue(node: OntologyAssociationCircleNode) {
   const baseDistance = nodeDistanceValue(node);
   const distance = baseDistance > 0 ? baseDistance : 100 - nodeClosenessValue(node);
-  return clampNumber(distance + nodeConfidenceDistancePenalty(node), 0, 100);
-}
-
-function nodeConfidenceDistancePenalty(node: OntologyAssociationCircleNode) {
-  const evidence = nodeEvidenceCount(node);
-  const platform = nodePlatformCount(node);
-  if (isCompetitorNode(node)) {
-    if (platform <= 1 && evidence <= 1) return 36;
-    if (platform <= 1 && evidence <= 3) return 28;
-    if (platform <= 1) return 18;
-    if (platform === 2 && evidence <= 3) return 12;
-    return 0;
-  }
-  if (platform <= 1 && evidence <= 1) return 24;
-  if (platform <= 1 && evidence <= 3) return 16;
-  if (platform <= 1) return 8;
-  if (platform === 2 && evidence <= 2) return 10;
-  return 0;
+  return clampNumber(distance, 0, 100);
 }
 
 function orbitToneColor(groupKey: AssociationMapGroupKey) {
@@ -1916,10 +2270,10 @@ function trackFilterToGroupKey(track: AssociationNodeFilterKey | null): Associat
   return null;
 }
 
-function trackLabel(track: AssociationNodeFilterKey) {
-  if (track === 'stable') return '稳定轨';
-  if (track === 'opportunity') return '机会轨';
-  return '观察轨';
+function groupKeyToTrackFilter(groupKey: Exclude<AssociationMapGroupKey, 'risk'>): AssociationNodeFilterKey {
+  if (groupKey === 'strong') return 'stable';
+  if (groupKey === 'growth') return 'opportunity';
+  return 'watch';
 }
 
 function orbitTrackColor(track: AssociationNodeFilterKey) {
@@ -1934,8 +2288,7 @@ function orbitFocusedEntry(entry: CommercialOrbitEntry, focusGroupKey: Associati
 
 function orbitNodeFillColor(entry: CommercialOrbitEntry, focusGroupKey: AssociationMapGroupKey | null) {
   if (focusGroupKey && entry.groupKey === focusGroupKey) return orbitToneColor(entry.groupKey);
-  if (entry.node.node_id && entry.groupKey === 'risk') return 'color-mix(in srgb, var(--text-tertiary) 82%, var(--evidence-risk) 18%)';
-  return 'color-mix(in srgb, var(--text-secondary) 72%, var(--brand-primary) 18%)';
+  return `color-mix(in srgb, var(--text-secondary) 76%, ${orbitToneColor(entry.groupKey)} 24%)`;
 }
 
 function orbitHaloColor(groupKey: AssociationMapGroupKey) {
@@ -1983,23 +2336,25 @@ function orbitDistanceBandChipStyle(distanceBand: OrbitDistanceBand) {
 
 function orbitBandExplanationText(node: OntologyAssociationCircleNode, distanceBand: OrbitDistanceBand) {
   const evidence = nodeEvidenceCount(node);
+  const evidencePhrase = nodeCountPhrase(node, evidence || 0);
   const platform = nodePlatformCount(node);
-  const distance = nodeDistanceValue(node);
+  const closeness = nodeClosenessValue(node);
   if (distanceBand === 'risk') {
-    return `风险认知单独展开，避免和正向联想共用同一套强弱判断。本轮 ${evidence || 0} 条回答提及，覆盖 ${platform || 0} 个平台，需要回看原文确认风险语境。`;
+    return isCompetitorNode(node)
+      ? `竞争参照单独展开，避免和品牌风险共用同一解释。本轮 ${evidencePhrase}将它作为竞争或替代对象，覆盖 ${platform || 0} 个平台。`
+      : `风险认知单独展开，避免和正向联想共用同一套强弱判断。本轮累计 ${evidencePhrase}，覆盖 ${platform || 0} 个平台，需要回看原文确认风险语境。`;
   }
-  const distanceText = distance > 0 ? `距离值 ${distance}` : '距离值待补';
   if (distanceBand === 'near') {
-    return `系统把它放入稳定联想区，表示回答已经较稳定地把它带回品牌。本轮 ${evidence || 0} 条回答提及，覆盖 ${platform || 0} 个平台，${distanceText}。`;
+    return `系统贴近值为 ${closeness || 0}，达到稳定轨门槛（60–100）。这表示回答已经较稳定地把它带回品牌。`;
   }
   if (distanceBand === 'bridge') {
-    return `系统把它放入连接轨，表示它已经能连到品牌，还需要更多直接证据拉近。本轮 ${evidence || 0} 条回答提及，覆盖 ${platform || 0} 个平台，${distanceText}。`;
+    return `系统贴近值为 ${closeness || 0}，位于机会轨区间（35–59）。它已经能连到品牌，但还需要更多直接证据拉近。`;
   }
-  return `系统把它放入观察轨，表示它仍处在远端机会或待观察阶段。本轮 ${evidence || 0} 条回答提及，覆盖 ${platform || 0} 个平台，${distanceText}。`;
+  return `系统贴近值为 ${closeness || 0}，处于观察区间（0–34）：20–34 为待观察信号，0–19 为证据缺口或远端待验证。它仍需要补充回答频率、场景或跨平台证据。`;
 }
 
 function nodeOriginShortLabel(kind: ReturnType<typeof nodeOriginRead>['kind']) {
-  return kind === 'strategy' ? '战' : '答';
+  return kind === 'strategy' ? '战略' : '回答';
 }
 
 function nodeOriginRead(node: OntologyAssociationCircleNode, strategyTerms: string[]) {
@@ -2052,6 +2407,9 @@ function nodeBrandRelationText(
   const path = associationPathLabel(node);
 
   if (groupKey === 'risk') {
+    if (isCompetitorNode(node)) {
+      return `“${node.term}”是回答中与${centerTerm}并列出现的竞争或替代参照。它单独进入竞争关系视图，用来判断平台在什么问题和场景下会把用户导向其他品牌，不代表负面风险。`;
+    }
     return `“${node.term}”和${centerTerm}的关系会把品牌带回旧认知风险，属于需要单独管理的风险入口。它需要进入风险关系图，避免混在正向战略轨道里解读。`;
   }
 
@@ -2079,6 +2437,9 @@ function nodeBrandImplicationText(
 ) {
   const groupKey = classifyAssociationNode(node);
   if (groupKey === 'risk') {
+    if (isCompetitorNode(node)) {
+      return `这意味着${centerTerm}需要看清竞品被带出的场景、主张与证据，再决定补充差异化材料。下一轮应观察这个竞争参照是否持续出现，以及是否发生平台迁移。`;
+    }
     return `这意味着${centerTerm}需要先处理旧认知：补澄清内容、替代叙事和可验证证据。下一轮要观察这个风险词是否减少出现，或者是否被新的正向解释覆盖。`;
   }
   if (origin.kind === 'strategy') {
@@ -2098,26 +2459,49 @@ function nodeEvidenceSummaryText({
   questionCount,
   totalAnswerCount,
   mentionAnswerCount,
+  node,
   relatedQuestionCount,
   platformNames,
+  riskScoped = false,
+  competitionScoped = false,
 }: {
   term: string;
   questionCount: number;
   totalAnswerCount: number;
   mentionAnswerCount: number;
+  node: OntologyAssociationCircleNode;
   relatedQuestionCount: number;
   platformNames: string[];
+  riskScoped?: boolean;
+  competitionScoped?: boolean;
 }) {
   const questionPart = questionCount ? `本轮围绕 ${questionCount} 个问题发问` : '本轮问题样本中';
   const answerPart = totalAnswerCount ? `，抓取到 ${totalAnswerCount} 条有效回答` : '';
+  const mentionCountPhrase = nodeCountPhrase(node, mentionAnswerCount);
   const mentionPart = mentionAnswerCount
-    ? `其中 ${mentionAnswerCount} 条回答提到“${term}”`
-    : `目前还没有稳定回答提到“${term}”`;
+    ? competitionScoped
+      ? `其中 ${mentionCountPhrase}将“${term}”作为竞争或替代参照`
+      : riskScoped
+      ? `其中 ${mentionCountPhrase}形成与“${term}”有关的质疑或风险语境`
+      : `其中“${term}”出现了 ${mentionCountPhrase}`
+    : competitionScoped
+      ? `目前还没有回答把“${term}”作为竞争或替代参照`
+      : riskScoped
+      ? `目前还没有回答形成与“${term}”有关的质疑或风险语境`
+      : `目前还没有形成与“${term}”有关的稳定节点提及`;
   const relatedPart = relatedQuestionCount ? `，覆盖 ${relatedQuestionCount} 个相关问题` : '';
   const platformPart = platformNames.length ? `，来自 ${platformNames.join('、')}` : '';
   const verdict = mentionAnswerCount
-    ? '它已经进入 AI 回答的可观察范围，还要结合平台分布和原文语境判断是否真正成立。'
-    : '它仍属于待验证方向，当前先按观察中的品牌联想处理。';
+    ? competitionScoped
+      ? '它已进入竞争观察范围，需要结合平台分布和原文判断比较发生在哪些场景。'
+      : riskScoped
+      ? '它已进入风险观察范围，需要结合平台分布和原文语境判断风险如何形成。'
+      : '它已经进入 AI 回答的可观察范围，还要结合平台分布和原文语境判断是否真正成立。'
+    : competitionScoped
+      ? '当前没有形成可验证的竞争关系。'
+      : riskScoped
+      ? '当前没有形成可验证的风险关系。'
+      : '它仍属于待验证方向，当前先按观察中的品牌联想处理。';
   return `${questionPart}${answerPart}；${mentionPart}${relatedPart}${platformPart}。${verdict}`;
 }
 
@@ -2228,14 +2612,20 @@ function buildLiveExtractionStreamSamples(
 
   sourceAppendix.forEach((item) => append({
     evidence_id: item.evidence_id,
+    entity_id: item.entity_id,
+    lexicon_entity_id: item.lexicon_entity_id,
     node_term: item.node_term,
     platform: item.platform,
     question_id: item.question_id,
     question: item.question,
     answer_excerpt: item.answer_excerpt,
+    relation_type: item.relation_type,
+    context_polarity: item.context_polarity,
   }));
   evidenceSamples.forEach((item) => append({
     evidence_id: item.evidence_id,
+    entity_id: item.entity_id,
+    lexicon_entity_id: item.lexicon_entity_id,
     node_id: item.node_id,
     node_term: item.node_term,
     platform: item.platform,
@@ -2253,14 +2643,22 @@ function buildNodeEvidenceForPanel(
   sourceAppendix: OntologyAssociationCircleSourceAppendixItem[],
   evidenceFindings: OntologyAssociationCircleEvidenceFinding[],
 ): OrbitEvidenceItem[] {
-  const evidenceRefSet = new Set((node.evidence_samples || []).map((item) => String(item || '').trim()).filter(Boolean));
+  const evidenceRefSet = new Set(
+    [...(node.evidence_samples || []), ...(node.evidence_refs || [])]
+      .map((item) => String(item || '').trim())
+      .filter(Boolean),
+  );
   const sourceItems = sourceAppendix.map((item): OrbitEvidenceItem => ({
     evidence_id: item.evidence_id,
+    entity_id: item.entity_id,
+    lexicon_entity_id: item.lexicon_entity_id,
     node_term: item.node_term,
     platform: item.platform,
     question_id: item.question_id,
     question: item.question,
     answer_excerpt: item.answer_excerpt,
+    relation_type: item.relation_type,
+    context_polarity: item.context_polarity,
   }));
   const findingItems = evidenceFindings
     .filter((item) => evidenceFindingMatchesNode(item, node, evidenceRefSet))
@@ -2271,15 +2669,23 @@ function buildNodeEvidenceForPanel(
       platform: item.sample_platform,
       question: item.sample_question,
       answer_excerpt: item.sample_excerpt,
-    }));
+    }))
+    .filter((item) => evidenceItemMatchesNode(item, node, evidenceRefSet));
   const matched = [
     ...evidenceSamples.filter((item) => evidenceItemMatchesNode(item, node, evidenceRefSet)),
     ...sourceItems.filter((item) => evidenceItemMatchesNode(item, node, evidenceRefSet)),
     ...findingItems,
   ].filter((item) => String(item.answer_excerpt || '').trim());
+  const scopedMatched = node.entity_id === 'evidence_regulation' && classifyAssociationNode(node) === 'risk'
+    ? matched.filter((item) => (
+        item.relation_type === 'RISKS_AS'
+        || item.context_polarity === 'negative'
+        || evidenceMatchesControlledRiskCue(item, node)
+      ))
+    : matched;
 
   const seen = new Set<string>();
-  return matched.filter((item) => {
+  return scopedMatched.filter((item) => {
     const key = sampleKey(item);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -2295,11 +2701,63 @@ function evidenceItemMatchesNode(
   const itemId = String(item.evidence_id || '').trim();
   const nodeTerm = compactStrategyText(node.term);
   const itemTerm = compactStrategyText(item.node_term);
-  if (item.node_id && item.node_id === node.node_id) return true;
-  if (itemId && evidenceRefSet.has(itemId)) return true;
-  if (nodeTerm && itemTerm && nodeTerm === itemTerm) return true;
+  const nodeEntityId = String(node.entity_id || '').trim();
+  const itemEntityIds = [item.entity_id, item.lexicon_entity_id]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const hasExplicitIdentityConflict = Boolean(
+    (item.node_id && item.node_id !== node.node_id)
+    || (nodeEntityId && itemEntityIds.length > 0 && !itemEntityIds.includes(nodeEntityId))
+    || (nodeTerm && itemTerm && nodeTerm !== itemTerm),
+  );
+  const refBound = Boolean(itemId && evidenceRefSet.has(itemId));
+  const nodeIdentityBound = Boolean(item.node_id && item.node_id === node.node_id);
+  const entityIdentityBound = Boolean(nodeEntityId && itemEntityIds.includes(nodeEntityId));
+  const termAndRefBound = Boolean(nodeTerm && itemTerm && nodeTerm === itemTerm && refBound);
+  const textMentionsNode = evidenceTextMentionsNode(item, node);
+  if (textMentionsNode) return true;
+  if (hasExplicitIdentityConflict) return false;
+  if (RISK_EVIDENCE_PATTERNS[nodeEntityId]) {
+    return Boolean(
+      (nodeIdentityBound || entityIdentityBound || termAndRefBound || refBound)
+      && evidenceMatchesControlledRiskCue(item, node),
+    );
+  }
+  if (isCompetitorNode(node)) return false;
+  return nodeIdentityBound || entityIdentityBound || termAndRefBound;
+}
+
+const RISK_EVIDENCE_PATTERNS: Record<string, RegExp> = {
+  evidence_regulation: /(监管|合规|政策|法规|法律|违法|违规|处罚|许可|投诉|直销模式|风险库存|库存风险)/,
+  risk_pyramid_scheme: /(传销|拉人头|发展下线|发展团队|团队招募|依赖招募|入门费|层级计酬|多层分销)/,
+  risk_exaggerated_claim: /(夸大|虚假宣传|神奇功效|包治|治愈|慢病功效)/,
+  risk_over_selling: /(过度推销|强行推荐|逼单|囤货|库存压力|频繁推销)/,
+  risk_high_price: /(高价|价格高|大额囤货|付费培训|溢价|性价比)/,
+  risk_iq_tax: /(智商税|人情成本|销售费用|附加成本)/,
+};
+
+function evidenceMatchesControlledRiskCue(
+  item: OrbitEvidenceItem,
+  node: OntologyAssociationCircleNode,
+) {
+  const pattern = RISK_EVIDENCE_PATTERNS[String(node.entity_id || '').trim()];
+  if (!pattern) return false;
+  return pattern.test(`${item.question || ''}${item.answer_excerpt || ''}`);
+}
+
+function evidenceTextMentionsNode(
+  item: OrbitEvidenceItem,
+  node: OntologyAssociationCircleNode,
+) {
   const text = compactStrategyText(`${item.question || ''}${item.answer_excerpt || ''}`);
-  return Boolean(nodeTerm && text.includes(nodeTerm));
+  if (!text) return false;
+  const aliases = String(node.term || '')
+    .split(/[\/／、|｜,，()（）]/)
+    .map((value) => compactStrategyText(value))
+    .filter((value) => value.length >= 2);
+  const fullTerm = compactStrategyText(node.term);
+  if (fullTerm) aliases.unshift(fullTerm);
+  return Array.from(new Set(aliases)).some((alias) => text.includes(alias));
 }
 
 function evidenceFindingMatchesNode(
@@ -2328,10 +2786,11 @@ function nodePlatformNames(
 ) {
   const fromEvidence = evidence.map((item) => item.platform).filter(Boolean) as string[];
   const fromDistribution = Object.keys(node.platform_distribution || {});
-  return Array.from(new Set([...fromEvidence, ...fromDistribution]))
-    .map((platform) => platformLabel(platform))
-    .filter(Boolean)
-    .slice(0, 4);
+  return Array.from(new Set(
+    [...fromEvidence, ...fromDistribution]
+      .map((platform) => platformLabel(platform))
+      .filter(Boolean),
+  )).slice(0, 4);
 }
 
 function nodeClosenessValue(node: OntologyAssociationCircleNode) {
@@ -2346,7 +2805,44 @@ function nodeDistanceValue(node: OntologyAssociationCircleNode) {
 }
 
 function nodeEvidenceCount(node: OntologyAssociationCircleNode) {
-  return scoreNumber(node.evidence_count ?? node.answer_count ?? node.evidence_samples?.length);
+  return scoreNumber(node.answer_count ?? node.evidence_count ?? node.evidence_samples?.length);
+}
+
+type NodeCountSource = Pick<
+  OntologyAssociationCircleNode,
+  'answer_refs' | 'answer_count_is_exact' | 'count_semantics'
+>;
+
+function nodeCountMode(node: NodeCountSource): 'answers' | 'lower_bound' | 'mentions' {
+  if (node.answer_count_is_exact === true) return 'answers';
+  if (node.answer_count_is_exact === false) {
+    return node.count_semantics === 'known_answer_refs_lower_bound' ? 'lower_bound' : 'mentions';
+  }
+  if (node.count_semantics === 'distinct_answer_refs') return 'answers';
+  if (node.count_semantics === 'known_answer_refs_lower_bound') return 'lower_bound';
+  if (node.count_semantics === 'legacy_summed_mentions') return 'mentions';
+  return Array.isArray(node.answer_refs) ? 'answers' : 'mentions';
+}
+
+function nodeCountPhrase(node: NodeCountSource, count: number): string {
+  const mode = nodeCountMode(node);
+  if (mode === 'answers') return `${count} 条回答`;
+  if (mode === 'lower_bound') return `至少 ${count} 条可确认回答`;
+  return `${count} 次节点提及`;
+}
+
+function nodeCountMetricLabel(node: NodeCountSource): string {
+  const mode = nodeCountMode(node);
+  if (mode === 'answers') return '提及回答';
+  if (mode === 'lower_bound') return '可确认回答';
+  return '节点提及';
+}
+
+function nodeCountShortUnit(node: NodeCountSource): '答' | '答+' | '次' {
+  const mode = nodeCountMode(node);
+  if (mode === 'answers') return '答';
+  if (mode === 'lower_bound') return '答+';
+  return '次';
 }
 
 function nodePlatformCount(node: OntologyAssociationCircleNode) {
@@ -2376,9 +2872,10 @@ function isRiskNodeForMap(node: OntologyAssociationCircleNode) {
 
 function answerPresenceText(node: OntologyAssociationCircleNode) {
   const evidence = nodeEvidenceCount(node);
-  if (evidence >= 20) return `${evidence} 条回答反复提到，已形成可观察联想`;
-  if (evidence >= 8) return `${evidence} 条回答提到，具备可观察样本`;
-  if (evidence > 0) return `${evidence} 条回答提到，仍需继续观察`;
+  const phrase = nodeCountPhrase(node, evidence);
+  if (evidence >= 20) return `${phrase}，已形成可观察联想`;
+  if (evidence >= 8) return `${phrase}，具备可观察样本`;
+  if (evidence > 0) return `${phrase}，仍需继续观察`;
   return '当前样本里只有很弱的出现痕迹';
 }
 
@@ -2413,6 +2910,18 @@ function relationshipRead(node: OntologyAssociationCircleNode) {
   const pathText = associationPathLabel(node);
 
   if (groupKey === 'risk') {
+    if (isCompetitorNode(node)) {
+      return {
+        label: '竞争替代',
+        headline: '它是回答中的竞争或替代参照，需要单独比较。',
+        reasons: [
+          `回答表现：${answerText}。`,
+          `平台一致性：${platformText}。`,
+          `关系来源：回答把它带到“${pathText}”语境，应回看原文比较竞品主张与证据。`,
+        ],
+        nextStep: '下一步：确认竞品被带出的场景、主张和证据，下轮观察竞争参照是否持续出现或发生平台迁移。',
+      };
+    }
     return {
       label: '风险旧认知',
       headline: '它会干扰品牌解释，需要单独管理。',
@@ -2741,7 +3250,7 @@ function normalizeReportNarrativeSections(
   if (!Array.isArray(sections) || !sections.length) return null;
   const normalized = sections
     .map((section): ReportNarrativeSection | null => {
-      const title = String(section?.title || '').trim();
+      const title = commercialReportCopy(section?.title);
       const paragraphs = Array.isArray(section?.paragraphs)
         ? section.paragraphs.map((paragraph) => commercialReportCopy(paragraph)).filter(Boolean)
         : [];
@@ -2814,6 +3323,9 @@ function commercialReportCopy(value?: string | null) {
     .replace(new RegExp('弱' + '关联轨', 'g'), '待观察')
     .replace(new RegExp('可' + '争夺轨', 'g'), '近端机会')
     .replace(new RegExp('风险' + '阴影', 'g'), '风险关系')
+    .replace(/监管信息/g, '监管合规质疑')
+    .replace(/腾讯元宝|元宝/g, '腾讯元宝')
+    .replace(/\b(?:yuanbao|hunyuan)\b/gi, '腾讯元宝')
     .replace(new RegExp('不' + '是把战略愿望直接画进图谱', 'g'), '战略愿望需要先变成回答证据，再进入图谱')
     .replace(new RegExp('不' + '是把战略词直接写进图谱', 'g'), '战略词需要先经过回答证据验证，再进入图谱')
     .replace(new RegExp('不' + '是漂亮但不可复核的图', 'g'), '需要成为可复核的图')
@@ -2916,7 +3428,7 @@ function buildEvidenceFindingsFallback(
       orbit_label: node.orbit_label,
       business_tag: node.business_tag,
       supporting_facts: [
-        `${node.answer_count || node.evidence_count || 0} 条回答提到，有效平台 ${node.platform_count || 0} 个。`,
+        `${nodeCountPhrase(node, nodeEvidenceCount(node))}，有效平台 ${node.platform_count || 0} 个。`,
         `图谱贴近值 ${node.closeness_score ?? node.gravity_score ?? '-'}，距离值 ${node.distance_score ?? '-'}。`,
       ],
       evidence_refs: evidenceRefs,
@@ -3069,14 +3581,26 @@ export function AssociationReportPanel({
   const exportReportSections = compactReportSections;
   const periodView = readPeriodView(projection);
   const periodScopeText = buildPeriodScopeText(periodView);
+  const isReportDeliverable = reportQualityChecks.passed === true;
+  const failedQualityChecks = Array.isArray(reportQualityChecks.required_checks)
+    ? reportQualityChecks.required_checks.filter((item) => (
+      typeof item === 'object' && item !== null && (item as { passed?: unknown }).passed !== true
+    ))
+    : [];
   return (
     <section>
-      <article className="bg-[var(--bg-primary)] px-6 py-7 sm:px-10 sm:py-10">
-        <header className="mx-auto max-w-[1040px]">
+      <article className="border-t-4 border-[var(--brand-primary)] bg-[var(--bg-primary)] px-6 py-7 sm:px-10 sm:py-10">
+        <header className="mx-auto max-w-[1040px] border-b border-[var(--border-subtle)] pb-7">
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="text-xs font-medium text-[var(--text-tertiary)]">
-              解读报告
-              {periodScopeText ? <span className="ml-2">{periodScopeText}</span> : null}
+            <div>
+              <div className="text-xs font-semibold text-[var(--brand-primary)]">
+                {isReportDeliverable ? 'SPECTA 品牌证据交付' : '报告预览 · 待校验'}
+              </div>
+              <h2 className="mt-2 text-3xl font-semibold text-[var(--text-primary)]">{activeCenterTerm} 品牌联想解读报告</h2>
+              <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                已按本轮回答证据、平台来源与节点关系完成整理
+                {periodScopeText ? <span> · {periodScopeText}</span> : null}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -3094,15 +3618,23 @@ export function AssociationReportPanel({
                   sampleScope: projection.sample_scope || {},
                   periodView,
                 })}
-                disabled={!nodes.length}
-                className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--brand-border)] px-3 text-sm text-[var(--brand-primary)] hover:bg-[var(--brand-bg)] disabled:opacity-50"
+                disabled={!nodes.length || !isReportDeliverable}
+                title={isReportDeliverable ? '导出报告' : '质量检查通过后才可导出'}
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:opacity-50"
               >
                 <Download size={16} />
-                导出 HTML
+                导出报告
               </button>
             </div>
           </div>
         </header>
+
+        {!isReportDeliverable ? (
+          <div className="mx-auto mt-5 max-w-[1040px] rounded-xl border border-[var(--status-warning)] bg-[var(--status-warning-bg)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]" role="status">
+            这份报告尚未通过全部质量检查，仅供预览，暂不可导出。
+            {failedQualityChecks.length ? ` 待处理：${failedQualityChecks.map((item) => String((item as { label?: unknown }).label || '未命名检查')).join('、')}。` : ''}
+          </div>
+        ) : null}
 
         <div className="mx-auto mt-9 max-w-[1040px] space-y-10">
           {compactReportSections.map((section, index) => {
@@ -3115,9 +3647,10 @@ export function AssociationReportPanel({
                   section={section}
                   index={index}
                   groups={groups}
-                  platformComparison={platformComparison}
                   sampleScope={projection.sample_scope || {}}
                   centerTerm={activeCenterTerm}
+                  strategyStoryline={projection.strategy_storyline}
+                  storylineAnalysis={projection.storyline_analysis}
                 />
                 {shouldRenderStrategyDetails ? (
                   <StrategyValidationSection
@@ -3142,6 +3675,7 @@ export function AssociationReportPanel({
             platformSourceSummary={platformSourceSummary}
             evidenceFindings={evidenceFindings}
             sourceAppendix={sourceAppendix}
+            nodes={nodes}
           />
         </div>
       </article>
@@ -3164,6 +3698,8 @@ export function AssociationTrackingPanel({
   const trackingStatusLabel = String(tracking?.status_label || '首期基线');
   const actions = projection.association_actions || [];
   const riskNodes = groups.find((group) => group.key === 'risk')?.nodes || [];
+  const competitorNodes = riskNodes.filter(isCompetitorNode);
+  const pureRiskNodes = riskNodes.filter((node) => !isCompetitorNode(node));
   const growthNodes = groups.find((group) => group.key === 'growth')?.nodes || [];
   const storyNodes = groups.find((group) => group.key === 'story')?.nodes || [];
 
@@ -3184,10 +3720,12 @@ export function AssociationTrackingPanel({
             tone={trackingStatus === 'baseline' ? 'warning' : 'brand'}
           />
         </div>
-        <div className="mt-6 grid gap-4 xl:grid-cols-4">
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <TrackingMetric title="本轮节点" value={String(nodes.length)} text="本轮可追踪的联想节点总数" />
-          <TrackingMetric title="机会节点" value={String(growthNodes.length + storyNodes.length)} text="下轮观察是否继续靠近" />
-          <TrackingMetric title="风险节点" value={String(riskNodes.length)} text="下轮观察是否被压降" tone="risk" />
+          <TrackingMetric title="机会节点" value={String(growthNodes.length)} text="机会轨，观察是否继续靠近" />
+          <TrackingMetric title="观察节点" value={String(storyNodes.length)} text="观察轨，优先补证据" />
+          <TrackingMetric title="风险认知" value={String(pureRiskNodes.length)} text="下轮观察是否被压降" tone="risk" />
+          <TrackingMetric title="竞品参照" value={String(competitorNodes.length)} text="下轮观察竞争场景是否迁移" />
           <TrackingMetric title="行动闭环" value={String(actions.length)} text="可进入复测的行动建议" />
         </div>
       </div>
@@ -3508,22 +4046,22 @@ export function EvidenceWorkbenchPanel({
           {evidenceFindings.length ? evidenceFindings.slice(0, 8).map((finding) => (
             <div key={finding.node_id || finding.node_term} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5">
               <div className="flex flex-wrap items-center gap-2">
-                <h4 className="text-lg font-semibold">{finding.node_term || '联想节点'}</h4>
+                <h4 className="text-lg font-semibold">{commercialReportCopy(finding.node_term || '联想节点')}</h4>
                 {finding.business_tag ? (
                   <span className="rounded-full border border-[var(--brand-border)] bg-[var(--brand-bg)] px-2 py-1 text-xs text-[var(--brand-primary)]">
                     {finding.business_tag}
                   </span>
                 ) : null}
               </div>
-              <p className="mt-3 text-sm leading-7 text-[var(--text-primary)]">{commercialReportCopy(finding.claim)}</p>
+              <p className="mt-3 text-sm leading-7 text-[var(--text-primary)]">{evidenceFindingCopy(finding.claim, finding, projection.nodes)}</p>
               <ul className="mt-3 space-y-1 text-xs leading-5 text-[var(--text-secondary)]">
-                {(finding.supporting_facts || []).slice(0, 3).map((fact) => (
-                  <li key={fact}>• {commercialReportCopy(fact)}</li>
+                {uniqueEvidenceFindingFacts(finding, projection.nodes, 3).map((fact) => (
+                  <li key={fact}>• {fact}</li>
                 ))}
               </ul>
               {finding.sample_excerpt ? (
                 <blockquote className="mt-4 border-l-2 border-[var(--brand-border)] pl-3 text-xs leading-5 text-[var(--text-secondary)]">
-                  {finding.sample_platform} / {finding.sample_question}: {finding.sample_excerpt}
+                  {finding.sample_platform} / {cleanEvidenceExcerpt(finding.sample_question, 120)}: {cleanEvidenceExcerpt(finding.sample_excerpt, 220)}
                 </blockquote>
               ) : null}
             </div>
@@ -3542,7 +4080,7 @@ export function EvidenceWorkbenchPanel({
           <div className="mt-4 space-y-3">
             {sourceAppendix.length ? sourceAppendix.slice(0, 10).map((item) => (
               <div key={item.evidence_id || `${item.platform}-${item.node_term}`} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-                <div className="text-xs text-[var(--text-tertiary)]">{item.evidence_id || '证据'} · {platformLabel(item.platform || '')} · {item.node_term || '节点'}</div>
+                <div className="text-xs text-[var(--text-tertiary)]">{item.evidence_id || '证据'} · {platformLabel(item.platform || '')} · {commercialReportCopy(item.node_term || '节点')}</div>
                 <p className="mt-2 text-sm leading-6 text-[var(--text-primary)]">{item.question}</p>
                 <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">{cleanEvidenceExcerpt(item.answer_excerpt, 160)}</p>
               </div>
@@ -3612,7 +4150,8 @@ export function buildAssociationMapGroups(nodes: OntologyAssociationCircleNode[]
     risk: [],
   };
 
-  nodes.forEach((node) => {
+  nodes.forEach((rawNode) => {
+    const node = normalizeAssociationNodeDisplay(rawNode);
     grouped[classifyAssociationNode(node)].push(node);
   });
 
@@ -3674,6 +4213,18 @@ function compareAssociationNodesForPriority(
 }
 
 
+function normalizeAssociationNodeDisplay(node: OntologyAssociationCircleNode): OntologyAssociationCircleNode {
+  if (
+    node.entity_id === 'evidence_regulation'
+    && isRiskNodeForMap(node)
+    && node.term === '监管信息'
+  ) {
+    return { ...node, term: '监管合规质疑' };
+  }
+  return node;
+}
+
+
 function classifyAssociationNode(node: OntologyAssociationCircleNode): AssociationMapGroupKey {
   const text = `${node.term || ''} ${node.business_tag || ''} ${node.semantic_direction || ''} ${node.orbit_label || ''} ${node.maturity_label || ''}`;
   if (isRiskNodeForMap(node)) {
@@ -3682,19 +4233,31 @@ function classifyAssociationNode(node: OntologyAssociationCircleNode): Associati
   if (node.orbit === 'core_near' || node.orbit === 'strong' || node.orbit === 'R1') {
     return 'strong';
   }
-  if (node.orbit === 'near_opportunity' || node.maturity_tier === 'near_opportunity' || /近端机会/.test(text)) {
+  if (
+    node.orbit === 'near_opportunity'
+    || node.orbit === 'contestable'
+    || node.orbit === 'far_opportunity'
+    || node.orbit === 'R2'
+    || node.maturity_tier === 'near_opportunity'
+    || node.maturity_tier === 'far_opportunity'
+    || /近端机会|远端机会/.test(text)
+  ) {
     return 'growth';
   }
   if (
-    node.orbit === 'far_opportunity'
-    || node.maturity_tier === 'far_opportunity'
-    || node.maturity_tier === 'watch_signal'
-    || node.maturity_tier === 'evidence_gap'
-    || /远端机会|待观察|待验证|长寿|人生再出发|被需要|价值感|新叙事/.test(text)
-    || node.orbit === 'weak'
+    node.orbit === 'weak'
     || node.orbit === 'R3'
     || node.orbit === 'blank'
+    || node.maturity_tier === 'watch_signal'
+    || node.maturity_tier === 'evidence_gap'
+    || /待观察|待验证|长寿|人生再出发|被需要|价值感|新叙事/.test(text)
   ) {
+    return 'story';
+  }
+  const distance = nodeDistanceValue(node);
+  if (distance > 0) {
+    if (distance <= 40) return 'strong';
+    if (distance <= 65) return 'growth';
     return 'story';
   }
   return 'growth';
@@ -3703,6 +4266,11 @@ function classifyAssociationNode(node: OntologyAssociationCircleNode): Associati
 function cleanEvidenceExcerpt(value?: string, maxLength = 180) {
   const text = String(value || '证据摘录待补充。')
     .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+    .replace(/[\uE000-\uF8FF]+(?:ci(?:te)?|web[_\s-]?search|websearch|turn\d+[a-z]*|search\d+)(?:[\uE000-\uF8FF]|[\w:=#./-]){0,160}/gi, '')
+    .replace(/[\uE000-\uF8FF]/g, '')
+    .replace(/(?:cite\s*)?(?:web[_\s-]?search|websearch|turn\d+[a-z]*|search\d+)[\s:=#-]*\d*/gi, '')
+    .replace(/\b(?:web|eb|b|e)?[_\s-]?search\s*[:=#-]\s*\d+(?:\s*#\s*\d+)?\b/gi, '')
+    .replace(/(?:ci(?:te)?|web[_-]?search|turn\d+[a-z]*|search\d+)[\w:=#./-]*\s*$/gi, '')
     .replace(/[#*_`>|[\]()]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -4062,6 +4630,7 @@ function buildBackendStrategyValidationRows({
         answerMentionCount: Number(row.answer_mention_count || 0),
         platformCount: Number(row.platform_count || 0),
         platformMentions,
+        countSource: row,
       }),
       graphPerformance: strategyGraphPerformanceText(relatedNodes),
       implication: strategyImplication(term, status, relatedNodes, Number(row.platform_count || 0), row),
@@ -4105,7 +4674,9 @@ function buildFallbackStrategyValidationRows({
     .slice(0, 12);
 
   return strategyNodes.map((node) => {
-    const evidenceRows = sourceAppendix.filter((item) => item.node_term === node.term);
+    const evidenceRows = sourceAppendix.filter(
+      (item) => commercialReportCopy(item.node_term) === commercialReportCopy(node.term),
+    );
     const relatedQuestionIds = uniqueStrings([
       ...((node.trigger_questions || []).map((id) => String(id || ''))),
       ...evidenceRows.map((item) => item.question_id || ''),
@@ -4137,6 +4708,7 @@ function buildFallbackStrategyValidationRows({
         answerMentionCount,
         platformCount,
         platformMentions,
+        countSource: node,
       }),
       graphPerformance: strategyGraphPerformanceText(relatedNodes),
       implication: strategyImplication(node.term || '', status, relatedNodes, platformCount),
@@ -4267,19 +4839,21 @@ function strategyAnswerResultText({
   answerMentionCount,
   platformCount,
   platformMentions,
+  countSource,
 }: {
   answerMentionCount: number;
   platformCount?: number;
   platformMentions: string[];
+  countSource: NodeCountSource;
 }): string {
-  const summary = `回答提及 ${answerMentionCount} 条，覆盖 ${platformCount ?? 0} 个平台。`;
+  const summary = `${nodeCountPhrase(countSource, answerMentionCount)}，覆盖 ${platformCount ?? 0} 个平台。`;
   return platformMentions.length ? `${summary}${platformMentions.join('；')}` : summary;
 }
 
 function strategyGraphPerformanceText(nodes: OntologyAssociationCircleNode[]): string {
   if (!nodes.length) return '图谱上还没有形成稳定节点。';
   return nodes.slice(0, 4).map((node) => (
-    `${node.term}位于${relationshipRead(node).label}，距离值 ${nodeDistanceValue(node)}，证据 ${nodeEvidenceCount(node)} 条，覆盖 ${nodePlatformCount(node)} 个平台`
+    `${node.term}位于${relationshipRead(node).label}，距离值 ${nodeDistanceValue(node)}，${nodeCountPhrase(node, nodeEvidenceCount(node))}，覆盖 ${nodePlatformCount(node)} 个平台`
   )).join('；');
 }
 
@@ -4308,18 +4882,19 @@ function strategyImplication(
   const skeptical = Number(stance.skeptical || 0);
   const riskLike = Number(stance.risk || 0) + Number(stance.competitive || 0);
   const evidenceCount = Number(backendRow?.answer_mention_count || 0);
+  const countSource = backendRow || nodes[0] || {};
   const tier = backendRow?.decision_tier || '';
   const lane = strategyLane(term);
   const focus = strategyMeaningFocus(term, lane, tier, status);
   if (tier === 'amplify' || (status === 'validated' && supportive >= 30)) {
-    return `${term}已有 ${supportive || evidenceCount} 条正向支撑，覆盖 ${platformCount} 个平台，并通过${nodeText}回到品牌。${focus}`;
+    return `${term}已有 ${nodeCountPhrase(countSource, supportive || evidenceCount)}正向支撑，覆盖 ${platformCount} 个平台，并通过${nodeText}回到品牌。${focus}`;
   }
   if (tier === 'risk_first' || status === 'risk') {
-    return `${term}当前有 ${riskLike || evidenceCount} 条风险或竞品替代语境。${focus}`;
+    return `${term}当前有 ${nodeCountPhrase(countSource, riskLike || evidenceCount)}风险或竞品替代语境。${focus}`;
   }
   if (tier === 'evidence_building' || status === 'partial') {
-    const cautionText = skeptical || riskLike ? `同时出现 ${skeptical + riskLike} 条质疑或风险语境，` : '';
-    return `${term}已经有 ${evidenceCount} 条回答线索，${cautionText}${focus}`;
+    const cautionText = skeptical || riskLike ? `同时出现 ${nodeCountPhrase(countSource, skeptical + riskLike)}质疑或风险语境，` : '';
+    return `${term}已经有 ${nodeCountPhrase(countSource, evidenceCount)}线索，${cautionText}${focus}`;
   }
   return `${term}在本轮问题里被测试过，回答证据仍不足。${focus}`;
 }
@@ -4389,6 +4964,7 @@ function strategyActionRecommendationText(
   const skeptical = Number(stance.skeptical || 0);
   const riskLike = Number(stance.risk || 0) + Number(stance.competitive || 0);
   const answerMentions = Number(backendRow?.answer_mention_count || nodes.reduce((sum, node) => sum + nodeEvidenceCount(node), 0));
+  const countSource = backendRow || nodes[0] || {};
   const tier = backendRow?.decision_tier || '';
   const lane = strategyLane(term);
   if (tier === 'amplify' || (status === 'validated' && supportive >= 30)) {
@@ -4409,7 +4985,7 @@ function strategyActionRecommendationText(
       health: '补科学依据、适用边界和不可替代医疗建议的说明',
       general: '先补澄清证据、替代表达和可核验事实',
     })[lane];
-    return `${term}先处理质疑语境：${focus}；下轮目标是相关质疑低于本轮 ${Math.max(skeptical + riskLike, 1)} 条。`;
+    return `${term}先处理质疑语境：${focus}；下轮目标是相关质疑低于本轮 ${nodeCountPhrase(countSource, Math.max(skeptical + riskLike, 1))}。`;
   }
   if (tier === 'evidence_building' || status === 'partial') {
     const focus = ({
@@ -4419,7 +4995,7 @@ function strategyActionRecommendationText(
       health: '增加具体健康方案、长期管理和产品组合问题',
       general: '增加品牌锚定题和场景题',
     })[lane];
-    return `围绕${term}${focus}，同时补 2 条可引用原文和 1 组品牌事实；下轮目标是证据超过 ${Math.max(answerMentions + 3, 6)} 条。`;
+    return `围绕${term}${focus}，同时补 2 条可引用原文和 1 组品牌事实；下轮目标是节点出现量超过 ${nodeCountPhrase(countSource, Math.max(answerMentions + 3, 6))}。`;
   }
   return `${term}当前证据不足，先${strategyMeaningFocus(term, lane, '', 'missing')}形成可展示节点后再进入战略验证。`;
 }
@@ -4428,197 +5004,6 @@ function isTemplateStrategyAction(text: string): boolean {
   return /补\s*2\s*条品牌锚定题和\s*2\s*条场景题/.test(text)
     || /补产品证据、使用场景和可复述案例/.test(text)
     || /下轮目标是进入稳定资产/.test(text);
-}
-
-function ReportExecutiveDecisionPanel({
-  centerTerm,
-  prioritySummary,
-  groups,
-  platformComparison,
-  sampleScope,
-}: {
-  centerTerm: string;
-  prioritySummary?: OntologyAssociationCirclePrioritySummary | null;
-  groups: AssociationMapGroup[];
-  platformComparison: OntologyAssociationCirclePlatformComparison[];
-  sampleScope: Record<string, unknown>;
-}) {
-  const assets = priorityItemsOrFallback(
-    prioritySummary?.top_assets,
-    groups.find((group) => group.key === 'strong')?.nodes || [],
-    'asset',
-  );
-  const risks = priorityItemsOrFallback(
-    prioritySummary?.top_risks,
-    groups.find((group) => group.key === 'risk')?.nodes.filter((node) => node.business_tag !== '竞争关系') || [],
-    'risk',
-  );
-  const competitors = priorityItemsOrFallback(
-    prioritySummary?.top_competitors,
-    groups.find((group) => group.key === 'risk')?.nodes.filter((node) => node.business_tag === '竞争关系') || [],
-    'competitor',
-  );
-  const opportunities = priorityItemsOrFallback(
-    prioritySummary?.top_opportunities,
-    [
-      ...(groups.find((group) => group.key === 'growth')?.nodes || []),
-      ...(groups.find((group) => group.key === 'story')?.nodes || []),
-    ],
-    'opportunity',
-  );
-  const answerCount = sampleAnswerCount(sampleScope);
-  const platformCount = samplePlatformCount(sampleScope);
-  const strongestAsset = assets[0]?.term || topTermsForReport(groups, 'strong', 1)[0] || '稳定资产';
-  const strongestRisk = risks[0]?.term || topTermsForReport(groups, 'risk', 1)[0] || '风险关系';
-  const firstPlatform = platformComparison[0];
-  return (
-    <section className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-6 sm:p-7">
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-        <div>
-          <div className="text-xs font-medium text-[var(--text-tertiary)]">一屏结论</div>
-          <h3 className="mt-2 text-2xl font-semibold leading-tight" style={{ fontFamily: REPORT_SERIF_FONT }}>
-            {centerTerm}这一轮先守住{strongestAsset}，先处理{strongestRisk}
-          </h3>
-          <p className="mt-4 text-[15px] leading-8 text-[var(--text-secondary)]" style={{ fontFamily: REPORT_SERIF_FONT }}>
-            本轮读取 {answerCount || '-'} 条有效回答，覆盖 {platformCount || '-'} 个平台。读图时不需要处理全部节点，先看风险、竞品和机会的 Top 项，再回到原文判断它们是否真的影响品牌解释。
-          </p>
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            <ExecutiveMetric title="优势" value={assets[0]?.term || '-'} text={priorityItemBrief(assets[0] || {})} />
-            <ExecutiveMetric title="先处理" value={risks[0]?.term || '-'} text={priorityItemBrief(risks[0] || {})} tone="risk" />
-            <ExecutiveMetric title="平台差异" value={firstPlatform ? platformLabel(firstPlatform.platform) : '-'} text={firstPlatform?.answer_preference || '平台偏好待观察'} />
-          </div>
-        </div>
-        <div className="space-y-3">
-          <ExecutivePriorityList title="风险 Top 3" items={risks} />
-          <ExecutivePriorityList title="竞品替代 Top 3" items={competitors} />
-          <ExecutivePriorityList title="机会 Top 3" items={opportunities} />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function buildPriorityReportSection({
-  centerTerm,
-  prioritySummary,
-  groups,
-  sampleScope,
-}: {
-  centerTerm: string;
-  prioritySummary?: OntologyAssociationCirclePrioritySummary | null;
-  groups: AssociationMapGroup[];
-  sampleScope: Record<string, unknown>;
-}): ReportNarrativeSection {
-  const risks = priorityItemsOrFallback(
-    prioritySummary?.top_risks,
-    groups.find((group) => group.key === 'risk')?.nodes.filter((node) => node.business_tag !== '竞争关系') || [],
-    'risk',
-  );
-  const competitors = priorityItemsOrFallback(
-    prioritySummary?.top_competitors,
-    groups.find((group) => group.key === 'risk')?.nodes.filter((node) => node.business_tag === '竞争关系') || [],
-    'competitor',
-  );
-  const opportunities = priorityItemsOrFallback(
-    prioritySummary?.top_opportunities,
-    [
-      ...(groups.find((group) => group.key === 'growth')?.nodes || []),
-      ...(groups.find((group) => group.key === 'story')?.nodes || []),
-    ],
-    'opportunity',
-  );
-  const answerCount = sampleAnswerCount(sampleScope);
-  const platformCount = samplePlatformCount(sampleScope);
-  return {
-    title: '一屏结论与优先级',
-    readerQuestion: '品牌方这一轮先处理什么？',
-    takeaway: `${centerTerm}本轮先看风险 Top 3、竞品替代 Top 3 和机会 Top 3。`,
-    claims: [
-      `样本：${answerCount || '-'} 条有效回答，覆盖 ${platformCount || '-'} 个平台。`,
-      `风险 Top 3：${priorityTermLine(risks)}。`,
-      `竞品替代 Top 3：${priorityTermLine(competitors)}。`,
-      `机会 Top 3：${priorityTermLine(opportunities)}。`,
-    ],
-    text: [
-      `本轮不要求品牌团队逐个处理全部节点。先处理证据量高、平台覆盖广、会影响品牌解释的 Top 项，再把其他节点作为复测背景。`,
-      `风险优先级：${priorityDetailLine(risks)}`,
-      `竞品替代：${priorityDetailLine(competitors)}`,
-      `机会拉近：${priorityDetailLine(opportunities)}`,
-    ].join('\n\n'),
-    soWhat: '这部分可以直接变成下一周内容与复测任务清单。',
-    supportingFacts: [
-      prioritySummary?.reading || '优先级来自校准后的节点排序。',
-    ],
-    evidenceRefs: [
-      ...risks.flatMap((item) => item.evidence_refs || []),
-      ...competitors.flatMap((item) => item.evidence_refs || []),
-      ...opportunities.flatMap((item) => item.evidence_refs || []),
-    ].slice(0, 8),
-    nextProbe: '下一轮优先复测 Top 风险是否下降、竞品替代是否减少、机会词是否向内圈移动。',
-  };
-}
-
-function priorityTermLine(items: OntologyAssociationCirclePriorityItem[]): string {
-  return items.length
-    ? items.slice(0, 3).map((item) => item.term).filter(Boolean).join('、')
-    : '暂未形成';
-}
-
-function priorityDetailLine(items: OntologyAssociationCirclePriorityItem[]): string {
-  return items.length
-    ? items.slice(0, 3).map((item) => `${item.term || '待命名节点'}（${priorityItemBrief(item)}）`).join('；')
-    : '本轮暂未形成明确对象。';
-}
-
-function ExecutiveMetric({
-  title,
-  value,
-  text,
-  tone = 'default',
-}: {
-  title: string;
-  value: string;
-  text: string;
-  tone?: 'default' | 'risk';
-}) {
-  return (
-    <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-3">
-      <div className="text-xs text-[var(--text-tertiary)]">{title}</div>
-      <div className={`mt-2 truncate text-lg font-semibold ${tone === 'risk' ? 'text-[var(--error)]' : 'text-[var(--text-primary)]'}`}>
-        {value}
-      </div>
-      <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-secondary)]">{text}</p>
-    </div>
-  );
-}
-
-function ExecutivePriorityList({
-  title,
-  items,
-}: {
-  title: string;
-  items: OntologyAssociationCirclePriorityItem[];
-}) {
-  return (
-    <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-3">
-      <div className="text-xs font-medium text-[var(--text-tertiary)]">{title}</div>
-      <div className="mt-2 space-y-2">
-        {items.length ? items.slice(0, 3).map((item, index) => (
-          <div key={`${title}-${item.node_id || item.term || index}`} className="grid grid-cols-[24px_minmax(0,1fr)] gap-2 text-sm">
-            <span className="text-[var(--text-tertiary)]">{item.rank || index + 1}</span>
-            <div className="min-w-0">
-              <div className="truncate font-semibold">{item.term || '待命名节点'}</div>
-              <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-[var(--text-secondary)]">
-                {priorityItemBrief(item)}
-              </p>
-            </div>
-          </div>
-        )) : (
-          <p className="text-xs leading-5 text-[var(--text-tertiary)]">本轮暂未形成明确 Top 项。</p>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function reportEvidenceLine(value: string) {
@@ -4705,21 +5090,20 @@ function ReportSection({
   section,
   index,
   groups,
-  platformComparison,
   sampleScope,
   centerTerm,
+  strategyStoryline,
+  storylineAnalysis,
 }: {
   section: ReportNarrativeSection;
   index: number;
   groups?: AssociationMapGroup[];
-  platformComparison?: OntologyAssociationCirclePlatformComparison[];
   sampleScope?: Record<string, unknown>;
   centerTerm?: string;
+  strategyStoryline?: OntologyAssociationCircleStrategyStoryline;
+  storylineAnalysis?: OntologyAssociationCircleStorylineAnalysis;
 }) {
   const paragraphs = section.text.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
-  const supportingFacts = section.supportingFacts || [];
-  const quoteFacts = supportingFacts.filter(reportEvidenceLine);
-  const dataFacts = supportingFacts.filter((fact) => !reportEvidenceLine(fact));
   const isVerdict = index === 0 || section.sectionId === 'core_verdict';
   const titleText = section.title || '';
   const isCoreVerdict = isVerdict || titleText === '核心判断';
@@ -4731,7 +5115,6 @@ function ReportSection({
 
   const coreMetrics = isCoreVerdict && sampleScope && groups?.length ? buildCoreVerdictMetrics(sampleScope, groups) : null;
   const barChartItems = isAiArchive && groups?.length ? buildNodeFrequencyBars(groups) : null;
-  const platformRows = isPlatformDiff && platformComparison?.length ? platformComparison : null;
   const actionClaims = isAction && section.claims?.length ? section.claims : null;
   const entityTerms = buildReportEntityTerms(groups, centerTerm);
 
@@ -4739,9 +5122,11 @@ function ReportSection({
     <section className={isVerdict ? 'rounded-2xl border border-[var(--brand-border)] bg-[var(--brand-bg)] px-5 py-6 sm:px-7 sm:py-7' : 'border-t border-[var(--border-subtle)] pt-10 first:border-t-0 first:pt-0'}>
       <div className="flex items-start gap-3">
         {!isVerdict ? (
-          <span className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--brand-bg)] text-sm font-semibold text-[var(--brand-primary)]">
-            {index}
-          </span>
+          <div className="mt-1 flex h-8 w-12 shrink-0 items-center border-r border-[var(--brand-border)] pr-3" aria-hidden="true">
+            <span className="text-xs font-bold tabular-nums tracking-[0.16em] text-[var(--brand-primary)]">
+              {String(index).padStart(2, '0')}
+            </span>
+          </div>
         ) : null}
         <div className="min-w-0 flex-1">
           <h3
@@ -4753,7 +5138,7 @@ function ReportSection({
         </div>
       </div>
       {section.readerQuestion ? (
-        <p className="mt-3 text-sm leading-7 text-[var(--text-tertiary)]">
+        <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">
           {section.readerQuestion}
         </p>
       ) : null}
@@ -4782,8 +5167,13 @@ function ReportSection({
         )
       ) : null}
       {coreMetrics?.length ? <ReportMetricRow metrics={coreMetrics} /> : null}
-      {isBlindSpot && section.claims?.length ? <ReportBlindSpotTable claims={section.claims} /> : null}
-      {isFourPillars && section.claims?.length ? <ReportFourHaveMetricCards claims={section.claims} /> : null}
+      {isBlindSpot ? <ReportBlindSpotTable metrics={storylineAnalysis?.blind_spot} /> : null}
+      {isFourPillars && section.claims?.length ? (
+        <ReportFourHaveMetricCards
+          claims={section.claims}
+          pillars={strategyStoryline?.pillars || []}
+        />
+      ) : null}
       {actionClaims?.length ? (
         <ReportActionCards claims={actionClaims} tone="problem" />
       ) : (isAiArchive || isPlatformDiff) && section.claims?.length ? (
@@ -4829,7 +5219,7 @@ function ReportSection({
       ) : null}
       {section.evidenceRefs?.length && !isVerdict ? (
         <div className="mt-6 border-t border-[var(--border-subtle)] pt-5 text-sm leading-6 text-[var(--text-secondary)]">
-          <p>已关联 {section.evidenceRefs.length} 条回答证据，问题、平台和摘录见下方证据链。</p>
+          <p>已关联 {section.evidenceRefs.length} 个证据引用，问题、平台和摘录见下方证据链。</p>
         </div>
       ) : null}
     </section>
@@ -4842,35 +5232,62 @@ function buildCoreVerdictMetrics(
 ): Array<{ label: string; value: string; sub?: string; tone?: 'default' | 'risk' | 'opportunity' }> {
   const answerCount = sampleAnswerCount(sampleScope);
   const platformCount = samplePlatformCount(sampleScope);
-  const riskCount = groups.find((g) => g.key === 'risk')?.nodes.length || 0;
-  const opportunityCount = (groups.find((g) => g.key === 'growth')?.nodes.length || 0)
-    + (groups.find((g) => g.key === 'story')?.nodes.length || 0);
+  const riskGroupNodes = groups.find((g) => g.key === 'risk')?.nodes || [];
+  const riskCount = riskGroupNodes.filter((node) => !isCompetitorNode(node)).length;
+  const competitorCount = riskGroupNodes.filter(isCompetitorNode).length;
+  const opportunityCount = groups.find((g) => g.key === 'growth')?.nodes.length || 0;
+  const watchCount = groups.find((g) => g.key === 'story')?.nodes.length || 0;
   return [
     { label: '有效回答', value: answerCount ? String(answerCount) : '-', sub: '本轮解析基线' },
     { label: '有效平台', value: platformCount ? String(platformCount) : '-', sub: '进入比较的平台数' },
-    { label: '风险节点', value: String(riskCount), sub: '风险关系层节点数', tone: 'risk' },
-    { label: '机会节点', value: String(opportunityCount), sub: '机会轨 + 观察轨', tone: 'opportunity' },
+    { label: '机会节点', value: String(opportunityCount), sub: '机会轨节点数', tone: 'opportunity' },
+    { label: '观察节点', value: String(watchCount), sub: '观察轨节点数' },
+    { label: '风险认知', value: String(riskCount), sub: '质疑与负向关系', tone: 'risk' },
+    { label: '竞品参照', value: String(competitorCount), sub: '竞争与替代关系' },
   ];
 }
 
-function buildNodeFrequencyBars(groups: AssociationMapGroup[]): Array<{ label: string; value: number; tone: 'strong' | 'growth' | 'story' | 'risk' }> {
-  const items: Array<{ label: string; value: number; tone: 'strong' | 'growth' | 'story' | 'risk' }> = [];
+interface NodeFrequencyBarItem {
+  label: string;
+  value: number;
+  tone: 'strong' | 'growth' | 'story' | 'risk';
+  countMode: ReturnType<typeof nodeCountMode>;
+  valueLabel: string;
+}
+
+function buildNodeFrequencyBars(groups: AssociationMapGroup[]): NodeFrequencyBarItem[] {
+  const items: NodeFrequencyBarItem[] = [];
   (['strong', 'growth', 'story', 'risk'] as const).forEach((key) => {
     const group = groups.find((g) => g.key === key);
     if (!group) return;
     group.nodes.slice(0, 4).forEach((node) => {
       const raw = node.answer_count || node.frequency_score || node.gravity_score || node.closeness_score || 0;
-      items.push({ label: node.term, value: Number(raw) || 0, tone: key });
+      const value = Number(raw) || 0;
+      items.push({
+        label: node.term,
+        value,
+        tone: key,
+        countMode: nodeCountMode(node),
+        valueLabel: `${value}${nodeCountShortUnit(node)}`,
+      });
     });
   });
   items.sort((a, b) => b.value - a.value);
   return items.slice(0, 8);
 }
 
+function nodeFrequencyChartTitle(items: NodeFrequencyBarItem[]): string {
+  const modes = new Set(items.map((item) => item.countMode));
+  if (modes.size === 1 && modes.has('answers')) return '节点频率（按去重回答数）';
+  if (modes.size === 1 && modes.has('mentions')) return '节点频率（按节点提及次数）';
+  if (modes.size === 1 && modes.has('lower_bound')) return '节点频率（按可确认回答下限）';
+  return '节点出现量（答＝去重回答；答+＝可确认回答下限；次＝节点提及）';
+}
+
 function reportBarToneColor(tone: string) {
   switch (tone) {
     case 'strong': return 'var(--brand-primary)';
-    case 'growth': return 'var(--success)';
+    case 'growth': return 'var(--evidence-opportunity)';
     case 'story': return 'var(--text-tertiary)';
     case 'risk': return 'var(--error)';
     default: return 'var(--brand-primary)';
@@ -4882,23 +5299,23 @@ function ReportMetricRow({ metrics }: { metrics: Array<{ label: string; value: s
     <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {metrics.map((metric) => (
         <div key={metric.label} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-3">
-          <div className="text-xs text-[var(--text-tertiary)]">{metric.label}</div>
-          <div className={`mt-1 text-2xl font-semibold tabular-nums ${metric.tone === 'risk' ? 'text-[var(--error)]' : metric.tone === 'opportunity' ? 'text-[var(--brand-primary)]' : 'text-[var(--text-primary)]'}`}>
+          <div className="text-xs text-[var(--text-secondary)]">{metric.label}</div>
+          <div className={`mt-1 text-2xl font-semibold tabular-nums ${metric.tone === 'risk' ? 'text-[var(--error)]' : metric.tone === 'opportunity' ? 'text-[var(--evidence-opportunity)]' : 'text-[var(--text-primary)]'}`}>
             {metric.value}
           </div>
-          {metric.sub ? <div className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">{metric.sub}</div> : null}
+          {metric.sub ? <div className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">{metric.sub}</div> : null}
         </div>
       ))}
     </div>
   );
 }
 
-function ReportBarChart({ items }: { items: Array<{ label: string; value: number; tone: 'strong' | 'growth' | 'story' | 'risk' }> }) {
+function ReportBarChart({ items }: { items: NodeFrequencyBarItem[] }) {
   if (!items.length) return null;
   const maxValue = Math.max(...items.map((item) => item.value), 1);
   return (
     <div className="mt-6 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-4">
-      <div className="text-xs font-medium text-[var(--text-tertiary)]">节点频率（按回答带回次数）</div>
+      <div className="text-xs font-medium text-[var(--text-tertiary)]">{nodeFrequencyChartTitle(items)}</div>
       <div className="mt-3 space-y-2">
         {items.map((item) => (
           <div key={item.label} className="flex items-center gap-3 text-sm">
@@ -4909,7 +5326,7 @@ function ReportBarChart({ items }: { items: Array<{ label: string; value: number
                 style={{ width: `${Math.max(4, (item.value / maxValue) * 100)}%`, backgroundColor: reportBarToneColor(item.tone) }}
               />
             </div>
-            <span className="w-10 shrink-0 text-right font-semibold tabular-nums text-[var(--text-primary)]">{item.value}</span>
+            <span className="w-12 shrink-0 text-right font-semibold tabular-nums text-[var(--text-primary)]">{item.valueLabel}</span>
           </div>
         ))}
       </div>
@@ -4919,72 +5336,6 @@ function ReportBarChart({ items }: { items: Array<{ label: string; value: number
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: reportBarToneColor('story') }} />观察轨</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: reportBarToneColor('risk') }} />风险关系</span>
       </div>
-    </div>
-  );
-}
-
-function ReportGapBadges() {
-  const badges: Array<{ label: string; gap: string; desc: string; tone: 'warning' | 'risk' | 'muted' }> = [
-    { label: '有健康', gap: '叙事层级差距', desc: '停在产品层，未进方案层', tone: 'warning' },
-    { label: '有陪伴', gap: '叙事被劫持', desc: '高可见低可信', tone: 'risk' },
-    { label: '有保障', gap: '叙事被反转', desc: '被风险语境笼罩', tone: 'risk' },
-    { label: '有价值', gap: '叙事缺位', desc: 'AI 几乎不主动提及', tone: 'muted' },
-  ];
-  const toneClass = (tone: string) => {
-    switch (tone) {
-      case 'warning': return 'border-l-4 border-[var(--status-warning)] bg-[var(--status-warning-bg)] text-[var(--status-warning)]';
-      case 'risk': return 'border-l-4 border-[var(--error)] bg-[rgba(239,91,107,0.10)] text-[var(--error)]';
-      case 'muted': return 'border-l-4 border-[var(--text-tertiary)] bg-[var(--bg-secondary)] text-[var(--text-tertiary)]';
-      default: return 'border-l-4 border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]';
-    }
-  };
-  return (
-    <div className="mt-6 grid gap-2 sm:grid-cols-2">
-      {badges.map((badge) => (
-        <div key={badge.label} className={`rounded-r-lg px-4 py-3 ${toneClass(badge.tone)}`}>
-          <div className="flex items-baseline gap-2">
-            <span className="text-sm font-semibold">{badge.label}</span>
-            <span className="text-xs font-medium opacity-90">差距类型：{badge.gap}</span>
-          </div>
-          <p className="mt-1 text-xs leading-5 opacity-80">{badge.desc}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ReportPlatformTable({ rows }: { rows: OntologyAssociationCirclePlatformComparison[] }) {
-  return (
-    <div className="mt-6 overflow-x-auto rounded-xl border border-[var(--border-subtle)]">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="bg-[var(--bg-secondary)] text-left text-xs text-[var(--text-tertiary)]">
-            <th className="px-3 py-2 font-medium">平台</th>
-            <th className="px-3 py-2 text-right font-medium">有效回答</th>
-            <th className="px-3 py-2 font-medium">回答偏好</th>
-            <th className="px-3 py-2 font-medium">代表节点</th>
-            <th className="px-3 py-2 font-medium">竞品参照</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={row.platform} className={index > 0 ? 'border-t border-[var(--border-subtle)]' : ''}>
-              <td className="px-3 py-2">
-                <span
-                  className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-semibold text-white"
-                  style={{ backgroundColor: reportPlatformAccent(row.platform) }}
-                >
-                  {platformLabel(row.platform)}
-                </span>
-              </td>
-              <td className="px-3 py-2 text-right font-semibold tabular-nums text-[var(--text-primary)]">{row.valid_answer_count || 0}</td>
-              <td className="px-3 py-2 text-[var(--text-secondary)]">{row.answer_preference || '偏好待观察'}</td>
-              <td className="px-3 py-2 text-[var(--text-secondary)]">{(row.preferred_nodes || []).slice(0, 3).join('、') || '—'}</td>
-              <td className="px-3 py-2 text-[var(--text-secondary)]">{(row.competition_nodes || []).slice(0, 3).join('、') || '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
@@ -5001,10 +5352,10 @@ function ReportActionCards({ claims, tone = 'action' }: { claims: string[]; tone
         >
           <div className="flex items-start gap-3">
             <span
-              className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-[var(--brand-contrast)]"
-              style={{ backgroundColor: borderColor }}
+              className="mt-1 inline-flex w-7 shrink-0 text-[11px] font-semibold tabular-nums tracking-[0.14em]"
+              style={{ color: borderColor }}
             >
-              {index + 1}
+              {String(index + 1).padStart(2, '0')}
             </span>
             <p className="min-w-0 flex-1 text-sm leading-7 text-[var(--text-secondary)]">{claim}</p>
           </div>
@@ -5045,19 +5396,22 @@ function ReportPersonaClaimCards({ claims }: { claims: string[] }) {
   );
 }
 
-function ReportBlindSpotTable({ claims }: { claims: string[] }) {
-  let brandNamed = 0;
-  let openAnswers = 0;
-  let openMentions = 0;
-  let activeRate = '0';
-  claims.forEach((c) => {
-    const numMatch = c.match(/(\d+)\s*条/);
-    const rateMatch = c.match(/([\d.]+)%/);
-    if (c.includes('含品牌名') && numMatch) brandNamed = parseInt(numMatch[1], 10);
-    if (c.includes('开放问题回答') && numMatch) openAnswers = parseInt(numMatch[1], 10);
-    if (c.includes('开放问题主动提及') && numMatch) openMentions = parseInt(numMatch[1], 10);
-    if (c.includes('主动提及率') && rateMatch) activeRate = rateMatch[1];
-  });
+function ReportBlindSpotTable({ metrics }: { metrics?: OntologyAssociationCircleBlindSpotMetrics }) {
+  const numberOrNull = (value: unknown): number | null => (
+    typeof value === 'number' && Number.isFinite(value) ? value : null
+  );
+  const brandNamed = numberOrNull(metrics?.brand_named_answer_count);
+  const brandNamedMentions = numberOrNull(metrics?.brand_named_brand_mention_count);
+  const openAnswers = numberOrNull(metrics?.open_answer_count);
+  const openMentions = numberOrNull(metrics?.open_brand_mention_count);
+  const openRate = numberOrNull(metrics?.active_mention_rate);
+  const brandNamedRate = brandNamed !== null && brandNamed > 0 && brandNamedMentions !== null
+    ? brandNamedMentions / brandNamed
+    : null;
+  const exactAnswers = metrics?.answer_count_is_exact === true;
+  const countLabel = exactAnswers ? '回答总量' : '去重原文观察';
+  const formatCount = (value: number | null) => value === null ? '未评估' : String(value);
+  const formatRate = (value: number | null) => value === null ? '未评估' : `${Math.round(value * 1000) / 10}%`;
   return (
     <div className="mt-6 rounded-xl border border-[var(--error)] bg-[rgba(239,91,107,0.06)] p-5">
       <div className="text-sm font-semibold text-[var(--error)]">最值得重视的一组数字</div>
@@ -5065,7 +5419,7 @@ function ReportBlindSpotTable({ claims }: { claims: string[] }) {
         <thead>
           <tr className="text-left text-xs text-[var(--text-tertiary)]">
             <th className="py-2 font-medium">问题类型</th>
-            <th className="py-2 text-right font-medium">回答总量</th>
+            <th className="py-2 text-right font-medium">{countLabel}</th>
             <th className="py-2 text-right font-medium">主动提到安利</th>
             <th className="py-2 text-right font-medium">比率</th>
           </tr>
@@ -5073,41 +5427,85 @@ function ReportBlindSpotTable({ claims }: { claims: string[] }) {
         <tbody>
           <tr className="border-t border-[var(--border-subtle)]">
             <td className="py-2">问题中包含「安利」</td>
-            <td className="py-2 text-right tabular-nums">{brandNamed}</td>
-            <td className="py-2 text-right tabular-nums text-[var(--brand-primary)]">{brandNamed}</td>
-            <td className="py-2 text-right tabular-nums text-[var(--brand-primary)]">100%</td>
+            <td className="py-2 text-right tabular-nums">{formatCount(brandNamed)}</td>
+            <td className="py-2 text-right tabular-nums text-[var(--brand-primary)]">{formatCount(brandNamedMentions)}</td>
+            <td className="py-2 text-right tabular-nums text-[var(--brand-primary)]">{formatRate(brandNamedRate)}</td>
           </tr>
           <tr className="border-t border-[var(--border-subtle)]">
             <td className="py-2">问题中不含「安利」</td>
-            <td className="py-2 text-right tabular-nums">{openAnswers}</td>
-            <td className="py-2 text-right tabular-nums text-[var(--error)]">{openMentions}</td>
-            <td className="py-2 text-right tabular-nums text-[var(--error)]">{activeRate}%</td>
+            <td className="py-2 text-right tabular-nums">{formatCount(openAnswers)}</td>
+            <td className="py-2 text-right tabular-nums text-[var(--error)]">{formatCount(openMentions)}</td>
+            <td className="py-2 text-right tabular-nums text-[var(--error)]">
+              {formatRate(openRate)}
+            </td>
           </tr>
         </tbody>
       </table>
+      {!exactAnswers ? (
+        <p className="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
+          历史产物未保存可去重回答 ID；本表按运行、平台和问题去重展示原文观察，不冒充精确回答数。
+        </p>
+      ) : null}
     </div>
   );
 }
 
-function ReportFourHaveMetricCards({ claims }: { claims: string[] }) {
+function ReportFourHaveMetricCards({
+  claims,
+  pillars,
+}: {
+  claims: string[];
+  pillars: OntologyAssociationCircleStrategyPillar[];
+}) {
   const parseClaim = (claim: string) => {
     const labelMatch = claim.match(/^有(健康|陪伴|保障|价值)/);
     const label = labelMatch ? `有${labelMatch[1]}` : '';
     const gapMatch = claim.match(/差距类型为([^；；]+)/);
     const gap = gapMatch?.[1]?.trim() || '';
+    const cumulativeMatch = claim.match(/累计命中\s*(\d+)\s*次，样本回答\s*(\d+)\s*条/);
     const countMatch = claim.match(/(\d+)\s*条/);
-    const count = countMatch?.[1] || '0';
+    const count = cumulativeMatch ? '' : countMatch?.[1] || '0';
     const pctMatch = claim.match(/占\s*([\d.]+)%/);
     const pct = pctMatch?.[1] || '';
     const nodeMatch = claim.match(/代表节点为([^。]+)|风险入口为([^。]+)|线索为([^。]+)/);
     const nodes = nodeMatch?.[1] || nodeMatch?.[2] || nodeMatch?.[3] || '';
-    return { label, gap, count, pct, nodes };
+    const note = cumulativeMatch
+      ? `旧报告仅保存 ${cumulativeMatch[1]} 次跨词命中与 ${cumulativeMatch[2]} 条总样本；去重回答数待重新生成`
+      : pct
+        ? `占样本回答 ${pct}%`
+        : '占比待评估';
+    return { label, gap, count, pct, nodes, note };
   };
-  const items = claims.map(parseClaim).filter((item) => item.label);
+  const structuredItems = pillars.map((pillar) => ({
+    label: pillar.label || '',
+    gap: pillar.status_label || '待观察',
+    count: pillar.answer_count_is_exact === true
+      ? String(pillar.answer_mention_count || 0)
+      : pillar.count_semantics === 'known_answer_refs_lower_bound'
+        ? `≥${pillar.answer_mention_count || 0}`
+        : String(pillar.answer_mention_count || 0),
+    unit: pillar.answer_count_is_exact === true
+      || pillar.count_semantics === 'known_answer_refs_lower_bound'
+      ? '条'
+      : '次',
+    nodes: (pillar.node_terms || []).join('、'),
+    note: pillar.answer_count_is_exact === true
+      ? `去重回答数 · 覆盖 ${pillar.platform_count || 0} 个平台`
+      : pillar.count_semantics === 'known_answer_refs_lower_bound'
+        ? '旧新证据混合，仅展示可确认下限'
+        : '节点提及次数（跨词可重复），不可作为去重回答数',
+  })).filter((item) => item.label);
+  const items = structuredItems.length
+    ? structuredItems
+    : claims.map(parseClaim).filter((item) => item.label).map((item) => ({ ...item, unit: '条' }));
   const toneColor = (gap: string) => {
-    if (gap.includes('缺位')) return 'var(--text-tertiary)';
-    if (gap.includes('反转') || gap.includes('劫持')) return 'var(--error)';
-    if (gap.includes('层级')) return 'var(--status-warning)';
+    if (gap.includes('反转') || gap.includes('劫持') || gap.includes('遮蔽')) return 'var(--error)';
+    if (gap.includes('层级') || gap.includes('牵制') || gap.includes('偏产品') || gap.includes('萌芽')) {
+      return 'var(--status-warning)';
+    }
+    if (gap.includes('缺位') || gap.includes('缺故事') || gap.includes('弱信号') || gap.includes('待观察')) {
+      return 'var(--text-secondary)';
+    }
     return 'var(--brand-primary)';
   };
   return (
@@ -5119,12 +5517,12 @@ function ReportFourHaveMetricCards({ claims }: { claims: string[] }) {
           style={{ borderTop: `3px solid ${toneColor(item.gap)}` }}
         >
           <div className="text-sm font-semibold text-[var(--text-primary)]">{item.label}</div>
-          <div className="mt-1 text-xs text-[var(--text-tertiary)]">{item.gap}</div>
+          <div className="mt-1 text-xs font-medium text-[var(--text-secondary)]">{item.gap}</div>
           <div className="mt-2 text-2xl font-semibold tabular-nums" style={{ color: toneColor(item.gap) }}>
-            {item.pct ? `${item.pct}%` : item.count}
+            {item.count || '—'}{item.count ? <span className="ml-1 text-sm font-medium">{item.unit}</span> : null}
           </div>
-          <div className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
-            {item.count} 条{item.pct ? ` · 占 ${item.pct}%` : ''}
+          <div className="mt-1 text-xs font-medium leading-5 text-[var(--text-secondary)]">
+            {item.note}
           </div>
           {item.nodes ? (
             <div className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">{item.nodes}</div>
@@ -5142,31 +5540,34 @@ function ReportPlatformEvaluationTable({ claims }: { claims: string[] }) {
     const rest = match?.[2] || claim;
     const parenIndex = rest.indexOf('（');
     const dataLine = parenIndex > 0 ? rest.slice(parenIndex) : '';
-    const answerMatch = dataLine.match(/回答\s*(\d+)\s*条/);
+    const answerMatch = dataLine.match(/(?:回答|品牌关联原文片段)\s*(\d+)\s*条/);
     const riskMatch = dataLine.match(/风险语境\s*(\d+)\s*条/);
     const transMatch = dataLine.match(/转型叙事\s*(\d+)\s*条/);
     const activeMatch = dataLine.match(/主动带出品牌\s*(\d+)\s*条/);
     const answers = answerMatch ? parseInt(answerMatch[1], 10) : 0;
-    const risks = riskMatch ? parseInt(riskMatch[1], 10) : 0;
-    const trans = transMatch ? parseInt(transMatch[1], 10) : 0;
-    const active = activeMatch ? parseInt(activeMatch[1], 10) : 0;
-    const riskRate = answers ? risks / answers : 0;
-    const transRate = answers ? trans / answers : 0;
+    const risks = riskMatch ? parseInt(riskMatch[1], 10) : null;
+    const trans = transMatch ? parseInt(transMatch[1], 10) : null;
+    const active = activeMatch ? parseInt(activeMatch[1], 10) : null;
+    const sampleLimited = answers > 0 && answers < 3;
+    const riskRate = answers && risks !== null ? risks / answers : null;
+    const transRate = answers && trans !== null ? trans / answers : null;
     return {
       platform,
       answers,
-      riskDensity: riskRate >= 0.45 ? '高' : riskRate >= 0.3 ? '中' : '低',
-      transitionNarrative: transRate >= 0.6 ? '高' : transRate >= 0.3 ? '中' : '低',
-      activeRecommend: active >= 1 ? '有' : '无',
+      riskDensity: sampleLimited ? '样本不足' : riskRate === null ? '未评估' : riskRate >= 0.45 ? '高' : riskRate >= 0.3 ? '中' : '低',
+      transitionNarrative: sampleLimited ? '样本不足' : transRate === null ? '未评估' : transRate >= 0.6 ? '高' : transRate >= 0.3 ? '中' : '低',
+      activeRecommend: active === null ? '未评估' : active >= 1 ? '有' : '无',
     };
   }).filter((p) => p.platform);
   if (!platforms.length) return null;
   const riskColor = (val: string) => {
+    if (val === '未评估' || val === '样本不足') return 'text-[var(--text-secondary)]';
     if (val === '高') return 'text-[var(--error)]';
     if (val === '低') return 'text-[var(--brand-primary)]';
     return 'text-[var(--status-warning)]';
   };
   const goodColor = (val: string) => {
+    if (val === '未评估' || val === '样本不足') return 'text-[var(--text-secondary)]';
     if (val === '高' || val === '有') return 'text-[var(--brand-primary)]';
     if (val === '低' || val === '无') return 'text-[var(--error)]';
     return 'text-[var(--status-warning)]';
@@ -5184,7 +5585,7 @@ function ReportPlatformEvaluationTable({ claims }: { claims: string[] }) {
         </thead>
         <tbody>
           <tr className="border-t border-[var(--border-subtle)]">
-            <td className="px-3 py-2 text-[var(--text-secondary)]">安利回答量</td>
+            <td className="px-3 py-2 text-[var(--text-secondary)]">品牌关联原文片段</td>
             {platforms.map((p) => (
               <td key={p.platform} className="px-3 py-2 font-semibold tabular-nums text-[var(--text-primary)]">{p.answers}</td>
             ))}
@@ -5196,15 +5597,15 @@ function ReportPlatformEvaluationTable({ claims }: { claims: string[] }) {
             ))}
           </tr>
           <tr className="border-t border-[var(--border-subtle)]">
-            <td className="px-3 py-2 text-[var(--text-secondary)]">转型叙事认可度</td>
+            <td className="px-3 py-2 text-[var(--text-secondary)]">转型叙事覆盖度</td>
             {platforms.map((p) => (
               <td key={p.platform} className={`px-3 py-2 font-semibold ${goodColor(p.transitionNarrative)}`}>{p.transitionNarrative}</td>
             ))}
           </tr>
           <tr className="border-t border-[var(--border-subtle)]">
-            <td className="px-3 py-2 text-[var(--text-secondary)]">主动推荐安利</td>
+            <td className="px-3 py-2 text-[var(--text-secondary)]">主动带出品牌</td>
             {platforms.map((p) => (
-              <td key={p.platform} className={`px-3 py-2 font-semibold ${goodColor(p.activeRecommend === '有' ? '高' : '低')}`}>{p.activeRecommend}</td>
+              <td key={p.platform} className={`px-3 py-2 font-semibold ${p.activeRecommend === '未评估' ? 'text-[var(--text-tertiary)]' : goodColor(p.activeRecommend === '有' ? '高' : '低')}`}>{p.activeRecommend}</td>
             ))}
           </tr>
         </tbody>
@@ -5310,11 +5711,13 @@ function ReportEvidenceBrief({
   platformSourceSummary,
   evidenceFindings,
   sourceAppendix,
+  nodes,
 }: {
   questionDefinition?: OntologyAssociationCircleQuestionDefinition;
   platformSourceSummary?: OntologyAssociationCirclePlatformSourceSummary;
   evidenceFindings: OntologyAssociationCircleEvidenceFinding[];
   sourceAppendix: OntologyAssociationCircleSourceAppendixItem[];
+  nodes: OntologyAssociationCircleNode[];
 }) {
   if (!questionDefinition && !platformSourceSummary && !evidenceFindings.length) return null;
   const audienceText = (questionDefinition?.audience_segments || []).join('、') || '题库未携带人群标签';
@@ -5357,7 +5760,7 @@ function ReportEvidenceBrief({
           <ul className="mt-3 space-y-2 pl-5 text-sm leading-7 text-[var(--text-secondary)]">
             {(platformSourceSummary?.platforms || []).slice(0, 5).map((row) => (
               <li key={row.platform} className="list-disc">
-                {row.platform}：{row.valid_answer_count || 0} 条有效；{row.answer_preference || '偏好待观察'}；代表节点：{(row.preferred_nodes || []).join('、') || '暂无'}{(row.competition_nodes || []).length ? `；竞品参照：${(row.competition_nodes || []).join('、')}` : ''}。
+                {platformLabel(row.platform || '')}：{row.valid_answer_count || 0} 条有效；{row.answer_preference || '偏好待观察'}；代表节点：{(row.preferred_nodes || []).join('、') || '暂无'}{(row.competition_nodes || []).length ? `；竞品参照：${(row.competition_nodes || []).join('、')}` : ''}。
               </li>
             ))}
           </ul>
@@ -5369,11 +5772,13 @@ function ReportEvidenceBrief({
             <ul className="mt-3 space-y-3 pl-5 text-sm leading-7 text-[var(--text-secondary)]">
               {evidenceFindings.slice(0, 8).map((finding) => (
                 <li key={finding.node_id || finding.node_term} className="list-disc">
-                  <span className="font-semibold text-[var(--text-primary)]">{finding.node_term}：</span>
-                  {commercialReportCopy(finding.claim)}
+                  <span className="font-semibold text-[var(--text-primary)]">{commercialReportCopy(finding.node_term)}：</span>
+                  {evidenceFindingCopy(finding.claim, finding, nodes)}
                   {(() => {
-                    const facts = finding.supporting_facts || [];
-                    return facts.length ? ` ${facts.slice(0, 2).map(commercialReportCopy).join('；')}` : '';
+                    const facts = uniqueEvidenceFindingFacts(finding, nodes, 2);
+                    return facts.length
+                      ? ` ${facts.join('；')}`
+                      : '';
                   })()}
                 </li>
               ))}
@@ -5388,7 +5793,7 @@ function ReportEvidenceBrief({
               {sourceAppendix.slice(0, 8).map((item, index) => (
                 <div key={`${item.evidence_id || index}`} className="border-t border-[var(--border-subtle)] pt-4 first:border-t-0 first:pt-0">
                   <p className="font-semibold text-[var(--text-primary)]">
-                    {item.node_term || '节点'} / {item.platform || '平台'}
+                    {commercialReportCopy(item.node_term || '节点')} / {platformLabel(item.platform || '')}
                   </p>
                   <p className="mt-1">{cleanEvidenceExcerpt(item.question, 120)}</p>
                   <p className="mt-1 text-[var(--text-tertiary)]">{cleanEvidenceExcerpt(item.answer_excerpt, 180)}</p>
@@ -5456,14 +5861,14 @@ function buildExportOrbitSnapshotHtml(
   const labels = labelEntries.map((entry) => {
     const tone = entry.groupKey;
     const evidence = nodeEvidenceCount(entry.node);
-    const origin = entry.node.term_origin === 'strategy' || entry.node.origin_label === '战略词' ? '战' : '答';
+    const origin = entry.node.term_origin === 'strategy' || entry.node.origin_label === '战略词' ? '战略' : '回答';
     const labelLeft = clampNumber(entry.left, 7.5, 92.5);
     const labelTop = clampNumber(entry.top, 8, 92);
     return `
       <span
         class="orbit-export-label orbit-label-${tone}"
         style="left:${labelLeft.toFixed(2)}%;top:${labelTop.toFixed(2)}%;"
-        title="${escapeHtml(entry.node.term)} / ${evidence} 条证据 / ${nodePlatformCount(entry.node)} 个平台"
+        title="${escapeHtml(entry.node.term)} / ${escapeHtml(nodeCountPhrase(entry.node, evidence))} / ${nodePlatformCount(entry.node)} 个平台"
       >
         ${escapeHtml(entry.node.term)}
         <em>${origin}</em>
@@ -5473,7 +5878,7 @@ function buildExportOrbitSnapshotHtml(
   const topList = topNodes.map((entry, index) => `
     <li>
       <span>${index + 1}. ${escapeHtml(entry.node.term)}</span>
-      <b>${nodeEvidenceCount(entry.node)} 条</b>
+      <b>${escapeHtml(nodeCountPhrase(entry.node, nodeEvidenceCount(entry.node)))}</b>
     </li>
   `).join('');
   return `
@@ -5492,15 +5897,8 @@ function buildExportOrbitSnapshotHtml(
       </div>
       <div class="orbit-export-wrap">
         <svg class="orbit-export-svg" viewBox="0 0 1200 600" role="img" aria-label="${escapeHtml(centerTerm)}品牌联想圈层图">
-          <defs>
-            <radialGradient id="export-orbit-core" cx="50%" cy="50%" r="52%">
-              <stop offset="0%" stop-color="#e1f1ed" stop-opacity="0.92" />
-              <stop offset="62%" stop-color="#e1f1ed" stop-opacity="0.28" />
-              <stop offset="100%" stop-color="#fffdf8" stop-opacity="0" />
-            </radialGradient>
-          </defs>
           <rect x="0" y="0" width="1200" height="600" rx="28" fill="#fffdf8" />
-          <ellipse cx="600" cy="300" rx="288" ry="104" fill="url(#export-orbit-core)" stroke="#8ecbc0" stroke-width="2" opacity="0.9" />
+          <ellipse cx="600" cy="300" rx="288" ry="104" fill="#e1f1ed" fill-opacity="0.46" stroke="#8ecbc0" stroke-width="2" />
           <ellipse cx="600" cy="300" rx="420" ry="151" fill="none" stroke="#d7ae72" stroke-width="2" stroke-dasharray="10 12" opacity="0.62" />
           <ellipse cx="600" cy="300" rx="564" ry="203" fill="none" stroke="#c8c2b8" stroke-width="2" opacity="0.62" />
           <ellipse cx="600" cy="342" rx="582" ry="230" fill="none" stroke="#d98279" stroke-width="1.5" stroke-dasharray="8 14" opacity="0.26" />
@@ -5551,6 +5949,8 @@ function downloadAssociationReportHtml(
 ) {
   if (typeof window === 'undefined') return;
   const groups = evidence?.groups;
+  const reportNodes = (groups || []).flatMap((group) => group.nodes);
+  const reportCopy = (value?: string | null) => regulatoryScopedReportCopy(value, reportNodes);
   const platformComparison = evidence?.platformComparison || [];
   const sampleScope = evidence?.sampleScope || {};
   const entityTerms = buildReportEntityTerms(groups, centerTerm);
@@ -5559,7 +5959,8 @@ function downloadAssociationReportHtml(
   const periodChangeHtml = buildExportPeriodChangeHtml(evidence?.periodView || null);
 
   const sectionHtml = sections.map((section, index) => {
-    const titleText = section.title || '';
+    const titleText = reportCopy(section.title);
+    const sectionClaims = (section.claims || []).map((claim) => reportCopy(claim));
     const isVerdict = index === 0 || section.sectionId === 'core_verdict';
     const isAiArchive = titleText.includes('AI 档案') || titleText.includes('档案里写了什么');
     const isAction = titleText.includes('从数据到行动') || (titleText.includes('本周') && titleText.includes('件事'));
@@ -5567,11 +5968,11 @@ function downloadAssociationReportHtml(
     const isPlatformDiff = titleText === '平台差异' || titleText.includes('平台差异');
 
     const takeawayClass = isBlindSpot ? 'takeaway-box-red' : isVerdict ? 'takeaway-box-green-strong' : 'takeaway-box-green';
-    const takeawayHtml = section.takeaway ? `<div class="${takeawayClass}">${renderExportParagraphHtml(section.takeaway, entityTerms)}</div>` : '';
+    const takeawayHtml = section.takeaway ? `<div class="${takeawayClass}">${renderExportParagraphHtml(reportCopy(section.takeaway), entityTerms)}</div>` : '';
 
     let claimsHtml = '';
-    if (isAiArchive && section.claims?.length) {
-      claimsHtml = `<div class="persona-grid">${section.claims.slice(0, 4).map((claim) => {
+    if (isAiArchive && sectionClaims.length) {
+      claimsHtml = `<div class="persona-grid">${sectionClaims.slice(0, 4).map((claim) => {
         const match = claim.match(/^([^｜]+)｜(.+)$/);
         const platform = match?.[1]?.trim() || '';
         const rest = match?.[2] || claim;
@@ -5581,13 +5982,13 @@ function downloadAssociationReportHtml(
         const dataLine = parenIndex > 0 ? rest.slice(parenIndex) : '';
         return `<div class="persona-card" style="border-top:3px solid ${accent}"><div class="persona-name" style="color:${accent}">${escapeHtml(platform)}</div><div class="persona-desc">${escapeHtml(personaLine)}</div>${dataLine ? `<div class="persona-data">${escapeHtml(dataLine)}</div>` : ''}</div>`;
       }).join('')}</div>`;
-    } else if (isAction && section.claims?.length) {
-      claimsHtml = `<div class="action-list">${section.claims.slice(0, 4).map((claim, i) => `<div class="problem-card"><span class="action-num" style="background:#ef5b6b">${i + 1}</span><span class="action-text">${escapeHtml(claim)}</span></div>`).join('')}</div>`;
-    } else if (section.claims?.length) {
-      claimsHtml = `<ul class="claims">${section.claims.slice(0, 4).map((claim) => `<li>${escapeHtml(claim)}</li>`).join('')}</ul>`;
+    } else if (isAction && sectionClaims.length) {
+      claimsHtml = `<div class="action-list">${sectionClaims.slice(0, 4).map((claim, i) => `<div class="problem-card"><span class="action-num">${String(i + 1).padStart(2, '0')}</span><span class="action-text">${escapeHtml(claim)}</span></div>`).join('')}</div>`;
+    } else if (sectionClaims.length) {
+      claimsHtml = `<ul class="claims">${sectionClaims.slice(0, 4).map((claim) => `<li>${escapeHtml(claim)}</li>`).join('')}</ul>`;
     }
 
-    const paragraphs = section.text.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+    const paragraphs = reportCopy(section.text).split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
     const paragraphsHtml = paragraphs.map((p) => {
       const inner = renderExportParagraphHtml(p, entityTerms);
       return isAction
@@ -5598,7 +5999,7 @@ function downloadAssociationReportHtml(
     let metricsHtml = '';
     if (isVerdict && groups?.length) {
       const metrics = buildCoreVerdictMetrics(sampleScope, groups);
-      metricsHtml = `<div class="metric-row">${metrics.map((m) => `<div class="metric-card"><div class="metric-label">${escapeHtml(m.label)}</div><div class="metric-value ${m.tone === 'risk' ? 'val-red' : m.tone === 'opportunity' ? 'val-green' : ''}">${escapeHtml(m.value)}</div>${m.sub ? `<div class="metric-sub">${escapeHtml(m.sub)}</div>` : ''}</div>`).join('')}</div>`;
+      metricsHtml = `<div class="metric-row">${metrics.map((m) => `<div class="metric-card"><div class="metric-label">${escapeHtml(m.label)}</div><div class="metric-value ${m.tone === 'risk' ? 'val-red' : m.tone === 'opportunity' ? 'val-opportunity' : ''}">${escapeHtml(m.value)}</div>${m.sub ? `<div class="metric-sub">${escapeHtml(m.sub)}</div>` : ''}</div>`).join('')}</div>`;
     }
 
     let barChartHtml = '';
@@ -5606,7 +6007,7 @@ function downloadAssociationReportHtml(
       const items = buildNodeFrequencyBars(groups);
       if (items.length) {
         const maxValue = Math.max(...items.map((item) => item.value), 1);
-        barChartHtml = `<div class="bar-chart"><div class="bar-chart-title">节点频率（按回答带回次数）</div><div class="bar-chart-body">${items.map((item) => `<div class="bar-row"><span class="bar-label">${escapeHtml(item.label)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, (item.value / maxValue) * 100)}%;background:${reportBarToneColor(item.tone)}"></div></div><span class="bar-value">${item.value}</span></div>`).join('')}</div></div>`;
+        barChartHtml = `<div class="bar-chart"><div class="bar-chart-title">${escapeHtml(nodeFrequencyChartTitle(items))}</div><div class="bar-chart-body">${items.map((item) => `<div class="bar-row"><span class="bar-label">${escapeHtml(item.label)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, (item.value / maxValue) * 100)}%;background:${reportBarToneColor(item.tone)}"></div></div><span class="bar-value">${escapeHtml(item.valueLabel)}</span></div>`).join('')}</div></div>`;
       }
     }
 
@@ -5615,18 +6016,18 @@ function downloadAssociationReportHtml(
       platformTableHtml = `<table class="platform-table"><thead><tr><th>平台</th><th>有效回答</th><th>回答偏好</th><th>代表节点</th><th>竞品参照</th></tr></thead><tbody>${platformComparison.map((row) => `<tr><td><span class="platform-tag" style="background:${reportPlatformAccent(row.platform)}">${escapeHtml(platformLabel(row.platform))}</span></td><td class="num">${row.valid_answer_count || 0}</td><td>${escapeHtml(row.answer_preference || '偏好待观察')}</td><td>${escapeHtml((row.preferred_nodes || []).slice(0, 3).join('、') || '—')}</td><td>${escapeHtml((row.competition_nodes || []).slice(0, 3).join('、') || '—')}</td></tr>`).join('')}</tbody></table>`;
     }
 
-    const supportingFacts = section.supportingFacts || [];
+    const supportingFacts = (section.supportingFacts || []).map((fact) => reportCopy(fact));
     const quoteFacts = supportingFacts.filter(reportEvidenceLine);
     const quoteHtml = quoteFacts.length && !isVerdict ? quoteFacts.slice(0, 4).map((fact) => {
       const parsed = parseReportEvidenceLine(fact);
       const accent = reportPlatformAccent(parsed.platform);
-      return `<blockquote style="border-left-color:${accent}"><span class="quote-tag" style="background:${accent}">${escapeHtml(parsed.platform)}</span> <span class="quote-label">平台原文</span><br />${escapeHtml(parsed.body)}</blockquote>`;
+      return `<blockquote style="border-left-color:${accent}"><span class="quote-tag" style="background:${accent}">${escapeHtml(parsed.platform)}</span> <span class="quote-label">平台原文</span><br />${escapeHtml(cleanEvidenceExcerpt(parsed.body, 2000))}</blockquote>`;
     }).join('') : '';
 
     return `
     <section>
-      <h2>${index === 0 ? '' : `<span class="section-num">${index}</span>`}${escapeHtml(section.title)}</h2>
-      ${section.readerQuestion ? `<p class="chapter-question">${escapeHtml(section.readerQuestion)}</p>` : ''}
+      <h2>${index === 0 ? '' : `<span class="section-num">${String(index).padStart(2, '0')}</span>`}${escapeHtml(titleText)}</h2>
+      ${section.readerQuestion ? `<p class="chapter-question">${escapeHtml(reportCopy(section.readerQuestion))}</p>` : ''}
       ${takeawayHtml}
       ${metricsHtml}
       ${claimsHtml}
@@ -5634,7 +6035,7 @@ function downloadAssociationReportHtml(
       ${barChartHtml}
       ${platformTableHtml}
       ${quoteHtml}
-      ${section.soWhat && !isVerdict ? `<p class="source-line">${escapeHtml(section.soWhat)}</p>` : ''}
+      ${section.soWhat && !isVerdict ? `<p class="source-line">${escapeHtml(reportCopy(section.soWhat))}</p>` : ''}
     </section>
   `;
   }).join('\n');
@@ -5672,7 +6073,7 @@ function downloadAssociationReportHtml(
         <tbody>
           ${(platformSourceSummary.platforms || []).map((row) => `
             <tr>
-              <td>${escapeHtml(row.platform || '')}</td>
+              <td>${escapeHtml(platformLabel(row.platform || ''))}</td>
               <td>${row.valid_answer_count || 0}</td>
               <td>${escapeHtml(row.answer_preference || '待观察')}</td>
               <td>${escapeHtml((row.preferred_nodes || []).join('、') || '暂无')}</td>
@@ -5688,12 +6089,12 @@ function downloadAssociationReportHtml(
       <h2>关键证据链</h2>
       ${evidenceFindings.slice(0, 8).map((finding) => `
         <article class="evidence-card">
-          <h3>${escapeHtml(finding.node_term || '')}</h3>
-          <p>${escapeHtml(commercialReportCopy(finding.claim))}</p>
+          <h3>${escapeHtml(reportCopy(finding.node_term || ''))}</h3>
+          <p>${escapeHtml(cleanEvidenceExcerpt(evidenceFindingCopy(finding.claim, finding, reportNodes), 2000))}</p>
           <ul>
-            ${(finding.supporting_facts || []).slice(0, 4).map((fact) => `<li>${escapeHtml(commercialReportCopy(fact))}</li>`).join('')}
+            ${uniqueEvidenceFindingFacts(finding, reportNodes, 4).map((fact) => `<li>${escapeHtml(cleanEvidenceExcerpt(fact, 2000))}</li>`).join('')}
           </ul>
-          ${finding.sample_excerpt ? `<blockquote>${escapeHtml(finding.sample_platform || '')} / ${escapeHtml(finding.sample_question || '')}: ${escapeHtml(finding.sample_excerpt || '')}</blockquote>` : ''}
+          ${finding.sample_excerpt ? `<blockquote>${escapeHtml(finding.sample_platform || '')} / ${escapeHtml(cleanEvidenceExcerpt(finding.sample_question, 160))}: ${escapeHtml(cleanEvidenceExcerpt(finding.sample_excerpt, 4000))}</blockquote>` : ''}
         </article>
       `).join('')}
     </section>
@@ -5702,7 +6103,7 @@ function downloadAssociationReportHtml(
     <section>
       <h2>分析依据轨迹</h2>
       ${analysisTrace.slice(0, 6).map((trace, index) => `
-        <p class="source-line"><b>${index + 1}. ${escapeHtml(trace.title || '')}</b><br />${escapeHtml(trace.summary || '')}</p>
+        <p class="source-line"><b>${index + 1}. ${escapeHtml(reportCopy(trace.title || ''))}</b><br />${escapeHtml(reportCopy(trace.summary || ''))}</p>
       `).join('')}
     </section>
   ` : '';
@@ -5711,10 +6112,10 @@ function downloadAssociationReportHtml(
       <h2>下一轮行动</h2>
       ${actions.slice(0, 8).map((action) => `
         <article class="evidence-card">
-          <h3>${escapeHtml(action.title || action.action_label || action.node_term || '圈层行动')}</h3>
-          <p>${escapeHtml(commercialReportCopy(action.expected_impact || action.reason))}</p>
-          ${action.review_criteria ? `<p class="source-line"><b>复测标准</b><br />${escapeHtml(commercialReportCopy(action.review_criteria))}</p>` : ''}
-          ${(action.evidence_refs || []).length ? `<p class="source-line">已关联 ${(action.evidence_refs || []).length} 条回答证据，复测时回看对应节点和平台摘录。</p>` : ''}
+          <h3>${escapeHtml(reportCopy(action.title || action.action_label || action.node_term || '圈层行动'))}</h3>
+          <p>${escapeHtml(reportCopy(action.expected_impact || action.reason))}</p>
+          ${action.review_criteria ? `<p class="source-line"><b>复测标准</b><br />${escapeHtml(reportCopy(action.review_criteria))}</p>` : ''}
+          ${(action.evidence_refs || []).length ? `<p class="source-line">已关联 ${(action.evidence_refs || []).length} 个证据引用，复测时回看对应节点和平台摘录。</p>` : ''}
         </article>
       `).join('')}
     </section>
@@ -5723,7 +6124,7 @@ function downloadAssociationReportHtml(
     <section>
       <h2>来源附录</h2>
       ${sourceAppendix.slice(0, 16).map((item) => `
-        <p class="source-line"><b>${escapeHtml(item.node_term || '联想节点')} / ${escapeHtml(item.platform || '平台')} / ${escapeHtml(item.question_id ? `Q${item.question_id}` : '问题样本')}</b><br />${escapeHtml(cleanEvidenceExcerpt(item.question, 160))}<br />${escapeHtml(cleanEvidenceExcerpt(item.answer_excerpt, 220))}</p>
+        <p class="source-line"><b>${escapeHtml(reportCopy(item.node_term || '联想节点'))} / ${escapeHtml(platformLabel(item.platform || ''))} / ${escapeHtml(item.question_id ? `Q${item.question_id}` : '问题样本')}</b><br />${escapeHtml(cleanEvidenceExcerpt(item.question, 160))}<br />${escapeHtml(cleanEvidenceExcerpt(item.answer_excerpt, 220))}</p>
       `).join('')}
     </section>
   ` : '';
@@ -5747,9 +6148,10 @@ function downloadAssociationReportHtml(
     :root {
       color: #1f2933;
       background: #f7f4ed;
-      font-family: ui-serif, "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
+      font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
       --brand-primary: #1f7a6b;
       --success: #1f7a6b;
+      --evidence-opportunity: #b7792b;
       --error: #b95046;
       --text-tertiary: #657184;
       --bg-secondary: #f4eee2;
@@ -5764,11 +6166,10 @@ function downloadAssociationReportHtml(
       box-shadow: 0 18px 50px rgba(31, 41, 51, 0.08);
     }
     .section-num {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 28px; height: 28px; margin-right: 10px; border-radius: 8px;
-      background: rgba(31,122,107,0.10); color: #1f7a6b;
-      font: 700 14px/1 ui-sans-serif, system-ui, sans-serif;
-      vertical-align: 2px;
+      display: inline-block; margin-right: 14px; padding-right: 10px;
+      border-right: 1px solid rgba(31,122,107,0.34); color: #1f7a6b;
+      font: 650 12px/1 ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0.16em; vertical-align: 3px;
     }
     .eyebrow {
       color: #657184;
@@ -5879,7 +6280,7 @@ function downloadAssociationReportHtml(
     /* takeaway 高亮框 */
     .takeaway-box-green, .takeaway-box-green-strong, .takeaway-box-red {
       margin: 16px 0 0; padding: 14px 18px; border-left: 4px solid #1f7a6b;
-      border-radius: 0 8px 8px 0; font: 600 17px/1.8 ui-serif, "Noto Serif SC", Georgia, serif;
+      border-radius: 0 8px 8px 0; font: 600 17px/1.8 "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
     }
     .takeaway-box-green { background: rgba(31,122,107,0.08); color: #1f2933; }
     .takeaway-box-green-strong { background: rgba(31,122,107,0.18); color: #1f7a6b; }
@@ -5895,9 +6296,9 @@ function downloadAssociationReportHtml(
     /* action / problem card */
     .action-list { margin: 16px 0 0; display: flex; flex-direction: column; gap: 10px; }
     .problem-card { background: #fffdf8; border: 1px solid #ebe5da; border-left: 4px solid #ef5b6b; border-radius: 8px; padding: 12px 14px; display: flex; align-items: flex-start; gap: 10px; }
-    .action-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; color: #fff; font: 700 12px/1 ui-sans-serif, system-ui, sans-serif; flex-shrink: 0; }
+    .action-num { display: inline-flex; width: 28px; color: #b95046; font: 700 11px/1.7 ui-sans-serif, system-ui, sans-serif; letter-spacing: .14em; flex-shrink: 0; }
     .action-text { font: 14px/1.7 ui-sans-serif, system-ui, sans-serif; color: #384556; }
-    .action-paragraph { margin: 12px 0 0; background: #fffdf8; border: 1px solid #ebe5da; border-left: 4px solid #1f7a6b; border-radius: 8px; padding: 12px 14px; font: 15px/1.8 ui-serif, "Noto Serif SC", Georgia, serif; color: #384556; }
+    .action-paragraph { margin: 12px 0 0; background: #fffdf8; border: 1px solid #ebe5da; border-left: 4px solid #1f7a6b; border-radius: 8px; padding: 12px 14px; font: 15px/1.8 "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; color: #384556; }
 
     /* metric card */
     .metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 0; }
@@ -5905,7 +6306,7 @@ function downloadAssociationReportHtml(
     .metric-label { font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; color: #657184; }
     .metric-value { font: 700 26px/1.2 ui-sans-serif, system-ui, sans-serif; color: #1f2933; margin-top: 4px; }
     .metric-value.val-red { color: #ef5b6b; }
-    .metric-value.val-green { color: #1f7a6b; }
+    .metric-value.val-opportunity { color: var(--evidence-opportunity); }
     .metric-sub { margin-top: 4px; font: 12px/1.5 ui-sans-serif, system-ui, sans-serif; color: #657184; }
 
     /* bar chart */
@@ -5948,6 +6349,13 @@ function downloadAssociationReportHtml(
   </main>
 </body>
 </html>`;
+  if (
+    /[\uE000-\uF8FF]/.test(html)
+    || /(?:cite\s*)?(?:web[_\s-]?search|websearch|turn\d+[a-z]*|search\d+)[\s:=#-]*\d*/i.test(html)
+    || /\b(?:web|eb|b|e)?[_\s-]?search\s*[:=#-]\s*\d+(?:\s*#\s*\d+)?\b/i.test(html)
+  ) {
+    throw new Error('报告导出已阻止：仍存在未清理的模型引用标记。');
+  }
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -5957,6 +6365,99 @@ function downloadAssociationReportHtml(
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function evidenceFindingCopy(
+  value: string | null | undefined,
+  finding: OntologyAssociationCircleEvidenceFinding,
+  nodes: OntologyAssociationCircleNode[],
+) {
+  const copy = commercialReportCopy(value);
+  const nodeTerm = commercialReportCopy(finding.node_term);
+  const node = nodes.find((item) => (
+    (finding.node_id && item.node_id === finding.node_id)
+    || commercialReportCopy(item.term) === nodeTerm
+  ));
+  if (!node) return copy;
+  const count = nodeEvidenceCount(node);
+  if (!count) return copy;
+  const countPhrase = nodeCountPhrase(node, count);
+  const escapedTerm = escapeRegexValue(nodeTerm);
+  let normalized = copy
+    .replace(
+      new RegExp(`${escapedTerm}已经被\\s*\\d+\\s*条回答稳定带回品牌`, 'g'),
+      `${nodeTerm}已通过 ${countPhrase}进入稳定资产区`,
+    )
+    .replace(
+      new RegExp(`${escapedTerm}已有\\s*\\d+\\s*条回答证据`, 'g'),
+      `${nodeTerm}已有 ${countPhrase}`,
+    )
+    .replace(/\d+\s*条回答提及/g, countPhrase)
+    .replace(/\d+\s*条回答提到/g, countPhrase)
+    .replace(/本周期证据\s*\d+\s*条/g, `本周期按 ${countPhrase}计量`);
+  if (nodeTerm === '监管合规质疑') {
+    normalized = regulatoryScopedReportCopy(normalized, nodes, true);
+  }
+  return normalized;
+}
+
+function uniqueEvidenceFindingFacts(
+  finding: OntologyAssociationCircleEvidenceFinding,
+  nodes: OntologyAssociationCircleNode[],
+  limit: number,
+) {
+  const canonicalize = (value: string) => value.replace(/[\s，。；、：:,.!?！？（）()]/g, '');
+  const claim = evidenceFindingCopy(finding.claim, finding, nodes);
+  const claimKey = canonicalize(claim);
+  const seen = new Set<string>();
+  const facts: string[] = [];
+  for (const rawFact of finding.supporting_facts || []) {
+    const fact = evidenceFindingCopy(rawFact, finding, nodes);
+    const key = canonicalize(fact);
+    if (!key || seen.has(key) || claimKey.includes(key)) continue;
+    seen.add(key);
+    facts.push(fact);
+    if (facts.length >= limit) break;
+  }
+  return facts;
+}
+
+function regulatoryScopedReportCopy(
+  value: string | null | undefined,
+  nodes: OntologyAssociationCircleNode[],
+  forceRegulatoryScope = false,
+) {
+  const copy = commercialReportCopy(value);
+  if (!copy.includes('监管合规质疑') && !forceRegulatoryScope) return copy;
+  const node = nodes.find((item) => item.entity_id === 'evidence_regulation');
+  const count = node ? nodeEvidenceCount(node) : 0;
+  if (!count) return copy;
+  const countPhrase = node ? nodeCountPhrase(node, count) : `${count} 次节点提及`;
+  const platformCount = node ? scoreNumber(node.platform_count) : 0;
+  let normalized = copy
+    .replace(
+      /监管合规质疑被\s*\d+\s*条回答提到/g,
+      `监管合规质疑以质疑或风险语境出现 ${countPhrase}`,
+    )
+    .replace(
+      /监管合规质疑在\s*\d+\s*条回答中以质疑或风险语境出现/g,
+      `监管合规质疑以质疑或风险语境出现 ${countPhrase}`,
+    )
+    .replace(
+      /监管合规质疑（\s*\d+\s*(?:条回答|次节点提及|条可确认回答)\s*）/g,
+      `监管合规质疑（${countPhrase}）`,
+    );
+  if (forceRegulatoryScope) {
+    normalized = normalized
+      .replace(/^\s*\d+\s*条回答提及/g, countPhrase)
+      .replace(/^\s*\d+\s*次节点提及/g, countPhrase)
+      .replace(/^\s*本周期证据\s*\d+\s*条/g, `本周期按 ${countPhrase}计量`)
+      .replace(
+        /覆盖\s*\d+\s*个平台/g,
+        platformCount ? `覆盖 ${platformCount} 个平台` : '平台覆盖待复核',
+      );
+  }
+  return normalized;
 }
 
 function buildExportPeriodChangeHtml(periodView: Record<string, unknown> | null) {
@@ -6158,7 +6659,7 @@ function toNumber(value: unknown) {
 function platformLabel(platform: string) {
   const normalized = platform.toLowerCase();
   if (normalized.includes('doubao')) return '豆包';
-  if (normalized.includes('yuanbao') || normalized.includes('hunyuan')) return '腾讯元宝';
+  if (normalized.includes('yuanbao') || normalized.includes('hunyuan') || normalized.includes('元宝')) return '腾讯元宝';
   if (normalized.includes('kimi') || normalized.includes('moonshot')) return 'Kimi';
   if (normalized.includes('deepseek')) return 'DeepSeek';
   return platform || '未知平台';

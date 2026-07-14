@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -32,9 +33,17 @@ from app.ontology import load_default_amway_entity_ontology
 from app.services.brand_association_circle_variant import (
     is_amway_association_entity,
 )
-from app.services.amway_entity_calibration_service import CALIBRATION_SCHEMA_VERSION
+from app.services.amway_entity_calibration_service import (
+    CALIBRATION_SCHEMA_VERSION,
+    SKEPTICAL_CONTEXT_CUES,
+    SUPPORTIVE_CONTEXT_CUES,
+)
 from app.services.amway_entity_extraction_service import EXTRACTION_SCHEMA_VERSION
+from app.tools.a4_fetch_agent import normalize_public_platform_id
 from app.workflow.a5.association_circle import (
+    REPORT_COPY_CONSTRAINT_VERSION,
+    SCHEMA_VERSION as REPORT_SCHEMA_VERSION,
+    _build_report_quality_checks,
     build_brand_association_circle_report_artifact,
 )
 
@@ -44,7 +53,7 @@ PERIOD_DAY_COUNTS = {
     "last_14_days": 14,
     "last_30_days": 30,
 }
-PERIOD_VIEW_PROJECTION_VERSION = "amway-period-view.v1"
+PERIOD_VIEW_PROJECTION_VERSION = "amway-period-view.v9"
 CHINA_TZ = timezone(timedelta(hours=8))
 TRACK_ALIASES = {
     "stable": "stable",
@@ -241,7 +250,7 @@ class AmwayCircleTrackingService:
                 current_start,
                 current_end,
                 center_term=center_term,
-                include_end=True,
+                include_end=period_type != "custom",
             )
             previous_runs = await self._completed_runs_between(
                 entity_id,
@@ -274,10 +283,24 @@ class AmwayCircleTrackingService:
             previous_projections,
             _projection_summary(previous_summary, previous_projections),
         )
+        if previous_projection is not None:
+            await self._apply_regulatory_risk_scope(
+                previous_projection,
+                [row.id for row in previous_runs],
+            )
+        if previous_projection is not None:
+            previous_summary = _dict(previous_projection.get("sample_scope"))
         projection = _aggregate_projection(
             current_projections,
             _projection_summary(current_summary, current_projections),
         )
+        if projection is not None:
+            await self._apply_regulatory_risk_scope(
+                projection,
+                [row.id for row in current_runs],
+            )
+        if projection is not None:
+            current_summary = _dict(projection.get("sample_scope"))
         if projection is None:
             projection = _empty_period_projection(
                 current_summary,
@@ -285,13 +308,22 @@ class AmwayCircleTrackingService:
             )
         change_top5 = (
             _change_top5(projection, previous_projection)
-            if _should_compare_period(current_projections, previous_projection)
+            if _should_compare_period(
+                current_projections,
+                previous_projection,
+                projection,
+            )
             else []
         )
         question_set_changed = bool(current_runs and previous_runs) and (
             _question_signatures(current_runs) != _question_signatures(previous_runs)
         )
         notice = _comparison_notice(current_runs, previous_runs, question_set_changed)
+        if previous_summary is not None and (
+            _int(current_summary.get("valid_answer_count")) <= 0
+            or _int(previous_summary.get("valid_answer_count")) <= 0
+        ):
+            notice = "任一期没有有效回答，提及率不可评估，不生成方向性变化。"
         if projection:
             _attach_period_tracking(
                 projection,
@@ -330,11 +362,142 @@ class AmwayCircleTrackingService:
         saved = await self._period_view_report(entity_id, source_hash)
         if saved:
             saved_projection, saved_report = saved
-            view["projection"] = _dict(
+            view["projection"] = _normalize_period_projection(
                 saved_projection.association_circle_projection
             )
+            await self._apply_regulatory_risk_scope(
+                view["projection"],
+                [row.id for row in current_runs],
+            )
+            _finalize_period_projection_quality(view["projection"])
             view["report_id"] = str(saved_report.id)
+            view["report_input"] = _period_report_input(
+                current_summary,
+                previous_summary,
+                change_top5,
+                question_set_changed,
+                notice,
+                view["projection"],
+            )
         return view
+
+    async def _apply_regulatory_risk_scope(
+        self,
+        projection: dict[str, Any],
+        run_ids: list[UUID],
+    ) -> None:
+        if not run_ids:
+            return
+        has_regulatory_risk = any(
+            isinstance(node, dict)
+            and str(
+                node.get("lexicon_entity_id") or node.get("entity_id") or ""
+            ).strip()
+            == "evidence_regulation"
+            and _node_track(node) == "risk"
+            for node in _list(projection.get("nodes"))
+        )
+        if not has_regulatory_risk:
+            return
+        rows = (
+            await self.db.execute(
+                select(
+                    AmwayCircleAnswer.platform,
+                    AmwayCircleEntityMention.circle_run_id,
+                    AmwayCircleEntityMention.answer_id,
+                    AmwayCircleEntityMention.relation_type,
+                    AmwayCircleEntityMention.sentiment_context,
+                    AmwayCircleEntityMention.context_text,
+                    AmwayCircleEntityMention.evidence_text,
+                    AmwayCircleEntityMention.risk_context,
+                    AmwayCircleAnswer.question_text,
+                )
+                .join(
+                    AmwayCircleAnswer,
+                    and_(
+                        AmwayCircleAnswer.id == AmwayCircleEntityMention.answer_id,
+                        AmwayCircleAnswer.circle_run_id
+                        == AmwayCircleEntityMention.circle_run_id,
+                    ),
+                )
+                .where(
+                    AmwayCircleEntityMention.circle_run_id.in_(run_ids),
+                    AmwayCircleEntityMention.lexicon_entity_id == "evidence_regulation",
+                )
+                .order_by(
+                    AmwayCircleEntityMention.created_at,
+                    AmwayCircleEntityMention.id,
+                )
+            )
+        ).all()
+        if not rows:
+            return
+
+        stance_by_answer: dict[UUID, str] = {}
+        platform_by_answer: dict[UUID, str] = {}
+        run_by_answer: dict[UUID, UUID] = {}
+        for (
+            platform,
+            circle_run_id,
+            answer_id,
+            relation_type,
+            sentiment_context,
+            context_text,
+            evidence_text,
+            risk_context,
+            question_text,
+        ) in rows:
+            if answer_id in stance_by_answer:
+                continue
+            run_by_answer[answer_id] = circle_run_id
+            platform_by_answer[answer_id] = _normalize_platform_name(platform)
+            stance = _persisted_regulatory_stance(
+                relation_type=relation_type,
+                sentiment_context=sentiment_context,
+                context_text=context_text,
+                evidence_text=evidence_text,
+                risk_context=risk_context,
+                question_text=question_text,
+            )
+            stance_by_answer[answer_id] = stance
+
+        stance_by_answer = {
+            answer_id: stance
+            for answer_id, stance in stance_by_answer.items()
+            if stance in {"skeptical", "risk", "competitive"}
+        }
+        platform_by_answer = {
+            answer_id: platform
+            for answer_id, platform in platform_by_answer.items()
+            if answer_id in stance_by_answer
+        }
+
+        platform_distribution: dict[str, int] = {}
+        for answer_id, platform in platform_by_answer.items():
+            if not platform:
+                continue
+            platform_distribution[platform] = platform_distribution.get(platform, 0) + 1
+        stance_summary = {
+            "supportive": 0,
+            "neutral": 0,
+            "skeptical": sum(
+                1 for stance in stance_by_answer.values() if stance == "skeptical"
+            ),
+            "risk": sum(1 for stance in stance_by_answer.values() if stance == "risk"),
+            "competitive": sum(
+                1 for stance in stance_by_answer.values() if stance == "competitive"
+            ),
+        }
+        _apply_regulatory_risk_scope(
+            projection,
+            answer_count=len(stance_by_answer),
+            answer_refs=[
+                f"{run_by_answer[answer_id]}:{answer_id}"
+                for answer_id in stance_by_answer
+            ],
+            platform_distribution=platform_distribution,
+            stance_summary=stance_summary,
+        )
 
     async def create_period_report(
         self,
@@ -384,8 +547,23 @@ class AmwayCircleTrackingService:
         saved = await self._period_view_report(entity_id, source_hash)
         if saved:
             projection, report = saved
-            view["projection"] = _dict(projection.association_circle_projection)
+            view["projection"] = _normalize_period_projection(
+                projection.association_circle_projection
+            )
+            await self._apply_regulatory_risk_scope(
+                view["projection"],
+                _uuid_list(current_summary.get("run_ids")),
+            )
+            _finalize_period_projection_quality(view["projection"])
             view["report_id"] = str(report.id)
+            view["report_input"] = _period_report_input(
+                current_summary,
+                previous_summary,
+                _list(view.get("change_top5")),
+                bool(view.get("question_set_changed")),
+                str(view.get("comparison_notice") or ""),
+                view["projection"],
+            )
             return view
 
         projection_body = _dict(view.get("projection"))
@@ -402,6 +580,29 @@ class AmwayCircleTrackingService:
             current_summary,
             _dict(projection_body.get("tracking_projection")),
         )
+        current_run_ids = _uuid_list(current_summary.get("run_ids"))
+        previous_run_ids = _uuid_list((previous_summary or {}).get("run_ids"))
+        await self._apply_regulatory_risk_scope(
+            generated_projection,
+            current_run_ids,
+        )
+        _finalize_period_projection_quality(generated_projection)
+        _synchronize_report_artifact(artifact, generated_projection)
+        report_quality_passed = bool(
+            _dict(generated_projection.get("report_quality_checks")).get("passed")
+            is True
+        )
+        generated_projection["report_delivery_status"] = (
+            "ready" if report_quality_passed else "quality_failed"
+        )
+        generated_report_input = _period_report_input(
+            current_summary,
+            previous_summary,
+            _list(view.get("change_top5")),
+            bool(view.get("question_set_changed")),
+            str(view.get("comparison_notice") or ""),
+            generated_projection,
+        )
 
         await self.db.execute(
             update(AmwayCircleProjection)
@@ -412,8 +613,6 @@ class AmwayCircleTrackingService:
             )
             .values(is_latest=False)
         )
-        current_run_ids = _uuid_list(current_summary.get("run_ids"))
-        previous_run_ids = _uuid_list((previous_summary or {}).get("run_ids"))
         projection = AmwayCircleProjection(
             entity_id=entity_id,
             circle_run_id=None,
@@ -432,7 +631,7 @@ class AmwayCircleTrackingService:
             source_run_hash=source_hash,
             sample_scope=current_summary,
             association_circle_projection=generated_projection,
-            report_input=_dict(view.get("report_input")),
+            report_input=generated_report_input,
             compare_summary={
                 "previous_period": previous_summary,
                 "change_top5": _list(view.get("change_top5")),
@@ -448,7 +647,7 @@ class AmwayCircleTrackingService:
             report_scope="period_view",
             report_version=str(artifact.get("schema_version") or "v1"),
             title=str(artifact.get("title") or "品牌联想圈层周期报告"),
-            status="ready",
+            status="ready" if report_quality_passed else "quality_failed",
             markdown_body=str(
                 artifact.get("report_markdown") or artifact.get("full_markdown") or ""
             ),
@@ -465,6 +664,7 @@ class AmwayCircleTrackingService:
         }
         projection.association_circle_projection = generated_projection
         view["projection"] = generated_projection
+        view["report_input"] = generated_report_input
         view["report_id"] = str(report.id)
         return view
 
@@ -488,7 +688,7 @@ class AmwayCircleTrackingService:
                     AmwayCircleProjection.source_run_hash == source_hash,
                     AmwayCircleProjection.status == "ready",
                     AmwayCircleReport.report_scope == "period_view",
-                    AmwayCircleReport.status == "ready",
+                    AmwayCircleReport.status.in_(["ready", "quality_failed"]),
                 )
                 .order_by(desc(AmwayCircleReport.updated_at))
                 .limit(1)
@@ -888,8 +1088,7 @@ class AmwayCircleTrackingService:
         dashboard = _dict(report.get("dashboard_projection"))
         projection_body = _dict(dashboard.get("association_circle_projection"))
         if (
-            str(report.get("report_kind") or "").strip()
-            != "brand_association_circle"
+            str(report.get("report_kind") or "").strip() != "brand_association_circle"
             or not projection_body
         ):
             return None
@@ -995,9 +1194,7 @@ class AmwayCircleTrackingService:
                 "declared": expected_count is not None,
                 "expected": expected_count or 0,
                 "actual": actual_count,
-                "complete": (
-                    expected_count is None or actual_count >= expected_count
-                ),
+                "complete": (expected_count is None or actual_count >= expected_count),
             }
         return manifest
 
@@ -1654,8 +1851,7 @@ def _snapshot_expected_counts(
         if isinstance(signal, dict)
     }
     evidence_refs = {
-        item["evidence_ref"]
-        for item in _evidence_records(artifact, projection_body)
+        item["evidence_ref"] for item in _evidence_records(artifact, projection_body)
     }
     node_ids = {
         str(_normalize_tracking_node(node).get("node_id") or "")
@@ -1781,10 +1977,30 @@ def _normalize_tracking_node(raw_node: dict[str, Any]) -> dict[str, Any]:
     ).strip()
     node["node_id"] = str(node.get("node_id") or lexicon_entity_id).strip()
     node["lexicon_entity_id"] = lexicon_entity_id or None
-    node["canonical_name"] = _node_name(node)
     node["track"] = _normalize_track(
         node.get("track") or node.get("maturity_tier") or node.get("orbit")
     )
+    node["canonical_name"] = _node_name(node)
+    if lexicon_entity_id == "evidence_regulation" and node["track"] == "risk":
+        node["canonical_name"] = "监管合规质疑"
+        node["display_name"] = "监管合规质疑"
+        node["term"] = "监管合规质疑"
+        stance_summary = _dict(node.get("stance_summary"))
+        risk_evidence_count = sum(
+            _int(stance_summary.get(key))
+            for key in ("skeptical", "risk", "competitive")
+        )
+        if risk_evidence_count > 0:
+            node["mention_answer_count"] = risk_evidence_count
+            node["answer_count"] = risk_evidence_count
+            node["evidence_count"] = risk_evidence_count
+            node["stance_summary"] = {
+                "supportive": 0,
+                "neutral": 0,
+                "skeptical": _int(stance_summary.get("skeptical")),
+                "risk": _int(stance_summary.get("risk")),
+                "competitive": _int(stance_summary.get("competitive")),
+            }
     node["track_reason"] = str(
         node.get("track_reason") or node.get("orbit_reason") or ""
     )
@@ -1945,7 +2161,7 @@ def _empty_period_projection(
     center_term: str,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "amway-period-view.v1",
+        "schema_version": PERIOD_VIEW_PROJECTION_VERSION,
         "status": "empty",
         "center_terms": [center_term],
         "nodes": [],
@@ -1970,23 +2186,37 @@ def _period_summary(
     completed = [_as_utc(row.completed_at or row.created_at) for row in runs]
     effective_start = start_at or (min(completed) if completed else None)
     effective_end = end_at or (max(completed) if completed else None)
-    platforms = sorted(
-        {platform for row in runs for platform in _string_list(row.platforms_completed)}
+    platforms = _normalized_platforms(
+        platform
+        for row in runs
+        for platform in _string_list(getattr(row, "platforms_completed", []))
     )
-    return {
-        "period_type": period_type,
-        "run_ids": [str(row.id) for row in runs],
-        "run_count": len(runs),
-        "question_count": sum(int(row.question_count or 0) for row in runs),
-        "valid_answer_count": sum(int(row.valid_answer_count or 0) for row in runs),
-        "failed_answer_count": sum(int(row.failed_answer_count or 0) for row in runs),
-        "platforms": platforms,
-        "platform_count": len(platforms),
-        "question_signatures": sorted(_question_signatures(runs)),
-        "start_at": _iso(effective_start),
-        "end_at": _iso(effective_end),
-        "latest_run_id": str(runs[0].id) if runs else None,
-    }
+    requested_platforms = _normalized_platforms(
+        platform
+        for row in runs
+        for platform in _string_list(getattr(row, "platforms_requested", []))
+    )
+    question_observation_count = sum(int(row.question_count or 0) for row in runs)
+    return _period_sample_scope(
+        {
+            "period_type": period_type,
+            "run_ids": [str(row.id) for row in runs],
+            "run_count": len(runs),
+            "question_count": question_observation_count,
+            "question_observation_count": question_observation_count,
+            "distinct_question_count": None,
+            "valid_answer_count": sum(int(row.valid_answer_count or 0) for row in runs),
+            "failed_answer_count": sum(
+                int(row.failed_answer_count or 0) for row in runs
+            ),
+            "platforms": platforms,
+            "requested_platforms": requested_platforms,
+            "question_signatures": sorted(_question_signatures(runs)),
+            "start_at": _iso(effective_start),
+            "end_at": _iso(effective_end),
+            "latest_run_id": str(runs[0].id) if runs else None,
+        }
+    )
 
 
 def _projection_summary(
@@ -2017,6 +2247,10 @@ def _period_view_source_hash(
     return _payload_hash(
         {
             "projection_version": PERIOD_VIEW_PROJECTION_VERSION,
+            "report_schema_version": REPORT_SCHEMA_VERSION,
+            "report_copy_constraint_version": REPORT_COPY_CONSTRAINT_VERSION,
+            "extraction_version": EXTRACTION_SCHEMA_VERSION,
+            "calibration_version": CALIBRATION_SCHEMA_VERSION,
             "period_type": period_type,
             "center_term": center_term.strip(),
             "current": _period_source_payload(
@@ -2119,11 +2353,531 @@ def _aggregate_projection(
     bodies = _projection_bodies(projections)
     body = _period_projection_shell(bodies[0][1])
     body["nodes"] = _aggregate_nodes(list(reversed(bodies)))
+    question_bank = _aggregate_question_bank(bodies)
     if summary is not None:
-        body["sample_scope"] = summary
-        body["source_run_ids"] = summary["run_ids"]
-        body["source_run_count"] = summary["run_count"]
+        distinct_question_count = len(question_bank) or _int(
+            summary.get("distinct_question_count")
+        )
+        scoped_summary = {
+            **summary,
+            "question_observation_count": _int(
+                summary.get("question_observation_count")
+                or summary.get("question_count")
+            ),
+            "distinct_question_count": distinct_question_count or None,
+            "question_count": distinct_question_count
+            or _int(summary.get("question_count")),
+        }
+        sample_scope = _period_sample_scope(scoped_summary, body)
+        body["sample_scope"] = sample_scope
+        body["source_run_ids"] = sample_scope["run_ids"]
+        body["source_run_count"] = sample_scope["run_count"]
     return body
+
+
+def _normalize_period_projection(value: Any) -> dict[str, Any]:
+    body = deepcopy(_dict(value))
+    body["nodes"] = [
+        _normalize_tracking_node(node)
+        for node in _list(body.get("nodes"))
+        if isinstance(node, dict)
+    ]
+    return body
+
+
+def _persisted_regulatory_stance(
+    *,
+    relation_type: Any,
+    sentiment_context: Any,
+    context_text: Any,
+    evidence_text: Any,
+    risk_context: Any,
+    question_text: Any,
+) -> str:
+    relation = str(relation_type or "").strip()
+    sentiment = str(sentiment_context or "").strip()
+    risk_scope = str(risk_context or "").strip()
+    text_value = " ".join(
+        str(value or "").strip()
+        for value in (context_text, evidence_text, risk_context, question_text)
+        if str(value or "").strip()
+    )
+    if relation == "COMPETES_WITH":
+        return "competitive"
+    if relation == "RISKS_AS":
+        return "risk"
+    if relation == "RISK_DENIED":
+        return "supportive"
+    if risk_scope == "denied":
+        return "supportive"
+    if sentiment == "negative":
+        return "skeptical"
+    if any(cue in text_value for cue in SKEPTICAL_CONTEXT_CUES):
+        return "skeptical"
+    if any(cue in text_value for cue in SUPPORTIVE_CONTEXT_CUES):
+        return "supportive"
+    return "neutral"
+
+
+def _apply_regulatory_risk_scope(
+    projection: dict[str, Any],
+    *,
+    answer_count: int,
+    answer_refs: list[str],
+    platform_distribution: dict[str, int],
+    stance_summary: dict[str, int],
+) -> None:
+    platform_summary = {
+        platform: {
+            "platform": platform,
+            "mention_answer_count": count,
+            "question_count": 0,
+        }
+        for platform, count in platform_distribution.items()
+    }
+    evidence_samples = []
+    retained_evidence_ids: set[str] = set()
+    for item in _list(projection.get("evidence_samples")):
+        if not isinstance(item, dict):
+            continue
+        lexicon_entity_id = str(
+            item.get("lexicon_entity_id") or item.get("entity_id") or ""
+        ).strip()
+        if lexicon_entity_id != "evidence_regulation":
+            evidence_samples.append(item)
+            continue
+        relation_type = str(item.get("relation_type") or "").strip()
+        context_polarity = str(item.get("context_polarity") or "").strip()
+        if relation_type == "RISKS_AS" or context_polarity == "negative":
+            normalized_item = deepcopy(item)
+            normalized_item["node_term"] = "监管合规质疑"
+            evidence_samples.append(normalized_item)
+            evidence_id = str(normalized_item.get("evidence_id") or "").strip()
+            if evidence_id:
+                retained_evidence_ids.add(evidence_id.rsplit(":", maxsplit=1)[-1])
+    if projection.get("evidence_samples") is not None:
+        projection["evidence_samples"] = evidence_samples
+
+    node_groups = [_list(projection.get("nodes"))]
+    risk_map = projection.get("risk_map")
+    if isinstance(risk_map, dict):
+        node_groups.extend(
+            [
+                _list(risk_map.get("nodes")),
+                _list(risk_map.get("top_risks")),
+            ]
+        )
+    for node_group in node_groups:
+        for raw_node in node_group:
+            if not isinstance(raw_node, dict) or not _is_regulatory_risk_node(raw_node):
+                continue
+            _update_regulatory_risk_node(
+                raw_node,
+                answer_count=answer_count,
+                answer_refs=answer_refs,
+                platform_distribution=platform_distribution,
+                platform_summary=platform_summary,
+                stance_summary=stance_summary,
+                retained_evidence_ids=retained_evidence_ids,
+            )
+    _normalize_regulatory_report_payload(
+        projection,
+        answer_count=answer_count,
+        platform_count=len(platform_distribution),
+    )
+    regulatory_node = next(
+        (
+            node
+            for node in _list(projection.get("nodes"))
+            if isinstance(node, dict) and _is_regulatory_risk_node(node)
+        ),
+        None,
+    )
+    if regulatory_node is not None:
+        _synchronize_regulatory_entity_rankings(projection, regulatory_node)
+
+
+def _is_regulatory_risk_node(node: dict[str, Any]) -> bool:
+    lexicon_entity_id = str(
+        node.get("lexicon_entity_id") or node.get("entity_id") or ""
+    ).strip()
+    if lexicon_entity_id != "evidence_regulation":
+        return False
+    return (
+        _normalize_track(
+            node.get("track") or node.get("maturity_tier") or node.get("orbit")
+        )
+        == "risk"
+    )
+
+
+def _update_regulatory_risk_node(
+    node: dict[str, Any],
+    *,
+    answer_count: int,
+    answer_refs: list[str],
+    platform_distribution: dict[str, int],
+    platform_summary: dict[str, dict[str, Any]],
+    stance_summary: dict[str, int],
+    retained_evidence_ids: set[str],
+) -> None:
+    skeptical_count = _int(stance_summary.get("skeptical"))
+    risk_count = _int(stance_summary.get("risk"))
+    node["canonical_name"] = "监管合规质疑"
+    node["display_name"] = "监管合规质疑"
+    node["term"] = "监管合规质疑"
+    node["mention_answer_count"] = answer_count
+    node["answer_count"] = answer_count
+    node["answer_refs"] = _unique_strings(answer_refs)
+    node["count_semantics"] = "distinct_answer_refs"
+    node["answer_count_is_exact"] = True
+    node["evidence_count"] = answer_count
+    node["platform_count"] = len(platform_distribution)
+    node["platform_distribution"] = deepcopy(platform_distribution)
+    node["platform_summary"] = deepcopy(platform_summary)
+    node["stance_summary"] = deepcopy(stance_summary)
+    node["relation_type_distribution"] = {
+        "LINKED_TO_CENTER_BRAND": skeptical_count,
+        "RISKS_AS": risk_count,
+    }
+    node["supportive_evidence_count"] = 0
+    node["neutral_evidence_count"] = 0
+    node["skeptical_evidence_count"] = skeptical_count
+    node["risk_evidence_count"] = risk_count
+    if retained_evidence_ids and isinstance(node.get("evidence_refs"), list):
+        node["evidence_refs"] = [
+            evidence_ref
+            for evidence_ref in node["evidence_refs"]
+            if str(evidence_ref).rsplit(":", maxsplit=1)[-1] in retained_evidence_ids
+        ]
+    reason = (
+        f"监管合规质疑在 {answer_count} 条回答中以质疑或风险语境出现，"
+        f"覆盖 {len(platform_distribution)} 个平台，应进入风险关系单独查看。"
+    )
+    node["track_reason"] = reason
+    node["orbit_reason"] = reason
+
+
+def _synchronize_regulatory_entity_rankings(
+    value: Any, regulatory_node: dict[str, Any]
+) -> None:
+    if isinstance(value, dict):
+        ranking = value.get("entity_ranking")
+        if isinstance(ranking, list):
+            for raw_item in ranking:
+                if not isinstance(raw_item, dict) or not _is_regulatory_report_item(
+                    raw_item
+                ):
+                    continue
+                raw_item.update(
+                    {
+                        "node_id": regulatory_node.get("node_id"),
+                        "entity_id": regulatory_node.get("lexicon_entity_id")
+                        or regulatory_node.get("entity_id"),
+                        "term": "监管合规质疑",
+                        "business_tag": regulatory_node.get("business_tag"),
+                        "orbit_label": regulatory_node.get("orbit_label"),
+                        "answer_count": _node_answers(regulatory_node),
+                        "answer_count_is_exact": True,
+                        "count_semantics": "distinct_answer_refs",
+                        "platform_count": _int(regulatory_node.get("platform_count")),
+                        "gravity_score": _int(regulatory_node.get("gravity_score")),
+                        "risk_context_count": _int(
+                            regulatory_node.get("risk_evidence_count")
+                        )
+                        + _int(regulatory_node.get("skeptical_evidence_count"))
+                        + _int(regulatory_node.get("competitive_evidence_count")),
+                        "evidence_refs": deepcopy(
+                            _string_list(regulatory_node.get("evidence_refs"))
+                        ),
+                    }
+                )
+            ranking.sort(
+                key=lambda item: (
+                    -_int(item.get("answer_count")) if isinstance(item, dict) else 0,
+                    -_int(item.get("platform_count")) if isinstance(item, dict) else 0,
+                    -_int(item.get("gravity_score")) if isinstance(item, dict) else 0,
+                    str(item.get("term") or "") if isinstance(item, dict) else "",
+                )
+            )
+        for item in value.values():
+            _synchronize_regulatory_entity_rankings(item, regulatory_node)
+    elif isinstance(value, list):
+        for item in value:
+            _synchronize_regulatory_entity_rankings(item, regulatory_node)
+
+
+def _normalize_regulatory_report_payload(
+    projection: dict[str, Any],
+    *,
+    answer_count: int,
+    platform_count: int,
+) -> None:
+    for field in (
+        "evidence_findings",
+        "association_actions",
+        "report_narrative_sections",
+        "analysis_tool_trace",
+        "storyline_analysis",
+        "report_input",
+        "report_markdown",
+        "full_markdown",
+    ):
+        if field in projection:
+            projection[field] = _normalize_regulatory_report_value(
+                projection[field],
+                answer_count=answer_count,
+                platform_count=platform_count,
+            )
+    regulatory_node = next(
+        (
+            node
+            for node in _list(projection.get("nodes"))
+            if isinstance(node, dict) and _is_regulatory_risk_node(node)
+        ),
+        None,
+    )
+    evidence_refs = (
+        _unique_strings(_list(regulatory_node.get("evidence_refs")))
+        if regulatory_node
+        else []
+    )
+    retained_evidence_ids = {
+        reference.rsplit(":", maxsplit=1)[-1] for reference in evidence_refs
+    }
+    sample = next(
+        (
+            item
+            for item in _list(projection.get("evidence_samples"))
+            if isinstance(item, dict)
+            and _is_regulatory_report_item(item)
+            and (
+                not retained_evidence_ids
+                or str(item.get("evidence_id") or "").rsplit(":", maxsplit=1)[-1]
+                in retained_evidence_ids
+            )
+        ),
+        None,
+    )
+    for finding in _list(projection.get("evidence_findings")):
+        if not isinstance(finding, dict) or not _is_regulatory_report_item(finding):
+            continue
+        finding["node_term"] = "监管合规质疑"
+        for field in ("claim", "implication", "supporting_facts"):
+            finding[field] = _normalize_regulatory_report_value(
+                finding.get(field),
+                answer_count=answer_count,
+                platform_count=platform_count,
+                force_regulatory_scope=True,
+            )
+        finding["evidence_refs"] = deepcopy(evidence_refs)
+        if sample:
+            finding["sample_platform"] = sample.get("platform")
+            finding["sample_question"] = sample.get("question")
+            finding["sample_excerpt"] = sample.get("answer_excerpt")
+    for action in _list(projection.get("association_actions")):
+        if isinstance(action, dict) and _is_regulatory_report_item(action):
+            action["evidence_refs"] = deepcopy(evidence_refs)
+    source_appendix = []
+    for item in _list(projection.get("source_appendix")):
+        if not isinstance(item, dict) or not _is_regulatory_report_item(item):
+            source_appendix.append(item)
+            continue
+        evidence_id = str(item.get("evidence_id") or "").rsplit(":", maxsplit=1)[-1]
+        if retained_evidence_ids and evidence_id not in retained_evidence_ids:
+            continue
+        item["node_term"] = "监管合规质疑"
+        source_appendix.append(item)
+    if "source_appendix" in projection:
+        projection["source_appendix"] = source_appendix
+
+
+def _finalize_period_projection_quality(projection: dict[str, Any]) -> None:
+    available_refs = {
+        str(item.get("evidence_id") or "").strip()
+        for item in _list(projection.get("source_appendix"))
+        if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
+    }
+    _prune_projection_evidence_refs(projection, available_refs)
+    _synchronize_evidence_finding_reference_counts(projection)
+    quality = _build_report_quality_checks(
+        narrative_sections=_list(projection.get("report_narrative_sections")),
+        question_definition=_dict(projection.get("question_definition")),
+        platform_source_summary=_dict(projection.get("platform_source_summary")),
+        evidence_findings=_list(projection.get("evidence_findings")),
+        association_actions=_list(projection.get("association_actions")),
+        source_appendix=_list(projection.get("source_appendix")),
+        nodes=_list(projection.get("nodes")),
+        sample_scope=_dict(projection.get("sample_scope")),
+        storyline_analysis=_dict(projection.get("storyline_analysis")),
+    )
+    projection["report_quality_checks"] = quality
+    projection["report_delivery_status"] = (
+        "ready" if quality.get("passed") is True else "quality_failed"
+    )
+
+
+def _synchronize_evidence_finding_reference_counts(
+    projection: dict[str, Any],
+) -> None:
+    for finding in _list(projection.get("evidence_findings")):
+        if not isinstance(finding, dict):
+            continue
+        reference_count = len(_unique_strings(_string_list(finding.get("evidence_refs"))))
+        facts = _string_list(finding.get("supporting_facts"))
+        finding["supporting_facts"] = [
+            re.sub(
+                r"可追溯证据(?:引用)?\s*\d+\s*个",
+                f"可追溯证据引用 {reference_count} 个",
+                fact,
+            )
+            for fact in facts
+        ]
+
+
+def _prune_projection_evidence_refs(value: Any, available_refs: set[str]) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "evidence_refs" and isinstance(item, list):
+                value[key] = [
+                    reference
+                    for reference in _string_list(item)
+                    if reference in available_refs
+                ]
+            else:
+                _prune_projection_evidence_refs(item, available_refs)
+    elif isinstance(value, list):
+        for item in value:
+            _prune_projection_evidence_refs(item, available_refs)
+
+
+def _synchronize_report_artifact(
+    artifact: dict[str, Any], projection: dict[str, Any]
+) -> None:
+    synchronized_fields = (
+        "nodes",
+        "evidence_samples",
+        "association_actions",
+        "report_narrative_sections",
+        "evidence_findings",
+        "source_appendix",
+        "storyline_analysis",
+        "risk_map",
+        "report_input",
+        "report_markdown",
+        "full_markdown",
+        "report_quality_checks",
+        "copy_constraints",
+    )
+    for field in synchronized_fields:
+        if field in projection:
+            artifact[field] = deepcopy(projection[field])
+    dashboard_projection = _dict(artifact.get("dashboard_projection"))
+    if dashboard_projection:
+        dashboard_projection["association_circle_projection"] = deepcopy(projection)
+        artifact["dashboard_projection"] = dashboard_projection
+
+
+def _is_regulatory_report_item(item: dict[str, Any]) -> bool:
+    identity_rules = {
+        "entity_id": {"evidence_regulation"},
+        "lexicon_entity_id": {"evidence_regulation"},
+        "node_id": {"node_evidence_regulation"},
+        "node_term": {"监管信息", "监管合规质疑"},
+        "term": {"监管信息", "监管合规质疑"},
+    }
+    explicit_identities = [
+        (field, str(item.get(field) or "").strip())
+        for field in identity_rules
+        if str(item.get(field) or "").strip()
+    ]
+    if explicit_identities:
+        return all(
+            value in identity_rules[field] for field, value in explicit_identities
+        )
+    title = str(item.get("title") or "")
+    return "监管信息" in title or "监管合规质疑" in title
+
+
+def _normalize_regulatory_report_value(
+    value: Any,
+    *,
+    answer_count: int,
+    platform_count: int,
+    force_regulatory_scope: bool = False,
+) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: (
+                item
+                if key
+                in {
+                    "answer_excerpt",
+                    "context_text",
+                    "evidence_text",
+                    "matched_text",
+                    "question",
+                    "question_text",
+                    "raw_answer",
+                    "sample_excerpt",
+                    "source_text",
+                }
+                else _normalize_regulatory_report_value(
+                    item,
+                    answer_count=answer_count,
+                    platform_count=platform_count,
+                    force_regulatory_scope=force_regulatory_scope,
+                )
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _normalize_regulatory_report_value(
+                item,
+                answer_count=answer_count,
+                platform_count=platform_count,
+                force_regulatory_scope=force_regulatory_scope,
+            )
+            for item in value
+        ]
+    if not isinstance(value, str):
+        return value
+    normalized = value.replace("监管信息", "监管合规质疑")
+    if "监管合规质疑" not in normalized and not force_regulatory_scope:
+        return normalized
+    scoped_summary = (
+        f"监管合规质疑在 {answer_count} 条回答中以质疑或风险语境出现，"
+        f"覆盖 {platform_count} 个平台"
+    )
+    normalized = re.sub(
+        r"监管合规质疑(?:被|在)\s*\d+\s*条回答(?:提到|中以质疑或风险语境出现)"
+        r"，覆盖\s*\d+\s*个平台",
+        scoped_summary,
+        normalized,
+    )
+    normalized = re.sub(
+        r"监管合规质疑被\s*\d+\s*条回答提到",
+        f"监管合规质疑在 {answer_count} 条回答中以质疑或风险语境出现",
+        normalized,
+    )
+    if not force_regulatory_scope:
+        return normalized
+    normalized = re.sub(
+        r"\d+\s*条回答提及",
+        f"{answer_count} 条回答提及",
+        normalized,
+    )
+    normalized = re.sub(
+        r"本周期证据\s*\d+\s*条",
+        f"本周期证据 {answer_count} 条",
+        normalized,
+    )
+    return re.sub(
+        r"覆盖\s*\d+\s*个平台",
+        f"覆盖 {platform_count} 个平台",
+        normalized,
+    )
 
 
 def _projection_bodies(
@@ -2139,10 +2893,14 @@ def _projection_bodies(
 
 
 def _period_projection_shell(base: dict[str, Any]) -> dict[str, Any]:
-    body = deepcopy(base)
-    body["edges"] = []
-    body["artifact_id"] = None
-    return body
+    return {
+        "schema_version": PERIOD_VIEW_PROJECTION_VERSION,
+        "status": "ready",
+        "center_terms": deepcopy(_string_list(base.get("center_terms"))),
+        "nodes": [],
+        "edges": [],
+        "artifact_id": None,
+    }
 
 
 def _build_period_report_artifact(
@@ -2163,15 +2921,37 @@ def _build_period_report_artifact(
         field="source_appendix",
         id_field="evidence_id",
     )
+    source_ids = {
+        str(item.get("evidence_id") or "").strip()
+        for item in source_appendix
+        if str(item.get("evidence_id") or "").strip()
+    }
+    source_appendix.extend(
+        deepcopy(item)
+        for item in evidence_samples
+        if str(item.get("evidence_id") or "").strip() not in source_ids
+    )
+    available_evidence_refs = {
+        str(item.get("evidence_id") or "").strip()
+        for item in [*evidence_samples, *source_appendix]
+        if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
+    }
+    body = _filter_projection_evidence_refs(body, available_evidence_refs)
     question_bank = _aggregate_question_bank(bodies)
     platform_scope = _aggregate_platform_scope(bodies, summary)
     strategy_validation = _aggregate_strategy_validation(bodies, body["nodes"])
+    strategy_validation = _filter_item_evidence_refs(
+        strategy_validation, available_evidence_refs
+    )
     risk_summary = _period_risk_summary(body["nodes"])
     evidence_findings = _period_evidence_findings(
         body["nodes"],
         source_appendix,
     )
     association_actions = _aggregate_actions(bodies)
+    association_actions = _filter_item_evidence_refs(
+        association_actions, available_evidence_refs
+    )
     center_terms = _string_list(body.get("center_terms")) or ["安利"]
     question_scope = {
         **_dict(body.get("question_definition")),
@@ -2224,6 +3004,37 @@ def _build_period_report_artifact(
         entity_calibration_result=calibration_result,
     )
     return artifact
+
+
+def _filter_projection_evidence_refs(
+    body: dict[str, Any],
+    available_refs: set[str],
+) -> dict[str, Any]:
+    filtered = deepcopy(body)
+    filtered["nodes"] = _filter_item_evidence_refs(
+        _list(filtered.get("nodes")), available_refs
+    )
+    return filtered
+
+
+def _filter_item_evidence_refs(
+    rows: list[Any],
+    available_refs: set[str],
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for raw_item in rows:
+        if not isinstance(raw_item, dict):
+            continue
+        item = deepcopy(raw_item)
+        for field in ("evidence_refs", "evidence_samples"):
+            if isinstance(item.get(field), list):
+                item[field] = [
+                    ref
+                    for ref in _string_list(item.get(field))
+                    if ref in available_refs
+                ]
+        filtered.append(item)
+    return filtered
 
 
 def _period_projection_from_artifact(
@@ -2282,6 +3093,12 @@ def _aggregate_period_items(
             if not isinstance(raw_item, dict):
                 continue
             item = deepcopy(raw_item)
+            for platform_field in ("platform", "source_platform", "platform_id"):
+                if platform_field not in item:
+                    continue
+                normalized_platform = _normalize_platform_name(item.get(platform_field))
+                if normalized_platform:
+                    item[platform_field] = normalized_platform
             raw_id = str(item.get(id_field) or "").strip()
             if not raw_id:
                 continue
@@ -2289,6 +3106,10 @@ def _aggregate_period_items(
             if qualified_id in seen:
                 continue
             item[id_field] = qualified_id
+            if item.get("answer_id"):
+                item["answer_id"] = _qualify_evidence_refs(
+                    run_id, [str(item["answer_id"])]
+                )[0]
             _qualify_item_evidence_refs(item, run_id)
             rows.append(item)
             seen.add(qualified_id)
@@ -2314,6 +3135,31 @@ def _aggregate_question_bank(
                 continue
             rows.append(deepcopy(raw_item))
             seen.add(key)
+    if rows:
+        return rows
+    for _, body in reversed(bodies):
+        for raw_item in _list(body.get("source_appendix")):
+            if not isinstance(raw_item, dict):
+                continue
+            text = str(
+                raw_item.get("question") or raw_item.get("question_text") or ""
+            ).strip()
+            question_id = str(raw_item.get("question_id") or "").strip()
+            key = _text_hash(text or question_id)
+            if not key or key in seen:
+                continue
+            rows.append(
+                {
+                    "id": question_id,
+                    "text": text,
+                    "audience_segment": raw_item.get("audience_segment"),
+                    "life_scene": raw_item.get("life_scene"),
+                    "opportunity_point": raw_item.get("opportunity_point"),
+                    "probe_type": raw_item.get("probe_type"),
+                    "source": "source_appendix",
+                }
+            )
+            seen.add(key)
     return rows
 
 
@@ -2321,6 +3167,7 @@ def _aggregate_platform_scope(
     bodies: list[tuple[str, dict[str, Any]]],
     summary: dict[str, Any],
 ) -> dict[str, Any]:
+    sample_scope = _period_sample_scope(summary)
     buckets: dict[str, dict[str, Any]] = {}
     for _, body in bodies:
         source = _dict(body.get("platform_source_summary"))
@@ -2345,15 +3192,14 @@ def _aggregate_platform_scope(
                 bucket[key] = _int(bucket.get(key)) + _int(raw_item.get(key))
             if raw_item.get("tendency"):
                 bucket["tendency"] = raw_item.get("tendency")
-    for platform in _string_list(summary.get("platforms")):
+    for platform in _string_list(sample_scope.get("platforms")):
         buckets.setdefault(platform, {"platform": platform})
     platforms = list(buckets.values())
     return {
+        **sample_scope,
         "platforms": platforms,
         "platform_names": [item["platform"] for item in platforms],
-        "platform_count": len(platforms),
-        "valid_answer_count": _int(summary.get("valid_answer_count")),
-        "failed_answer_count": _int(summary.get("failed_answer_count")),
+        "valid_platform_names": [item["platform"] for item in platforms],
         "empty_answer_count": sum(
             _int(item.get("empty_answer_count")) for item in platforms
         ),
@@ -2364,7 +3210,7 @@ def _aggregate_strategy_validation(
     bodies: list[tuple[str, dict[str, Any]]],
     nodes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    latest: dict[str, dict[str, Any]] = {}
+    buckets: dict[str, dict[str, Any]] = {}
     for run_id, body in reversed(bodies):
         for raw_item in _list(body.get("strategy_validation")):
             if not isinstance(raw_item, dict):
@@ -2378,28 +3224,106 @@ def _aggregate_strategy_validation(
             if term:
                 item = deepcopy(raw_item)
                 _qualify_item_evidence_refs(item, run_id)
-                latest[term] = item
+                bucket = buckets.setdefault(
+                    term,
+                    {
+                        "latest": {},
+                        "answers": 0,
+                        "count_modes": set(),
+                        "answer_refs": [],
+                        "evidence_refs": [],
+                        "question_refs": [],
+                    },
+                )
+                bucket["latest"] = item
+                raw_answer_refs = item.get("answer_refs")
+                count_mode = _answer_count_merge_mode(item)
+                bucket["count_modes"].add(count_mode)
+                bucket["answers"] += _answer_count_merge_contribution(item, count_mode)
+                if isinstance(raw_answer_refs, list):
+                    bucket["answer_refs"] = _unique_strings(
+                        bucket["answer_refs"]
+                        + _qualify_evidence_refs(run_id, _string_list(raw_answer_refs))
+                    )
+                bucket["evidence_refs"] = _unique_strings(
+                    bucket["evidence_refs"] + _string_list(item.get("evidence_refs"))
+                )
+                bucket["question_refs"] = _unique_strings(
+                    bucket["question_refs"] + _string_list(item.get("question_refs"))
+                )
     nodes_by_name = {_node_name(node): node for node in nodes}
-    for term, item in latest.items():
+    rows: list[dict[str, Any]] = []
+    for term, bucket in buckets.items():
+        item = deepcopy(bucket["latest"])
         node = nodes_by_name.get(term)
-        if node is None:
-            continue
-        item["answer_count"] = _node_answers(node)
-        item["evidence_count"] = _int(node.get("evidence_count"))
-        item["platform_count"] = _int(node.get("platform_count"))
-        item["stability_score"] = _int(node.get("stability_score"))
-        item["gravity_score"] = _int(node.get("gravity_score"))
-        item["distance_score"] = _int(node.get("distance_score"))
-        item["orbit"] = node.get("orbit") or node.get("track")
-    return list(latest.values())
+        if node is not None:
+            answer_count = _node_answers(node)
+            item["answer_count"] = answer_count
+            item["answer_mention_count"] = answer_count
+            item["evidence_count"] = _int(node.get("evidence_count"))
+            item["platform_count"] = _int(node.get("platform_count"))
+            item["platform_distribution"] = deepcopy(
+                _dict(node.get("platform_distribution"))
+            )
+            item["stability_score"] = _int(node.get("stability_score"))
+            item["gravity_score"] = _int(node.get("gravity_score"))
+            item["node_score"] = _int(node.get("gravity_score"))
+            item["distance_score"] = _int(node.get("distance_score"))
+            item["orbit"] = node.get("orbit") or node.get("track")
+            count_mode = _answer_count_merge_mode(node)
+            if isinstance(node.get("answer_refs"), list) and count_mode != "legacy":
+                item["answer_refs"] = deepcopy(node["answer_refs"])
+            else:
+                item.pop("answer_refs", None)
+            if count_mode == "exact":
+                item["count_semantics"] = "distinct_answer_refs"
+                item["answer_count_is_exact"] = True
+            elif count_mode == "lower_bound":
+                item["count_semantics"] = "known_answer_refs_lower_bound"
+                item["answer_count_is_exact"] = False
+            else:
+                item["count_semantics"] = "legacy_summed_mentions"
+                item["answer_count_is_exact"] = False
+        else:
+            answer_count, count_semantics, is_exact, keep_refs = (
+                _merged_answer_count_semantics(
+                    bucket["count_modes"],
+                    bucket["answers"],
+                    bucket["answer_refs"],
+                )
+            )
+            item["answer_count"] = answer_count
+            item["answer_mention_count"] = answer_count
+            item["count_semantics"] = count_semantics
+            item["answer_count_is_exact"] = is_exact
+            if keep_refs:
+                item["answer_refs"] = bucket["answer_refs"]
+            else:
+                item.pop("answer_refs", None)
+        item["evidence_refs"] = bucket["evidence_refs"]
+        item["question_refs"] = bucket["question_refs"]
+        rows.append(item)
+    return rows
 
 
 def _period_risk_summary(nodes: list[dict[str, Any]]) -> dict[str, Any]:
     risk_nodes = [node for node in nodes if str(node.get("track") or "") == "risk"]
+    competition_nodes = [
+        node
+        for node in risk_nodes
+        if str(node.get("entity_type") or "") == "Competitor"
+        or str(node.get("business_tag") or "") == "竞争关系"
+    ]
+    pure_risk_nodes = [node for node in risk_nodes if node not in competition_nodes]
     return {
         "risk_count": len(risk_nodes),
         "nodes": risk_nodes,
         "top_risks": risk_nodes[:5],
+        "risk_nodes": pure_risk_nodes,
+        "top_risk_nodes": pure_risk_nodes[:5],
+        "competition_count": len(competition_nodes),
+        "competition_nodes": competition_nodes,
+        "top_competitors": competition_nodes[:5],
     }
 
 
@@ -2407,29 +3331,48 @@ def _period_evidence_findings(
     nodes: list[dict[str, Any]],
     source_appendix: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    evidence_by_id = {
-        str(item.get("evidence_id") or ""): item for item in source_appendix
-    }
     rows: list[dict[str, Any]] = []
     for node in nodes[:80]:
         refs = _string_list(node.get("evidence_refs"))
         sample = next(
-            (evidence_by_id.get(ref) for ref in refs if ref in evidence_by_id), None
+            (
+                item
+                for item in source_appendix
+                if str(item.get("evidence_id") or "") in refs
+                and _evidence_sample_mentions_node(item, node)
+            ),
+            None,
         )
         name = _node_name(node)
         if not name:
             continue
+        count_phrase = _node_count_phrase(node)
+        platform_count = _int(node.get("platform_count"))
+        track = _node_track(node)
+        if track == "risk":
+            relationship = (
+                "竞争参照"
+                if str(node.get("entity_type") or "") == "Competitor"
+                or str(node.get("business_tag") or "") == "竞争关系"
+                else "风险观察"
+            )
+            claim = f"{name}已进入{relationship}；{count_phrase}，覆盖 {platform_count} 个平台。"
+        else:
+            track_label = {
+                "stable": "稳定资产区",
+                "opportunity": "机会区",
+                "watch": "观察区",
+            }.get(track, "当前轨道")
+            claim = f"{name}当前位于{track_label}；{count_phrase}，覆盖 {platform_count} 个平台。"
         rows.append(
             {
                 "node_id": node.get("node_id"),
                 "node_term": name,
-                "claim": str(
-                    node.get("track_reason") or node.get("orbit_reason") or ""
-                ),
+                "claim": claim,
                 "orbit": node.get("orbit") or node.get("track"),
                 "supporting_facts": [
-                    f"{_node_answers(node)} 条回答提及，覆盖 {_int(node.get('platform_count'))} 个平台。",
-                    f"本周期证据 {_int(node.get('evidence_count'))} 条，距离值 {_int(node.get('distance_score'))}。",
+                    f"{count_phrase}，覆盖 {platform_count} 个平台。",
+                    f"可追溯证据 {len(refs)} 个，距离值 {_int(node.get('distance_score'))}。",
                 ],
                 "evidence_refs": refs,
                 "sample_platform": str((sample or {}).get("platform") or ""),
@@ -2470,6 +3413,17 @@ def _aggregate_actions(
 def _aggregate_nodes(
     bodies: list[tuple[str, dict[str, Any]]],
 ) -> list[dict[str, Any]]:
+    score_fields = (
+        "raw_gravity_score",
+        "gravity_score",
+        "frequency_score",
+        "position_score",
+        "relation_type_score",
+        "scene_coverage_score",
+        "model_consistency_score",
+        "stability_score",
+        "risk_score",
+    )
     buckets: dict[str, dict[str, Any]] = {}
     latest_body_index = len(bodies) - 1
     for body_index, (run_id, body) in enumerate(bodies):
@@ -2491,13 +3445,14 @@ def _aggregate_nodes(
                     "question_ids": set(),
                     "evidence": 0,
                     "center": 0,
-                    "score_weight": 0,
-                    "gravity": 0.0,
-                    "distance": 0.0,
-                    "stability": 0.0,
-                    "risk": 0.0,
+                    "scores": {field: 0.0 for field in score_fields},
+                    "score_weights": {field: 0 for field in score_fields},
                     "platform_summary": {},
                     "evidence_refs": [],
+                    "answer_refs": [],
+                    "count_modes": set(),
+                    "stance_summary": {},
+                    "relation_type_distribution": {},
                 },
             )
             answers = _node_answers(node)
@@ -2513,11 +3468,14 @@ def _aggregate_nodes(
             bucket["question_ids"].update(_string_list(node.get("trigger_questions")))
             bucket["evidence"] += evidence
             bucket["center"] += _int(node.get("center_anchor_count"))
-            bucket["score_weight"] += weight
-            bucket["gravity"] += _float(node.get("gravity_score")) * weight
-            bucket["distance"] += _float(node.get("distance_score")) * weight
-            bucket["stability"] += _float(node.get("stability_score")) * weight
-            bucket["risk"] += _float(node.get("risk_score")) * weight
+            for field in score_fields:
+                value = node.get(field)
+                if value is None and field == "raw_gravity_score":
+                    value = node.get("gravity_score")
+                if value is None:
+                    continue
+                bucket["scores"][field] += _float(value) * weight
+                bucket["score_weights"][field] += weight
             bucket["evidence_refs"] = _unique_strings(
                 bucket["evidence_refs"]
                 + _qualify_evidence_refs(run_id, _node_evidence_refs(node))
@@ -2526,19 +3484,50 @@ def _aggregate_nodes(
                 bucket["platform_summary"],
                 node.get("platform_summary") or node.get("platform_distribution"),
             )
+            raw_answer_refs = node.get("answer_refs")
+            count_mode = _answer_count_merge_mode(node)
+            bucket["count_modes"].add(count_mode)
+            bucket["answers"] -= answers
+            bucket["answers"] += _answer_count_merge_contribution(node, count_mode)
+            if isinstance(raw_answer_refs, list):
+                bucket["answer_refs"] = _unique_strings(
+                    bucket["answer_refs"]
+                    + _qualify_evidence_refs(run_id, _string_list(raw_answer_refs))
+                )
+            bucket["stance_summary"] = _merge_count_mapping(
+                bucket["stance_summary"], node.get("stance_summary")
+            )
+            bucket["relation_type_distribution"] = _merge_count_mapping(
+                bucket["relation_type_distribution"],
+                node.get("relation_type_distribution"),
+            )
 
     rows: list[dict[str, Any]] = []
     for bucket in buckets.values():
         node = deepcopy(bucket["latest_node"] or bucket["fallback_node"] or {})
-        weight = max(int(bucket["score_weight"] or 0), 1)
         platform_summary = bucket["platform_summary"]
-        node["mention_answer_count"] = bucket["answers"]
-        node["answer_count"] = bucket["answers"]
+        answer_count, count_semantics, is_exact, keep_refs = (
+            _merged_answer_count_semantics(
+                bucket["count_modes"],
+                bucket["answers"],
+                bucket["answer_refs"],
+            )
+        )
+        if keep_refs:
+            node["answer_refs"] = bucket["answer_refs"]
+        else:
+            node.pop("answer_refs", None)
+        node["count_semantics"] = count_semantics
+        node["answer_count_is_exact"] = is_exact
+        node["mention_answer_count"] = answer_count
+        node["answer_count"] = answer_count
         node["question_count"] = (
             len(bucket["question_ids"])
             if bucket["question_ids"]
             else bucket["questions"]
         )
+        node["distinct_question_count"] = node["question_count"]
+        node["question_observation_count"] = bucket["questions"]
         node["evidence_count"] = bucket["evidence"]
         node["center_anchor_count"] = bucket["center"]
         node["platform_summary"] = platform_summary
@@ -2549,12 +3538,82 @@ def _aggregate_nodes(
         node["platform_count"] = len(platform_summary)
         node["evidence_refs"] = bucket["evidence_refs"]
         node.pop("evidence_samples", None)
-        node["gravity_score"] = round(bucket["gravity"] / weight)
-        node["distance_score"] = round(bucket["distance"] / weight)
-        node["stability_score"] = round(bucket["stability"] / weight)
-        node["risk_score"] = round(bucket["risk"] / weight)
+        for field in score_fields:
+            field_weight = bucket["score_weights"][field]
+            if field_weight:
+                node[field] = round(bucket["scores"][field] / field_weight)
+        score = _int(node.get("gravity_score"))
+        if node.get("raw_gravity_score") is not None:
+            score = min(score, _int(node.get("raw_gravity_score")))
+        node["gravity_score"] = score
+        node["sentiment_gate_score"] = score
+        node["association_score"] = score
+        node["closeness_score"] = score
+        node["distance_score"] = 100 - score
+        is_risk = bool(node.get("is_risk_term")) or _node_track(node) == "risk"
+        orbit, orbit_label = _period_orbit_for(score, is_risk=is_risk)
+        maturity_tier, maturity_label = _period_maturity_for(score, is_risk=is_risk)
+        node["orbit"] = orbit
+        node["orbit_label"] = orbit_label
+        node["track"] = _period_track_for(score, is_risk=is_risk)
+        node["maturity_tier"] = maturity_tier
+        node["maturity_label"] = maturity_label
+        node["stance_summary"] = bucket["stance_summary"]
+        node["relation_type_distribution"] = bucket["relation_type_distribution"]
+        node["score_aggregation"] = "answer_weighted_run_average"
         rows.append(node)
     return sorted(rows, key=lambda item: _node_sort_key(item))
+
+
+def _merge_count_mapping(left: dict[str, Any], value: Any) -> dict[str, int]:
+    merged = {str(key): _int(count) for key, count in left.items()}
+    if not isinstance(value, dict):
+        return merged
+    for key, count in value.items():
+        normalized = str(key).strip()
+        if normalized:
+            merged[normalized] = merged.get(normalized, 0) + _int(count)
+    return merged
+
+
+def _period_orbit_for(score: int, *, is_risk: bool) -> tuple[str, str]:
+    if is_risk:
+        return "risk_shadow", "风险关系"
+    if score >= 80:
+        return "core_near", "已绑定资产"
+    if score >= 60:
+        return "strong", "已绑定资产"
+    if score >= 50:
+        return "near_opportunity", "近端机会"
+    if score >= 35:
+        return "far_opportunity", "远端机会"
+    if score >= 20:
+        return "weak", "待观察"
+    return "blank", "远端待验证"
+
+
+def _period_track_for(score: int, *, is_risk: bool) -> str:
+    if is_risk:
+        return "risk"
+    if score >= 60:
+        return "stable"
+    if score >= 35:
+        return "opportunity"
+    return "watch"
+
+
+def _period_maturity_for(score: int, *, is_risk: bool) -> tuple[str, str]:
+    if is_risk:
+        return "risk", "风险关系"
+    if score >= 60:
+        return "stable_asset", "稳定资产"
+    if score >= 50:
+        return "near_opportunity", "近端机会"
+    if score >= 35:
+        return "far_opportunity", "远端机会"
+    if score >= 20:
+        return "watch_signal", "待观察"
+    return "evidence_gap", "证据缺口"
 
 
 def _merge_platform_summary(
@@ -2567,7 +3626,9 @@ def _merge_platform_summary(
     for platform, raw_item in value.items():
         if not isinstance(raw_item, dict):
             raw_item = {"mention_answer_count": raw_item}
-        key = str(platform)
+        key = _normalize_platform_name(platform)
+        if not key:
+            continue
         item = merged.setdefault(key, {"platform": key})
         item["mention_answer_count"] = _int(item.get("mention_answer_count")) + _int(
             raw_item.get("mention_answer_count") or raw_item.get("count")
@@ -2588,6 +3649,8 @@ def _change_top5(
     previous = _node_map(previous_projection)
     current_answers = _projection_valid_answer_count(current_projection)
     previous_answers = _projection_valid_answer_count(previous_projection)
+    if current_answers <= 0 or previous_answers <= 0:
+        return []
     rows: list[dict[str, Any]] = []
     for key in sorted(set(current) | set(previous)):
         node = current.get(key)
@@ -2606,6 +3669,7 @@ def _change_top5(
         previous_mention_rate = _mention_rate(
             _node_answers(old or {}), previous_answers
         )
+        assert mention_rate is not None and previous_mention_rate is not None
         mention_rate_delta = mention_rate - previous_mention_rate
         platform_delta = _int((node or {}).get("platform_count")) - _int(
             (old or {}).get("platform_count")
@@ -2652,8 +3716,7 @@ def _change_top5(
                 "track_to": _node_track(node),
                 "change_score": change_score,
                 "evidence_refs": _unique_strings(
-                    _node_evidence_refs(node or {})
-                    + _node_evidence_refs(old or {})
+                    _node_evidence_refs(node or {}) + _node_evidence_refs(old or {})
                 ),
                 "explanation": _change_explanation(
                     name,
@@ -2671,17 +3734,31 @@ def _projection_valid_answer_count(projection: dict[str, Any] | None) -> int:
     return _int(_dict(body.get("sample_scope")).get("valid_answer_count"))
 
 
-def _mention_rate(mention_count: int, valid_answer_count: int) -> float:
+def _mention_rate(mention_count: int, valid_answer_count: int) -> float | None:
     if valid_answer_count <= 0:
-        return 0.0
+        return None
     return round(mention_count / valid_answer_count, 12)
 
 
 def _should_compare_period(
     current_projections: list[AmwayCircleProjection],
     previous_projection: dict[str, Any] | None,
+    current_projection: dict[str, Any] | None = None,
 ) -> bool:
-    return bool(current_projections and previous_projection)
+    if not current_projections or previous_projection is None:
+        return False
+    if current_projection is None:
+        current_answers = sum(
+            _projection_valid_answer_count(
+                _dict(projection.association_circle_projection)
+            )
+            for projection in current_projections
+        )
+    else:
+        current_answers = _projection_valid_answer_count(current_projection)
+    return (
+        current_answers > 0 and _projection_valid_answer_count(previous_projection) > 0
+    )
 
 
 def _same_track_change_type(
@@ -2731,16 +3808,23 @@ def _period_report_input(
 ) -> dict[str, Any]:
     body = _dict(projection)
     nodes = _list(body.get("nodes"))
+    sample_scope = _period_sample_scope(current_summary, body)
     return {
+        "contract_version": PERIOD_VIEW_PROJECTION_VERSION,
         "scope": "period_view",
-        "current_period": current_summary,
+        "count_semantics": {
+            "question_count": "distinct_questions",
+            "question_observation_count": "run_level_question_observations",
+            "node_answer_count": "distinct_answer_refs_or_known_answer_refs_lower_bound_or_legacy_summed_mentions",
+        },
+        "current_period": sample_scope,
         "previous_period": previous_summary,
         "change_top5": change_top5,
         "question_set_changed": question_set_changed,
         "comparison_notice": notice,
         "current_projection_summary": {
             "node_count": len(nodes),
-            "sample_scope": _dict(body.get("sample_scope")),
+            "sample_scope": sample_scope,
         },
         "evidence_findings": _list(body.get("evidence_findings")),
         "source_appendix": _list(body.get("source_appendix")),
@@ -2787,6 +3871,84 @@ def _node_name(node: dict[str, Any]) -> str:
 
 def _node_answers(node: dict[str, Any]) -> int:
     return _int(node.get("mention_answer_count") or node.get("answer_count"))
+
+
+def _node_count_phrase(node: dict[str, Any]) -> str:
+    count = _node_answers(node)
+    mode = _answer_count_merge_mode(node)
+    if mode == "exact":
+        return f"{count} 条回答"
+    if mode == "lower_bound":
+        return f"至少 {count} 条可确认回答"
+    return f"{count} 次节点提及"
+
+
+def _evidence_sample_mentions_node(
+    sample: dict[str, Any], node: dict[str, Any]
+) -> bool:
+    text = "".join(
+        str(sample.get(field) or "")
+        for field in ("question", "answer_excerpt", "quote_text", "evidence_text")
+    ).casefold()
+    aliases = _unique_strings(
+        [
+            _node_name(node),
+            str(node.get("canonical_name") or ""),
+            str(node.get("display_name") or ""),
+            *_string_list(node.get("aliases")),
+        ]
+    )
+    expanded_aliases = [
+        part.strip()
+        for alias in aliases
+        for part in re.split(r"[/／、|｜,，()（）]", alias)
+        if len(part.strip()) >= 2
+    ]
+    return any(alias.casefold() in text for alias in [*aliases, *expanded_aliases])
+
+
+def _answer_count_merge_mode(item: dict[str, Any]) -> str:
+    """Return the most conservative merge mode declared by a count record."""
+    semantics = str(item.get("count_semantics") or "").strip()
+    answer_refs = item.get("answer_refs")
+    is_exact = item.get("answer_count_is_exact")
+    if semantics == "known_answer_refs_lower_bound":
+        return "lower_bound"
+    if semantics == "legacy_summed_mentions" or is_exact is False:
+        return "legacy"
+    if (semantics == "distinct_answer_refs" or is_exact is True) and isinstance(
+        answer_refs, list
+    ):
+        return "exact"
+    if isinstance(answer_refs, list) and is_exact is not False:
+        return "exact"
+    return "legacy"
+
+
+def _answer_count_merge_contribution(item: dict[str, Any], mode: str) -> int:
+    declared_count = _int(
+        item.get("mention_answer_count")
+        or item.get("answer_count")
+        or item.get("answer_mention_count")
+    )
+    answer_refs = _unique_strings(_string_list(item.get("answer_refs")))
+    if mode == "exact":
+        return len(answer_refs)
+    if mode == "lower_bound":
+        return max(declared_count, len(answer_refs))
+    return declared_count
+
+
+def _merged_answer_count_semantics(
+    modes: set[str],
+    summed_count: int,
+    answer_refs: list[str],
+) -> tuple[int, str, bool, bool]:
+    if modes == {"exact"}:
+        return len(answer_refs), "distinct_answer_refs", True, True
+    if modes and modes <= {"exact", "lower_bound"}:
+        return summed_count, "known_answer_refs_lower_bound", False, True
+    return summed_count, "legacy_summed_mentions", False, False
 
 
 def _node_track(node: dict[str, Any] | None) -> str:
@@ -3280,8 +4442,63 @@ def _text_hash(value: Any) -> str:
 
 
 def _normalize_platform_name(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    return {"豆包": "doubao", "元宝": "yuanbao"}.get(text, text)
+    return normalize_public_platform_id(value) or ""
+
+
+def _normalized_platforms(values: Any) -> list[str]:
+    return sorted(
+        {platform for value in values if (platform := _normalize_platform_name(value))}
+    )
+
+
+def _period_sample_scope(
+    summary: dict[str, Any],
+    projection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    platforms = _normalized_platforms(
+        [
+            *_string_list(summary.get("platforms")),
+            *_projection_platforms(projection),
+        ]
+    )
+    requested_platforms = (
+        _normalized_platforms(_string_list(summary.get("requested_platforms")))
+        or platforms
+    )
+    nodes = _list(_dict(projection).get("nodes")) if projection is not None else []
+    return {
+        **summary,
+        "question_count": _int(summary.get("question_count")),
+        "requested_platforms": requested_platforms,
+        "requested_platform_count": len(requested_platforms),
+        "platforms": platforms,
+        "valid_platform_names": platforms,
+        "valid_platform_count": len(platforms),
+        "platform_count": len(platforms),
+        "valid_answer_count": _int(summary.get("valid_answer_count")),
+        "failed_answer_count": _int(summary.get("failed_answer_count")),
+        "normalized_node_count": (
+            len(nodes)
+            if projection is not None
+            else _int(summary.get("normalized_node_count"))
+        ),
+    }
+
+
+def _projection_platforms(projection: dict[str, Any] | None) -> list[str]:
+    body = _dict(projection)
+    rows: list[str] = []
+    source = _dict(body.get("platform_source_summary"))
+    rows.extend(
+        _string_list(source.get("valid_platform_names") or source.get("platform_names"))
+    )
+    for item in _list(source.get("platforms")):
+        if isinstance(item, dict):
+            rows.append(str(item.get("platform") or item.get("name") or ""))
+    for node in _list(body.get("nodes")):
+        if isinstance(node, dict):
+            rows.extend(_dict(node.get("platform_distribution")).keys())
+    return _normalized_platforms(rows)
 
 
 def _completed_platforms(value: Any, requested: list[str]) -> list[str]:
@@ -3300,16 +4517,8 @@ def _completed_platforms(value: Any, requested: list[str]) -> list[str]:
         )
         if platform and valid > 0:
             rows.append(platform)
-    aliases = {
-        "豆包": "doubao",
-        "元宝": "yuanbao",
-        "kimi": "kimi",
-        "deepseek": "deepseek",
-    }
-    normalized = [
-        aliases.get(item.lower(), aliases.get(item, item.lower())) for item in rows
-    ]
-    allowed = {item.lower() for item in requested}
+    normalized = _normalized_platforms(rows)
+    allowed = set(_normalized_platforms(requested))
     return [
         item for item in _unique_strings(normalized) if not allowed or item in allowed
     ]
