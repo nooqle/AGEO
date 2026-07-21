@@ -923,3 +923,80 @@ html[data-theme="light"] input {
   animation: message-highlight-pulse 3s ease-out;
   border-radius: 12px;
 }
+
+/* =========================================================================
+   Amway Console (/amwaychina) 表面层级与页面级工具类
+   ========================================================================= */
+
+/* 深色主题表面反转：页面最暗、卡片亮一档。
+   在 .amway-console 作用域内交换 --bg-primary / --bg-secondary 的值，
+   让既有卡片（bg-[var(--bg-primary)]）浮于页面（bg-[var(--bg-secondary)]）之上，
+   嵌套灰底区（bg-secondary）自然变为比卡片暗的 recessed inset。
+   浅色主题下 bg-secondary 本来就比 bg-primary 亮，无需交换，
+   因此交换规则只在深色（默认）主题生效，避免浅色主题文字变暗底暗字。 */
+:root:not([data-theme="light"]) .amway-console {
+  --bg-primary: #171B18;
+  --bg-secondary: #101311;
+}
+
+.amway-console {
+  /* 报告 takeaway 引用块底色（替代 Views 中的硬编码 rgba） */
+  --report-takeaway-bg: rgba(31, 122, 107, 0.08);
+  --report-takeaway-strong-bg: rgba(31, 122, 107, 0.18);
+  --report-takeaway-risk-bg: rgba(239, 91, 107, 0.10);
+  --report-blindspot-bg: rgba(239, 91, 107, 0.06);
+}
+
+/* 报告长文字体（收敛 Views 中 15+ 处 fontFamily 内联样式） */
+.report-font {
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+/* ==========================================================================
+   Amway Console 浅色主题专属增强
+   ========================================================================= */
+
+html[data-theme="light"] .amway-console {
+  /* 页面顶部品牌色微光，让页面背景与纯白卡片拉开层级 */
+  background-image: radial-gradient(880px 300px at 50% -200px, rgba(31, 122, 107, 0.028), transparent 70%);
+  background-repeat: no-repeat;
+
+  /* 浅色卡片环境阴影（深色主题保持 shadow-sm 原样） */
+  --amway-card-shadow: 0 1px 2px rgba(38, 45, 43, 0.04), 0 16px 40px -24px rgba(38, 45, 43, 0.18);
+
+  /* 轨道带在浅色卡片上的默认浓度（深色下沿用组件内 0.07） */
+  --amway-track-band: 0.13;
+}
+
+/* 顶层卡片：浅色下用环境阴影浮于页面（优先级高于 shadow-sm） */
+html[data-theme="light"] .amway-console .amway-surface {
+  box-shadow: var(--amway-card-shadow);
+}
+
+/* 主行动按钮：浅色下加品牌色柔光 */
+html[data-theme="light"] .amway-console .amway-cta-glow {
+  box-shadow: 0 8px 20px -12px rgba(31, 122, 107, 0.3);
+}
+
+html[data-theme="light"] .amway-console .amway-cta-glow:hover {
+  box-shadow: 0 10px 24px -12px rgba(31, 122, 107, 0.4);
+}
+
+/* 可交互卡片：hover 微提升 + 边框提亮 + 阴影加深 */
+.amway-card-interactive {
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.amway-card-interactive:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.amway-card-interactive:active {
+  transform: translateY(0);
+}

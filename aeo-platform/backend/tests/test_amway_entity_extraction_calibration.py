@@ -6,17 +6,36 @@ import pytest
 os.environ.setdefault("JWT_SECRET", "test-secret")
 
 from app.services.amway_entity_calibration_service import (
+    FOUR_HAVE_STORYLINE_RULES,
     AmwayEntityCalibrationService,
+    _EntityAccumulator,
+    _build_four_have_pillar,
+    _context_adjusted_score,
 )
 from app.services.amway_entity_extraction_service import (
     AmwayEntityExtractionService,
 )
+from app.core.utils import sanitize_model_visible_text
+from app.ontology import load_default_amway_entity_ontology
 from app.workflow.a5.association_circle import (
     build_brand_association_circle_report_artifact,
 )
-from app.workflow import nodes_a4 as nodes_a4_module
-from app.workflow.nodes_a4 import _build_amway_entity_pipeline_update
+from app.workflow import nodes_amway as nodes_amway_module
+from app.workflow.nodes_amway import amway_extract_node, amway_projection_node
 from tests.fixtures.association_circle_amway import amway_association_fetch_results
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("冲锋\ue3a0ci...", "冲锋"),
+        ("冲锋\ue3a0cite\ue3a3web_search12\ue3a1。", "冲锋。"),
+        ("冲锋 cite web_search:12", "冲锋"),
+        ("冲锋 turn0search3", "冲锋"),
+    ],
+)
+def test_model_citation_markers_are_removed_before_rendering(raw, expected):
+    assert sanitize_model_visible_text(raw) == expected
 
 
 def test_amway_entity_extraction_outputs_answer_bound_signals():
@@ -34,6 +53,71 @@ def test_amway_entity_extraction_outputs_answer_bound_signals():
     assert all(signal["answer_id"] for signal in signals)
     assert all(signal["evidence_text"] for signal in signals)
     assert all(signal["source_policy"] for signal in signals)
+
+
+def test_explicit_platform_answer_ids_are_namespaced_by_question_and_platform():
+    fetch_results = [
+        {
+            "question_id": question_id,
+            "question_text": f"{question_id} 提到安利纽崔莱吗？",
+            "platform_results": [
+                {
+                    "id": "1",
+                    "platform": "kimi",
+                    "answer": {"content": "安利纽崔莱提供营养补充产品。"},
+                }
+            ],
+        }
+        for question_id in ("q_one", "q_two")
+    ]
+
+    extraction = AmwayEntityExtractionService().extract_from_fetch_results(
+        fetch_results
+    )
+    answer_ids = [row["answer_id"] for row in extraction["answer_signals"]]
+    calibration = AmwayEntityCalibrationService().calibrate(
+        fetch_results=fetch_results,
+        extraction_result=extraction,
+        center_terms=["安利"],
+    )
+    nutrilite = next(
+        node
+        for node in calibration["association_circle_projection"]["nodes"]
+        if node["term"] == "纽崔莱"
+    )
+
+    assert len(set(answer_ids)) == 2
+    assert all(row["source_answer_id"] == "1" for row in extraction["answer_signals"])
+    assert nutrilite["answer_count"] == 2
+    assert len(nutrilite["answer_refs"]) == 2
+
+
+def test_context_penalty_never_raises_a_low_raw_score():
+    entity = load_default_amway_entity_ontology().require_entity("four_value_security")
+    accumulator = _EntityAccumulator(
+        entity_id=entity.entity_id,
+        entity_name=entity.canonical_name,
+        entity_type=entity.entity_type,
+        term_origin="strategy",
+        graph_policy=entity.graph_policy.model_dump(),
+        source_policy=entity.source_policy.model_dump(),
+        review_status=entity.review_status,
+    )
+
+    adjusted = _context_adjusted_score(
+        raw_score=29,
+        entity=entity,
+        acc=accumulator,
+        is_risk=False,
+        stance_summary={
+            "supportive": 0,
+            "skeptical": 2,
+            "risk": 0,
+            "competitive": 0,
+        },
+    )
+
+    assert adjusted <= 29
 
 
 def test_answer_extraction_does_not_use_related_terms_as_answer_evidence():
@@ -170,6 +254,189 @@ def test_internal_business_terms_do_not_become_risk_nodes():
     assert not (
         {"安利事业机会", "直销", "ABO", "KOC"} & set(security_pillar["risk_terms"])
     )
+
+
+def test_four_have_pillar_counts_unique_answers_across_strategy_terms():
+    fetch_results = [
+        {
+            "question_id": "q_health_story",
+            "question_text": "安利如何支持长期健康管理？",
+            "opportunity_point": "健康管理",
+            "probe_type": "品牌战略探针",
+            "platform_results": [
+                {
+                    "platform": "Kimi",
+                    "success": True,
+                    "answer": {
+                        "content": "安利以有健康、健康管理和整体抗衰支持长期生活方式。"
+                    },
+                },
+                {
+                    "platform": "豆包",
+                    "success": True,
+                    "answer": {
+                        "content": "有健康可以连接健康管理、整体抗衰和营养方案。"
+                    },
+                },
+            ],
+        }
+    ]
+    extraction_service = AmwayEntityExtractionService()
+    extraction = extraction_service.extract_from_fetch_results(fetch_results)
+    calibration = AmwayEntityCalibrationService(
+        extraction_service=extraction_service
+    ).calibrate(
+        fetch_results=fetch_results,
+        extraction_result=extraction,
+        center_terms=["安利"],
+    )
+
+    health_pillar = next(
+        pillar
+        for pillar in calibration["strategy_storyline"]["pillars"]
+        if pillar["key"] == "have_health"
+    )
+
+    assert calibration["sample_scope"]["valid_answer_count"] == 2
+    assert health_pillar["answer_mention_count"] == 2
+
+
+def test_four_have_pillar_fallback_counts_unique_node_answer_refs():
+    fetch_results = [
+        {
+            "question_id": "q_relationship_story",
+            "question_text": "安利如何帮助参与者建立可靠的人际连接？",
+            "opportunity_point": "关系支持",
+            "probe_type": "品牌关联探针",
+            "platform_results": [
+                {
+                    "platform": "Kimi",
+                    "success": True,
+                    "answer": {"content": "安利活动帮助参与者维护良好关系。"},
+                },
+                {
+                    "platform": "豆包",
+                    "success": True,
+                    "answer": {"content": "安利可以帮助参与者建立良好关系。"},
+                },
+            ],
+        }
+    ]
+    extraction_service = AmwayEntityExtractionService()
+    extraction = extraction_service.extract_from_fetch_results(fetch_results)
+    calibration = AmwayEntityCalibrationService(
+        extraction_service=extraction_service
+    ).calibrate(
+        fetch_results=fetch_results,
+        extraction_result=extraction,
+        center_terms=["安利"],
+    )
+
+    relationship_node = next(
+        node
+        for node in calibration["association_circle_projection"]["nodes"]
+        if node["term"] == "良好关系"
+    )
+    companionship_pillar = next(
+        pillar
+        for pillar in calibration["strategy_storyline"]["pillars"]
+        if pillar["key"] == "have_companionship"
+    )
+
+    assert calibration["sample_scope"]["valid_answer_count"] == 2
+    assert len(relationship_node["answer_refs"]) == 2
+    assert companionship_pillar["answer_mention_count"] == 2
+
+
+def test_four_have_pillar_unions_strategy_and_node_answer_refs():
+    pillar = _build_four_have_pillar(
+        rule=FOUR_HAVE_STORYLINE_RULES[0],
+        nodes=[
+            {
+                "term": "营养",
+                "is_risk_term": False,
+                "business_tag": "",
+                "answer_refs": ["answer_node_only"],
+                "answer_count": 1,
+                "platform_distribution": {"豆包": 1},
+                "evidence_samples": [],
+            }
+        ],
+        strategy_validation=[
+            {
+                "strategy_term": "有健康",
+                "answer_refs": ["answer_strategy_only"],
+                "answer_mention_count": 1,
+                "platform_distribution": {"Kimi": 1},
+                "evidence_refs": [],
+            }
+        ],
+        risk_map={"competition_nodes": [], "risk_nodes": []},
+        source_appendix=[],
+    )
+
+    assert pillar["answer_mention_count"] == 2
+
+
+def test_four_have_pillar_preserves_known_answer_lower_bound_semantics():
+    pillar = _build_four_have_pillar(
+        rule=FOUR_HAVE_STORYLINE_RULES[0],
+        nodes=[
+            {
+                "term": "营养",
+                "is_risk_term": False,
+                "business_tag": "",
+                "answer_refs": ["answer_1", "answer_2"],
+                "answer_count": 5,
+                "answer_count_is_exact": False,
+                "count_semantics": "known_answer_refs_lower_bound",
+                "platform_distribution": {"豆包": 5},
+                "evidence_samples": [],
+            }
+        ],
+        strategy_validation=[],
+        risk_map={"competition_nodes": [], "risk_nodes": []},
+        source_appendix=[],
+    )
+
+    assert pillar["answer_mention_count"] == 5
+    assert pillar["answer_count_is_exact"] is False
+    assert pillar["count_semantics"] == "known_answer_refs_lower_bound"
+
+
+def test_four_have_pillar_uses_legacy_semantics_when_any_input_is_legacy():
+    pillar = _build_four_have_pillar(
+        rule=FOUR_HAVE_STORYLINE_RULES[0],
+        nodes=[
+            {
+                "term": "营养",
+                "is_risk_term": False,
+                "business_tag": "",
+                "answer_refs": ["answer_1", "answer_2"],
+                "answer_count": 2,
+                "answer_count_is_exact": True,
+                "count_semantics": "distinct_answer_refs",
+                "platform_distribution": {"豆包": 2},
+                "evidence_samples": [],
+            }
+        ],
+        strategy_validation=[
+            {
+                "strategy_term": "有健康",
+                "answer_mention_count": 3,
+                "answer_count_is_exact": False,
+                "count_semantics": "legacy_summed_mentions",
+                "platform_distribution": {"Kimi": 3},
+                "evidence_refs": [],
+            }
+        ],
+        risk_map={"competition_nodes": [], "risk_nodes": []},
+        source_appendix=[],
+    )
+
+    assert pillar["answer_mention_count"] == 5
+    assert pillar["answer_count_is_exact"] is False
+    assert pillar["count_semantics"] == "legacy_summed_mentions"
 
 
 def test_calibration_drops_legacy_related_term_answer_signal():
@@ -779,13 +1046,13 @@ def test_regulation_context_is_risk_relation_not_stable_asset():
     regulation_node = next(
         node
         for node in calibration["association_circle_projection"]["nodes"]
-        if node["term"] == "监管信息"
+        if node["term"] == "监管合规质疑"
     )
 
     assert regulation_node["is_risk_term"] is True
     assert regulation_node["business_tag"] == "风险认知"
     assert regulation_node["orbit"] == "risk_shadow"
-    assert "监管信息" in {
+    assert "监管合规质疑" in {
         node["term"] for node in calibration["risk_map"]["risk_nodes"]
     }
 
@@ -1056,7 +1323,7 @@ def test_review_regression_negative_context_does_not_become_positive_validation(
         center_terms=["安利"],
     )
     nodes = calibration["association_circle_projection"]["nodes"]
-    regulation_node = next(node for node in nodes if node["term"] == "监管信息")
+    regulation_node = next(node for node in nodes if node["term"] == "监管合规质疑")
     relationship_row = next(
         row
         for row in calibration["strategy_validation"]
@@ -1082,7 +1349,7 @@ def test_review_regression_negative_context_does_not_become_positive_validation(
     assert regulation_node["is_risk_term"] is True
     assert regulation_node["business_tag"] == "风险认知"
     assert regulation_node["orbit"] == "risk_shadow"
-    assert "监管信息" not in strong_terms
+    assert "监管合规质疑" not in strong_terms
     assert relationship_row["status"] != "validated"
     assert relationship_row["validation_label"] == "部分验证，伴随质疑"
     assert financial_row["status"] != "validated"
@@ -1090,7 +1357,7 @@ def test_review_regression_negative_context_does_not_become_positive_validation(
     assert financial_row["stance_summary"]["skeptical"] >= 2
     assert len(relationship_platforms) >= 3
     assert calibration["risk_map"]["risk_count"] >= 1
-    assert "监管信息" in {
+    assert "监管合规质疑" in {
         node["term"] for node in calibration["risk_map"]["risk_nodes"]
     }
 
@@ -1432,26 +1699,42 @@ def test_a5_consumes_calibrated_report_input_without_reextracting_nodes():
     assert re.search(forbidden_pattern, narrative_text) is None
 
 
+async def _run_amway_nodes_pipeline(state: dict) -> dict:
+    """3b-1.2 之后，原 _build_amway_entity_pipeline_update 的职责由
+    amway_extract → amway_projection 两个独立节点承担；此处串联二者。"""
+    extract_update = dict((await amway_extract_node(state)).update)
+    projection_state = {
+        **state,
+        "entity_extraction_result": extract_update.get("entity_extraction_result"),
+    }
+    projection_update = dict((await amway_projection_node(projection_state)).update)
+    return {**extract_update, **projection_update}
+
+
 @pytest.mark.asyncio
 async def test_a4_entity_pipeline_skips_non_association_context():
-    update = await _build_amway_entity_pipeline_update(
-        {"analysis_mode": "panorama"},
-        session_id="headless-association-test",
-        fetch_results=amway_association_fetch_results(),
+    update = await _run_amway_nodes_pipeline(
+        {
+            "session_id": "headless-association-test",
+            "analysis_mode": "panorama",
+            "fetch_results": amway_association_fetch_results(),
+        }
     )
 
-    assert update == {}
+    assert update["entity_extraction_result"] is None
+    assert update["entity_calibration_result"] is None
+    assert update["next_required_action"] is None
 
 
 @pytest.mark.asyncio
 async def test_a4_entity_pipeline_outputs_a5_ready_report_input():
-    update = await _build_amway_entity_pipeline_update(
+    update = await _run_amway_nodes_pipeline(
         {
+            "session_id": "headless-association-test",
             "analysis_mode": "brand_association_circle",
             "input_scope": {"active_center_term": "安利"},
-        },
-        session_id="headless-association-test",
-        fetch_results=amway_association_fetch_results(),
+            "fetch_results": amway_association_fetch_results(),
+        }
     )
 
     assert update["entity_extraction_result"]["signals"]
@@ -1475,19 +1758,19 @@ async def test_a4_entity_pipeline_persists_extraction_and_calibration_events(
         persisted.append({"state": state, **kwargs})
 
     monkeypatch.setattr(
-        nodes_a4_module,
+        nodes_amway_module,
         "_persist_a4_stage_result",
         fake_persist_stage_result,
     )
 
-    await nodes_a4_module._build_amway_entity_pipeline_update(
+    await _run_amway_nodes_pipeline(
         {
+            "session_id": "headless-association-test",
             "analysis_mode": "brand_association_circle",
             "input_scope": {"active_center_term": "安利"},
-        },
-        session_id="headless-association-test",
-        fetch_results=amway_association_fetch_results(),
-        task_id="task-for-stage-cache",
+            "fetch_results": amway_association_fetch_results(),
+            "task_id": "task-for-stage-cache",
+        }
     )
 
     extraction_events = [
@@ -1513,14 +1796,14 @@ async def test_a4_entity_pipeline_keeps_realtime_extraction_observability():
         record["answer_id"] for record in realtime["answer_signals"]
     ]
 
-    update = await _build_amway_entity_pipeline_update(
+    update = await _run_amway_nodes_pipeline(
         {
+            "session_id": "headless-association-test",
             "analysis_mode": "brand_association_circle",
             "input_scope": {"active_center_term": "安利"},
-        },
-        session_id="headless-association-test",
-        fetch_results=fetch_results,
-        realtime_extraction_result=realtime,
+            "fetch_results": fetch_results,
+            "realtime_entity_extraction_result": realtime,
+        }
     )
 
     extraction = update["entity_extraction_result"]
@@ -1539,7 +1822,7 @@ async def test_a4_entity_pipeline_does_not_replay_batch_extraction_when_realtime
         persisted.append({"state": state, **kwargs})
 
     monkeypatch.setattr(
-        nodes_a4_module,
+        nodes_amway_module,
         "_persist_a4_stage_result",
         fake_persist_stage_result,
     )
@@ -1553,15 +1836,15 @@ async def test_a4_entity_pipeline_does_not_replay_batch_extraction_when_realtime
         record["answer_id"] for record in realtime["answer_signals"]
     ]
 
-    await _build_amway_entity_pipeline_update(
+    await _run_amway_nodes_pipeline(
         {
+            "session_id": "headless-association-test",
             "analysis_mode": "brand_association_circle",
             "input_scope": {"active_center_term": "安利"},
-        },
-        session_id="headless-association-test",
-        fetch_results=fetch_results,
-        realtime_extraction_result=realtime,
-        task_id="task-realtime-no-replay",
+            "fetch_results": fetch_results,
+            "realtime_entity_extraction_result": realtime,
+            "task_id": "task-realtime-no-replay",
+        }
     )
 
     extraction_events = [

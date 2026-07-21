@@ -34,7 +34,7 @@ function AmwayChinaAccessGate() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
+      <div className="amway-console min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
         <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8">
           正在校验安利中国专属权限...
         </div>
@@ -44,7 +44,7 @@ function AmwayChinaAccessGate() {
 
   if (error || !entitlement?.enabled || !entitlement.entity_id) {
     return (
-      <div className="min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
+      <div className="amway-console min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
         <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8">
           <div className="text-xs font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
             AMWAY CHINA

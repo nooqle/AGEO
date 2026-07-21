@@ -58,6 +58,7 @@ export interface AmwayQuestionHistorySet {
   source_type: 'question_set' | 'run_input';
   title: string;
   source: string;
+  version?: number | null;
   status: string;
   question_count: number;
   questions: Array<Record<string, unknown>>;

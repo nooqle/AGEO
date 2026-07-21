@@ -18,6 +18,7 @@ from app.api.deps import get_current_user, get_db
 from app.core.utils import repair_mojibake
 from app.models.brand_intelligence_run import BrandIntelligenceRun
 from app.models.entity import Entity
+from app.models.flow_topology import FlowTopologyRecord
 from app.models.monitoring_plan import MonitoringQuestionSet, QuestionSetStatus
 from app.services.access_scope_service import AccessScopeService
 from app.services.amway_circle_tracking_service import AmwayCircleTrackingService
@@ -51,6 +52,14 @@ class SaveQuestionSetRequest(BaseModel):
     center_term: str | None = None
     center_terms: list[str] | None = None
     questions: list[dict[str, Any] | str] = Field(default_factory=list)
+
+
+class UpdateQuestionSetRequest(BaseModel):
+    title: str | None = None
+    source_file_name: str | None = None
+    center_term: str | None = None
+    center_terms: list[str] | None = None
+    questions: list[dict[str, Any] | str] | None = None
 
 
 class CirclePeriodViewResponse(BaseModel):
@@ -386,7 +395,12 @@ async def list_amway_question_sets(
         (
             await db.execute(
                 select(MonitoringQuestionSet)
-                .where(MonitoringQuestionSet.entity_id == entity.id)
+                .where(
+                    MonitoringQuestionSet.entity_id == entity.id,
+                    MonitoringQuestionSet.source == "amwaychina_upload",
+                    MonitoringQuestionSet.status
+                    != QuestionSetStatus.ARCHIVED.value,
+                )
                 .order_by(desc(MonitoringQuestionSet.created_at))
                 .limit(limit)
             )
@@ -438,6 +452,7 @@ async def list_amway_question_sets(
                 "source": str(
                     input_scope.get("uploaded_question_source") or "run_input"
                 ),
+                "version": input_scope.get("question_set_version"),
                 "status": run.status,
                 "question_count": len(normalized),
                 "questions": normalized,
@@ -486,6 +501,95 @@ async def save_amway_question_set(
     return {"question_set": _question_set_row_to_record(row)}
 
 
+async def _scoped_question_set(
+    db: AsyncSession,
+    *,
+    entity_id: UUID,
+    question_set_id: str,
+) -> MonitoringQuestionSet:
+    question_set_uuid = _parse_uuid(question_set_id, "question_set_id")
+    row = (
+        await db.execute(
+            select(MonitoringQuestionSet).where(
+                MonitoringQuestionSet.id == question_set_uuid,
+                MonitoringQuestionSet.entity_id == entity_id,
+                MonitoringQuestionSet.source == "amwaychina_upload",
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None or row.status == QuestionSetStatus.ARCHIVED.value:
+        raise HTTPException(status_code=404, detail="题库不存在")
+    return row
+
+
+@router.patch("/entities/{entity_id}/question-sets/{question_set_id}")
+async def update_amway_question_set(
+    entity_id: str,
+    question_set_id: str,
+    body: UpdateQuestionSetRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
+    row = await _scoped_question_set(
+        db,
+        entity_id=entity.id,
+        question_set_id=question_set_id,
+    )
+    if body.questions is not None:
+        normalized = MonitoringPlanService.normalize_questions(body.questions)
+        if not normalized:
+            raise HTTPException(status_code=400, detail="问题列表不能为空")
+        row.questions = normalized
+        row.question_count = len(normalized)
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="题库名称不能为空")
+        row.title = title
+    metadata = dict(row.extra_metadata or {})
+    if body.source_file_name is not None:
+        metadata["source_file_name"] = body.source_file_name
+    if body.center_term is not None:
+        metadata["center_term"] = body.center_term
+    if body.center_terms is not None:
+        metadata["center_terms"] = body.center_terms
+    metadata["last_edited_by_user_id"] = str(current_user.id)
+    row.extra_metadata = metadata
+    row.version = max(int(row.version or 1), 1) + 1
+    row.status = QuestionSetStatus.CONFIRMED.value
+    row.confirmed_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(row)
+    return {"question_set": _question_set_row_to_record(row)}
+
+
+@router.delete("/entities/{entity_id}/question-sets/{question_set_id}")
+async def delete_amway_question_set(
+    entity_id: str,
+    question_set_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
+    row = await _scoped_question_set(
+        db,
+        entity_id=entity.id,
+        question_set_id=question_set_id,
+    )
+    metadata = dict(row.extra_metadata or {})
+    metadata.update(
+        {
+            "archived_by_user_id": str(current_user.id),
+            "archived_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    row.extra_metadata = metadata
+    row.status = QuestionSetStatus.ARCHIVED.value
+    await db.commit()
+    return {"question_set_id": str(row.id), "deleted": True}
+
+
 def _question_set_row_to_record(row: MonitoringQuestionSet) -> dict[str, Any]:
     metadata = row.extra_metadata if isinstance(row.extra_metadata, dict) else {}
     questions = MonitoringPlanService.normalize_questions(row.questions or [])
@@ -494,6 +598,7 @@ def _question_set_row_to_record(row: MonitoringQuestionSet) -> dict[str, Any]:
         "source_type": "question_set",
         "title": row.title,
         "source": row.source,
+        "version": max(int(row.version or 1), 1),
         "status": row.status,
         "question_count": row.question_count or len(questions),
         "questions": questions,
@@ -518,3 +623,86 @@ def _question_signature(questions: list[Any]) -> str:
 
 def _iso(value: Any) -> str | None:
     return value.isoformat() if value else None
+
+
+# ---------------------------------------------------------------------------
+# Flow topology persistence (blueprint task 3b-1.4)
+# ---------------------------------------------------------------------------
+
+_EMPTY_TOPOLOGY: dict[str, Any] = {
+    "version": 1,
+    "customNodes": [],
+    "customEdges": [],
+    "removedEdgeIds": [],
+}
+
+
+class FlowTopologyPayload(BaseModel):
+    topology: dict[str, Any] = Field(default_factory=dict)
+
+
+def _normalize_topology(raw: Any) -> dict[str, Any]:
+    """Validate/normalize via the contract-layer FlowTopology parser and emit
+    the canonical wire shape. Unknown/garbage entries are dropped."""
+    from app.workflow.node_contracts import FlowTopology
+
+    parsed = FlowTopology.from_dict(raw if isinstance(raw, dict) else None)
+    return {
+        "version": parsed.version,
+        "customNodes": [
+            {"id": n.id, "type": n.type, "position": n.position, "config": n.config}
+            for n in parsed.custom_nodes
+        ],
+        "customEdges": [
+            {"id": e.id, "source": e.source, "target": e.target}
+            for e in parsed.custom_edges
+        ],
+        "removedEdgeIds": list(parsed.removed_edge_ids),
+    }
+
+
+@router.get("/entities/{entity_id}/flow-topology")
+async def get_flow_topology(
+    entity_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return {"topology": dict(_EMPTY_TOPOLOGY), "updated_at": None}
+    return {
+        "topology": _normalize_topology(row.topology),
+        "updated_at": _iso(row.updated_at),
+    }
+
+
+@router.put("/entities/{entity_id}/flow-topology")
+async def put_flow_topology(
+    entity_id: str,
+    body: FlowTopologyPayload,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
+    normalized = _normalize_topology(body.topology)
+    if len(normalized["customNodes"]) > 20:
+        raise HTTPException(status_code=400, detail="自定义节点数量超出上限（20）")
+    row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = FlowTopologyRecord(entity_id=entity.id, topology=normalized)
+        db.add(row)
+    else:
+        row.topology = normalized
+        row.version = int(row.version or 1) + 1
+    await db.commit()
+    await db.refresh(row)
+    return {"topology": normalized, "updated_at": _iso(row.updated_at)}

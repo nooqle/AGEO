@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
-import { Database, FileText, RefreshCw, Upload } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { Database, FileText, RefreshCw, Settings2, Upload, X } from 'lucide-react';
+import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import type { DashboardHomeData } from '@/types/dashboard';
 import type { Entity } from '@/types/entity';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
@@ -8,7 +10,10 @@ import type { AnalysisTask } from '@/types/task';
 import type {
   AmwayCirclePeriodType,
   AmwayCirclePeriodViewResponse,
+  AmwayQuestionHistoryResponse,
+  AmwayQuestionHistorySet,
 } from '@/types/amwayChina';
+import { api } from '@/services/api';
 import type {
   OntologyAssociationCircleEvidence,
   OntologyAssociationCircleEvidenceFinding,
@@ -26,7 +31,6 @@ import {
   AssociationProjectionLoadingPanel,
   AssociationReportPanel,
   CommercialOrbitView,
-  InfoPill,
   buildAssociationMapGroups,
   buildAssociationProjection,
   normalizeCenterTerms,
@@ -75,6 +79,10 @@ export interface UploadedAssociationQuestion {
 export interface AssociationCircleStartPayload {
   uploadedQuestions?: UploadedAssociationQuestion[];
   uploadedQuestionSource?: string | null;
+  questionSetId?: string | null;
+  questionSetVersion?: number | null;
+  persistQuestionSet?: boolean;
+  fetchMode?: 'fast' | 'full';
 }
 
 interface AmwayAssociationCircleDashboardProps {
@@ -100,13 +108,15 @@ interface AmwayAssociationCircleDashboardProps {
   isPeriodReportGenerating?: boolean;
   periodError?: string | null;
   periodReportError?: string | null;
+  openRunSettingsSignal?: number;
+  openReportSignal?: number;
   onSelectEntity: (entityId: string) => void;
   onSelectCenterTerm: (term: string) => void;
   onSelectPeriodType?: (periodType: AmwayCirclePeriodType) => void;
   onChangePeriodCustomStart?: (value: string) => void;
   onChangePeriodCustomEnd?: (value: string) => void;
   onGeneratePeriodReport: () => Promise<boolean>;
-  onStart: (payload?: AssociationCircleStartPayload) => void;
+  onStart: (payload?: AssociationCircleStartPayload) => void | Promise<void>;
   onOpenLatestReport: () => void;
 }
 
@@ -132,6 +142,8 @@ export function AmwayAssociationCircleDashboard({
   isPeriodReportGenerating,
   periodError,
   periodReportError,
+  openRunSettingsSignal = 0,
+  openReportSignal = 0,
   onSelectCenterTerm,
   onSelectPeriodType,
   onChangePeriodCustomStart,
@@ -146,6 +158,17 @@ export function AmwayAssociationCircleDashboard({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isReadingUpload, setIsReadingUpload] = useState(false);
   const [isReportOpen, setIsReportOpen] = useState(false);
+  const [questionHistory, setQuestionHistory] = useState<AmwayQuestionHistoryResponse | null>(null);
+  const [questionHistoryRefreshKey, setQuestionHistoryRefreshKey] = useState(0);
+  const [selectedQuestionSetId, setSelectedQuestionSetId] = useState<string | null>(null);
+  const [fetchMode, setFetchMode] = useState<'fast' | 'full'>('full');
+  const [runSettingsOpen, setRunSettingsOpen] = useState(false);
+  const [prevRunSettingsSignal, setPrevRunSettingsSignal] = useState(0);
+  if (openRunSettingsSignal > 0 && openRunSettingsSignal !== prevRunSettingsSignal) {
+    setPrevRunSettingsSignal(openRunSettingsSignal);
+    setRunSettingsOpen(true);
+  }
+  const runSettingsTriggerRef = useRef<HTMLButtonElement>(null);
   const baseProjection = useMemo(() => buildAssociationProjection(world, home), [home, world]);
   const centerTerms = normalizeCenterTerms(centerOptions.length ? centerOptions : baseProjection.center_terms);
   const activeCenterTerm = selectedCenterTerm && centerTerms.includes(selectedCenterTerm)
@@ -191,37 +214,93 @@ export function AmwayAssociationCircleDashboard({
   const selectedNode =
     nodes.find((node) => node.node_id === selectedNodeId) ||
     null;
+  const questionSets = questionHistory?.question_sets || [];
+  const selectedQuestionSet = questionSets.find((item) => item.id === selectedQuestionSetId) || null;
+  const selectedPeriodHasNoData = Boolean(
+    periodView
+      && (Number(periodView.current_period?.run_count || 0) <= 0
+        || !(periodView.projection?.nodes?.length)),
+  );
   const sampleScope = projection.sample_scope || {};
   const evidenceSamples = projection.evidence_samples || [];
   const evidenceFindings = projection.evidence_findings || [];
   const sourceAppendix = projection.source_appendix || [];
   const answerCount = sampleAnswerCount(sampleScope);
-  const questionCount = numericSampleValue(sampleScope.question_count)
-    || numericSampleValue(sampleScope.total_question_count);
   const targetPlatformCount = numericSampleValue(sampleScope.requested_platform_count)
     || targetPlatforms.length
     || samplePlatformCountFromScope(sampleScope);
   const hasPeriodReport = Boolean(
     periodView?.report_id && hasReportContent(periodView.projection),
   );
-  const isPeriodReportDeliverable = hasPeriodReport
-    && reportQualityPassed(periodView?.projection);
   const headerStatusLabel = isRunSubmitting || isRunActive
     ? nodes.length > 0 ? '实时抽取中' : '正在抓取'
     : status === 'loading'
       ? '正在读取报告'
     : status === 'ready'
       ? '圈层已生成'
-      : '等待题目与抓取';
-  const handleStart = () => {
+      : '待运行';
+  useEffect(() => {
+    if (!selectedEntityId) {
+      setQuestionHistory(null);
+      setSelectedQuestionSetId(null);
+      return undefined;
+    }
+    let cancelled = false;
+    void api.listAmwayQuestionHistory(selectedEntityId, 80)
+      .then((nextHistory) => {
+        if (cancelled) return;
+        setQuestionHistory(nextHistory);
+        setSelectedQuestionSetId((current) => (
+          current && nextHistory.question_sets.some((item) => item.id === current) ? current : null
+        ));
+      })
+      .catch(() => {
+        if (!cancelled) setQuestionHistory(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [questionHistoryRefreshKey, selectedEntityId]);
+  useEffect(() => {
+    const runScope = activeRun?.input_scope;
+    if (!runScope) return;
+    const runQuestionSetId = typeof runScope.uploaded_question_set_id === 'string'
+      ? runScope.uploaded_question_set_id
+      : null;
+    if (isRunActive && runQuestionSetId && questionHistory?.question_sets.some((item) => item.id === runQuestionSetId)) {
+      setSelectedQuestionSetId(runQuestionSetId);
+    }
+  }, [activeRun?.id, activeRun?.input_scope, isRunActive, questionHistory]);
+  useEffect(() => {
+    setFetchMode('full');
+  }, [selectedEntityId]);
+  const handleStart = async () => {
     setIsReportOpen(false);
-    onStart({
-      uploadedQuestions: uploadedQuestions.map((question) => ({
+    const selectedQuestions = uploadedQuestions.length
+      ? uploadedQuestions
+      : selectedQuestionSet
+        ? uploadedQuestionsFromHistorySet(selectedQuestionSet)
+        : [];
+    await onStart({
+      uploadedQuestions: selectedQuestions.map((question) => ({
         ...question,
         center_terms: [activeCenterTerm],
       })),
-      uploadedQuestionSource,
+      uploadedQuestionSource: uploadedQuestionSource || selectedQuestionSet?.title || null,
+      questionSetId: uploadedQuestions.length || selectedQuestionSet?.source_type !== 'question_set'
+        ? null
+        : selectedQuestionSet.id,
+      questionSetVersion: uploadedQuestions.length || selectedQuestionSet?.source_type !== 'question_set'
+        ? null
+        : selectedQuestionSet.version || 1,
+      persistQuestionSet: Boolean(uploadedQuestions.length || selectedQuestionSet?.source_type === 'run_input'),
+      fetchMode,
     });
+    setQuestionHistoryRefreshKey((current) => current + 1);
+  };
+  const handleRunFromSettings = async () => {
+    await handleStart();
+    setRunSettingsOpen(false);
   };
   const openReport = () => {
     setIsReportOpen(true);
@@ -234,6 +313,13 @@ export function AmwayAssociationCircleDashboard({
     }
     if (await onGeneratePeriodReport()) openReport();
   };
+  const openReportSignalRef = useRef(0);
+  useEffect(() => {
+    if (openReportSignal > 0 && openReportSignal !== openReportSignalRef.current) {
+      openReportSignalRef.current = openReportSignal;
+      void handleReportAction();
+    }
+  });
   const handleQuestionFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -254,6 +340,7 @@ export function AmwayAssociationCircleDashboard({
       setIsReportOpen(false);
       setUploadedQuestions(parsed);
       setUploadedQuestionSource(file.name);
+      setSelectedQuestionSetId(null);
     } catch (error) {
       setUploadError(error instanceof Error ? error.message : '问题列表读取失败，请检查文件格式后重新上传。');
       setUploadedQuestions([]);
@@ -264,7 +351,23 @@ export function AmwayAssociationCircleDashboard({
   };
 
   const isModeling = Boolean(isRunSubmitting || isRunActive);
-  const runButtonLabel = isModeling ? '运行中' : status === 'loading' ? '读取中' : status === 'ready' ? '重新生成图谱' : '生成图谱';
+  const runningScope = activeRun?.input_scope;
+  const runningQuestionCount = Number(runningScope?.uploaded_question_count || 0);
+  const configuredQuestionSetLabel = isRunActive
+    ? runningQuestionCount > 0
+      ? `${String(runningScope?.uploaded_question_source || '本轮问题集')}（${runningQuestionCount} 题）`
+      : '系统默认问题集'
+    : uploadedQuestions.length
+      ? `${uploadedQuestionSource || '上传问题'}（${uploadedQuestions.length} 题）`
+      : selectedQuestionSet
+        ? `${selectedQuestionSet.title}（${selectedQuestionSet.question_count} 题）`
+        : '系统默认问题集';
+  const configuredFetchMode = isRunActive
+    ? (runningScope?.fetch_mode === 'fast' ? 'fast' : 'full')
+    : fetchMode;
+  const configuredFetchModeLabel = configuredFetchMode === 'full' ? '浏览器采集' : 'API 采集';
+  const runConfigurationSummary = `${configuredQuestionSetLabel} · ${configuredFetchModeLabel} · ${targetPlatformCount || 4} 个平台`;
+  const runButtonLabel = isModeling ? '运行中' : status === 'loading' ? '读取中' : status === 'ready' ? '重新运行' : '开始运行';
   const assistiveStatusMessage = periodError
     || periodReportError
     || uploadError
@@ -279,26 +382,18 @@ export function AmwayAssociationCircleDashboard({
   }> = [
     { id: 'map', label: '品牌图谱', icon: RefreshCw },
     { id: 'lexicon', label: '实体词库', icon: Database },
-    { id: 'questions', label: '历史题库', icon: FileText },
+    { id: 'questions', label: '问题集管理', icon: FileText },
   ];
 
   return (
-    <div className="min-h-screen bg-[var(--bg-secondary)] text-[var(--text-primary)]">
+    <div className="amway-console min-h-screen bg-[var(--bg-secondary)] text-[var(--text-primary)]">
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {assistiveStatusMessage}
       </p>
-      <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/96">
-        <div className="mx-auto flex h-16 max-w-[1920px] items-center justify-between gap-4 px-5 lg:px-7 2xl:px-10">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--brand-primary)] text-sm font-semibold text-[var(--brand-contrast)]">
-              S
-            </div>
-            <div className="min-w-0">
-              <div className="text-sm font-semibold leading-5">Specta AI</div>
-              <div className="truncate text-xs text-[var(--text-secondary)]">安利品牌圈层</div>
-            </div>
-          </div>
-          <nav className="hidden items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-1 lg:flex">
+
+      <main className="mx-auto max-w-[1920px] min-w-0 px-5 py-4 lg:px-7 2xl:px-10">
+        <div className="mb-4 flex overflow-x-auto">
+          <div className="inline-flex items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-1">
             {workspaceItems.map((item) => {
               const Icon = item.icon;
               const active = workspace === item.id;
@@ -309,7 +404,7 @@ export function AmwayAssociationCircleDashboard({
                   onClick={() => setWorkspace(item.id)}
                   aria-current={active ? 'page' : undefined}
                   aria-pressed={active}
-                  className="inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm transition"
+                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm transition"
                   style={{
                     background: active ? 'var(--bg-primary)' : 'transparent',
                     color: active ? 'var(--brand-primary)' : 'var(--text-secondary)',
@@ -321,95 +416,84 @@ export function AmwayAssociationCircleDashboard({
                 </button>
               );
             })}
-          </nav>
-          <div className="flex items-center gap-2">
-            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-secondary)]">
-              <span className="font-medium text-[var(--brand-primary)]">{headerStatusLabel}</span>
-              {status === 'ready' ? (
-                <span className="ml-2 text-[var(--text-tertiary)]">
-                  {answerCount || '-'} 条回答 / {nodes.length} 个节点
-                </span>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleReportAction()}
-              disabled={isModeling || Boolean(isPeriodReportGenerating) || !nodes.length || periodSelectionUnavailable}
-              className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FileText size={15} />
-              {isPeriodReportGenerating
-                ? '生成中'
-                : hasPeriodReport
-                  ? isPeriodReportDeliverable ? '查看报告' : '查看待校验报告'
-                  : '生成报告'}
-            </button>
           </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-[1920px] min-w-0 px-5 py-4 lg:px-7 2xl:px-10">
-        <div className="mb-4 flex gap-2 overflow-x-auto lg:hidden">
-          {workspaceItems.map((item) => {
-            const active = workspace === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setWorkspace(item.id)}
-                aria-current={active ? 'page' : undefined}
-                aria-pressed={active}
-                className="h-10 shrink-0 rounded-xl border px-3 text-sm"
-                style={{
-                  borderColor: active ? 'var(--brand-primary)' : 'var(--border-subtle)',
-                  background: active ? 'var(--brand-bg)' : 'var(--bg-primary)',
-                  color: active ? 'var(--brand-primary)' : 'var(--text-secondary)',
-                }}
-              >
-                {item.label}
-              </button>
-            );
-          })}
         </div>
         {workspace === 'lexicon' ? (
           <AmwayEntityLexiconPanel entityId={selectedEntityId} entityName={selectedEntity.name} />
         ) : workspace === 'questions' ? (
-          <AmwayQuestionHistoryPanel entityId={selectedEntityId} entityName={selectedEntity.name} />
+          <AmwayQuestionHistoryPanel
+            entityId={selectedEntityId}
+            entityName={selectedEntity.name}
+            selectedForRunId={selectedQuestionSetId}
+            onSelectForRun={(questionSet) => {
+              setSelectedQuestionSetId(questionSet.id);
+              setUploadedQuestions([]);
+              setUploadedQuestionSource(null);
+              setWorkspace('map');
+            }}
+            onQuestionSetsChanged={() => setQuestionHistoryRefreshKey((current) => current + 1)}
+          />
         ) : (
         <section className="min-w-0 space-y-4">
           {runError ? (
-            <InlineActionError message={runError} actionLabel="重试生成图谱" onAction={handleStart} />
+            <InlineActionError message={runError} actionLabel="重试运行" onAction={handleStart} />
           ) : null}
 
-          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4">
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_400px]">
-              <div className="max-w-5xl">
-                <div className="text-xs font-medium text-[var(--text-tertiary)]">{activeCenterTerm} 专属</div>
-                <h1 className="mt-1 text-2xl font-semibold leading-tight tracking-tight">品牌联想图谱</h1>
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="本轮数据范围">
-                  <InfoPill label="问题" value={String(questionCount || '-')} />
-                  <InfoPill label="计划平台" value={String(targetPlatformCount || '-')} />
-                  <InfoPill label="有效平台" value={String(samplePlatformCountFromScope(sampleScope) || '-')} />
-                  <InfoPill label="回答" value={String(answerCount || '-')} />
-                  <InfoPill label="节点" value={String(nodes.length || '-')} tone="brand" />
+          <section className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-5 py-5 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--brand-primary)]">
+                  <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--brand-primary)]" />
+                  {activeCenterTerm} 专属
                 </div>
-                <PeriodSelector
-                  value={periodType}
-                  customStart={periodCustomStart}
-                  customEnd={periodCustomEnd}
-                  isLoading={Boolean(isPeriodLoading)}
-                  error={periodError}
-                  notice={isRunActive ? '建模运行中显示实时图谱，完成后再按观察周期查看。' : ''}
-                  disabled={Boolean(isRunActive || isPeriodReportGenerating)}
-                  onChange={onSelectPeriodType}
-                  onChangeCustomStart={onChangePeriodCustomStart}
-                  onChangeCustomEnd={onChangePeriodCustomEnd}
-                />
+                <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                  <h1 className="text-2xl font-semibold leading-tight tracking-tight">品牌联想图谱</h1>
+                  <p className="text-sm tabular-nums text-[var(--text-secondary)]" aria-label="本轮数据范围">
+                    {answerCount > 0
+                      ? `${answerCount} 条回答 · ${samplePlatformCountFromScope(sampleScope)} 个平台 · ${nodes.length} 个节点`
+                      : '尚未运行采集，从图谱中心开始'}
+                  </p>
+                </div>
               </div>
 
-              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3">
-                <div className="text-xs font-medium text-[var(--text-tertiary)]">分析对象</div>
-                <div className="mt-3 grid grid-cols-3 gap-2">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="min-w-0 text-xs leading-5 text-[var(--text-secondary)]">
+                  <span className="block text-[var(--text-tertiary)]">{isModeling ? '本轮配置' : '下次运行'}</span>
+                  <span className="font-medium text-[var(--text-primary)]">{runConfigurationSummary}</span>
+                </div>
+                {isModeling ? (
+                  <div className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 text-sm font-medium text-[var(--text-secondary)]">
+                    <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
+                    正在运行
+                  </div>
+                ) : (
+                  <button
+                    ref={runSettingsTriggerRef}
+                    type="button"
+                    onClick={() => setRunSettingsOpen(true)}
+                    disabled={status === 'loading'}
+                    className="amway-cta-glow inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:border-[var(--border-subtle)] disabled:bg-[var(--bg-secondary)] disabled:text-[var(--text-tertiary)] disabled:shadow-none"
+                  >
+                    <Settings2 size={15} />
+                    {status === 'ready' ? '设置并重新运行' : '设置并运行'}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-4 border-t border-[var(--border-subtle)] pt-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-tertiary)]">
+                  分析对象
+                  <span
+                    className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-[var(--border-subtle)] text-[10px] leading-none"
+                    title="其他对象将在独立投影生成后开放"
+                    aria-label="其他对象将在独立投影生成后开放"
+                  >
+                    ?
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
                   {centerTerms.map((term) => (
                     <button
                       key={term}
@@ -421,51 +505,177 @@ export function AmwayAssociationCircleDashboard({
                       disabled={term !== activeCenterTerm}
                       aria-pressed={term === activeCenterTerm}
                       title={term === activeCenterTerm ? '当前分析对象' : '尚未生成该对象的独立投影'}
-                      className="flex min-w-0 items-center justify-between gap-1 rounded-xl border px-2.5 py-2 text-left text-sm transition"
+                      className="inline-flex h-9 min-w-0 items-center gap-2 rounded-lg border px-3 text-left text-sm transition"
                       style={{
                         borderColor: term === activeCenterTerm ? 'var(--brand-primary)' : 'var(--border-subtle)',
-                        background: term === activeCenterTerm ? 'var(--brand-bg)' : 'var(--bg-primary)',
-                        color: term === activeCenterTerm ? 'var(--brand-primary)' : 'var(--text-secondary)',
+                        background: 'var(--bg-primary)',
+                        color: term === activeCenterTerm ? 'var(--text-primary)' : 'var(--text-tertiary)',
                       }}
                     >
                       <span className="truncate font-semibold">{term}</span>
-                      <span className="shrink-0 text-[11px]">{term === activeCenterTerm ? '当前' : '待生成'}</span>
+                      <span className="shrink-0 text-[11px] text-[var(--text-tertiary)]">{term === activeCenterTerm ? '当前' : '待生成'}</span>
                     </button>
                   ))}
                 </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-[var(--brand-border)] bg-[var(--bg-primary)] px-3 text-sm font-medium text-[var(--brand-primary)] hover:bg-[var(--brand-bg)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--brand-primary)]">
-                    <Upload size={15} />
-                    {isReadingUpload ? '正在读取' : '上传问题'}
-                    <input
-                      type="file"
-                      accept=".csv,.xlsx,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                      className="sr-only"
-                      disabled={isReadingUpload}
-                      onChange={handleQuestionFileChange}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleStart}
-                    disabled={isRunSubmitting || status === 'loading'}
-                    className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:opacity-60"
-                  >
-                    <RefreshCw size={15} />
-                    {runButtonLabel}
-                  </button>
-                </div>
-                {uploadError ? (
-                  <InlineActionError message={uploadError} compact />
-                ) : null}
-                {uploadedQuestionSource ? (
-                  <p className="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
-                    已读取：{uploadedQuestionSource}
-                  </p>
-                ) : null}
               </div>
+              <PeriodSelector
+                value={periodType}
+                customStart={periodCustomStart}
+                customEnd={periodCustomEnd}
+                isLoading={Boolean(isPeriodLoading)}
+                error={periodError}
+                notice={isRunActive
+                  ? '建模运行中显示实时图谱，完成后再按观察周期查看。'
+                  : selectedPeriodHasNoData
+                    ? '该周期暂无采集数据。可运行图谱采集，或选择其他观察周期。'
+                    : ''}
+                disabled={Boolean(isRunActive || isPeriodReportGenerating)}
+                onChange={onSelectPeriodType}
+                onChangeCustomStart={onChangePeriodCustomStart}
+                onChangeCustomEnd={onChangePeriodCustomEnd}
+              />
             </div>
           </section>
+
+          <Dialog.Root open={runSettingsOpen} onOpenChange={setRunSettingsOpen}>
+            <Dialog.Portal>
+              <Dialog.Overlay className={modalScrimClassName('z-50')} />
+              <Dialog.Content
+                onCloseAutoFocus={(event) => {
+                  event.preventDefault();
+                  runSettingsTriggerRef.current?.focus();
+                }}
+                className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-[680px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-sm"
+              >
+                  <div className="flex items-start justify-between gap-5 border-b border-[var(--border-subtle)] px-6 py-5">
+                    <div>
+                      <Dialog.Title className="text-xl font-semibold text-[var(--text-primary)]">运行设置</Dialog.Title>
+                      <Dialog.Description className="mt-1.5 text-sm leading-6 text-[var(--text-secondary)]">
+                        选择本轮问题与采集方式。确认后会创建不可变运行快照。
+                      </Dialog.Description>
+                    </div>
+                    <Dialog.Close asChild>
+                      <button
+                        type="button"
+                        aria-label="关闭运行设置"
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
+                      >
+                        <X size={16} />
+                      </button>
+                    </Dialog.Close>
+                  </div>
+
+                  <div className="space-y-6 px-6 py-6">
+                    <section>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <label htmlFor="amway-run-question-set" className="text-sm font-semibold text-[var(--text-primary)]">
+                          本轮问题集
+                        </label>
+                        <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--brand-primary)]">
+                          <Upload size={14} />
+                          {isReadingUpload ? '正在读取' : '上传问题文件'}
+                          <input
+                            type="file"
+                            accept=".csv,.xlsx,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            className="sr-only"
+                            disabled={isReadingUpload}
+                            onChange={handleQuestionFileChange}
+                          />
+                        </label>
+                      </div>
+                      <select
+                        id="amway-run-question-set"
+                        value={uploadedQuestions.length ? '__upload__' : selectedQuestionSetId || ''}
+                        onChange={(event) => {
+                          const nextId = event.target.value || null;
+                          setSelectedQuestionSetId(nextId);
+                          setUploadedQuestions([]);
+                          setUploadedQuestionSource(null);
+                          setUploadError(null);
+                        }}
+                        className="mt-3 h-11 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--brand-primary)]"
+                      >
+                        <option value="">系统默认问题集</option>
+                        {uploadedQuestions.length ? (
+                          <option value="__upload__">待保存：{uploadedQuestionSource}（{uploadedQuestions.length} 题）</option>
+                        ) : null}
+                        {questionSets.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.title}（{item.question_count} 题）
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
+                        {uploadedQuestions.length
+                          ? `已读取 ${uploadedQuestionSource || '上传文件'}，共 ${uploadedQuestions.length} 题；运行时保存并绑定版本。`
+                          : selectedQuestionSet
+                            ? `已选择 ${selectedQuestionSet.title}，共 ${selectedQuestionSet.question_count} 题。`
+                            : '未指定题库时，运行阶段生成系统默认问题集。'}
+                      </p>
+                      {uploadError ? <InlineActionError message={uploadError} compact /> : null}
+                    </section>
+
+                    <fieldset>
+                      <legend className="text-sm font-semibold text-[var(--text-primary)]">采集方式</legend>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        {([
+                          { value: 'full', label: '浏览器采集', hint: '默认方式，复现真实用户看到的回答。' },
+                          { value: 'fast', label: 'API 采集', hint: '速度更快，适合快速复测。' },
+                        ] as const).map((option) => {
+                          const selected = fetchMode === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setFetchMode(option.value)}
+                              aria-pressed={selected}
+                              className="flex items-start gap-3 rounded-xl border p-4 text-left transition hover:bg-[var(--bg-secondary)]"
+                              style={{ borderColor: selected ? 'var(--brand-primary)' : 'var(--border-subtle)' }}
+                            >
+                              <span
+                                className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border"
+                                style={{ borderColor: selected ? 'var(--brand-primary)' : 'var(--border-strong)' }}
+                              >
+                                {selected ? <span className="h-2 w-2 rounded-full bg-[var(--brand-primary)]" /> : null}
+                              </span>
+                              <span>
+                                <span className="block text-sm font-semibold text-[var(--text-primary)]">{option.label}</span>
+                                <span className="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">{option.hint}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+
+                    <div className="border-t border-[var(--border-subtle)] pt-4">
+                      <div className="text-xs font-medium text-[var(--text-tertiary)]">本轮配置</div>
+                      <div className="mt-1 text-sm font-semibold text-[var(--text-primary)]">{runConfigurationSummary}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-3 border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-6 py-4">
+                    <Dialog.Close asChild>
+                      <button
+                        type="button"
+                        className="h-10 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                      >
+                        取消
+                      </button>
+                    </Dialog.Close>
+                    <button
+                      type="button"
+                      onClick={() => void handleRunFromSettings()}
+                      disabled={isRunSubmitting || status === 'loading'}
+                      className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <RefreshCw size={15} />
+                      {runButtonLabel}
+                    </button>
+                  </div>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
 
           {status === 'loading' ? (
             <AssociationProjectionLoadingPanel centerTerm={activeCenterTerm} />
@@ -486,10 +696,16 @@ export function AmwayAssociationCircleDashboard({
                 strategyTerms={strategyTerms}
                 prioritySummary={projection.priority_summary || null}
                 onSelectNode={setSelectedNodeId}
+                onStartRun={() => setRunSettingsOpen(true)}
               />
 
               {isReportOpen && status === 'ready' && nodes.length > 0 ? (
                 <section id="strategy-report" className="scroll-mt-20">
+                  <div aria-hidden="true" className="mb-8 flex items-center gap-4">
+                    <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+                    <span className="text-xs font-medium tracking-[0.2em] text-[var(--text-tertiary)]">解读报告</span>
+                    <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+                  </div>
                   <AssociationReportPanel
                     projection={projection}
                     activeCenterTerm={activeCenterTerm}
@@ -518,6 +734,28 @@ export function AmwayAssociationCircleDashboard({
   );
 }
 
+function uploadedQuestionsFromHistorySet(
+  questionSet: AmwayQuestionHistorySet,
+): UploadedAssociationQuestion[] {
+  return questionSet.questions.flatMap((question, index) => {
+    const text = String(
+      question.question_text
+      || question.text
+      || question.core_question
+      || question.question
+      || '',
+    ).trim();
+    if (!text) return [];
+    return [{
+      ...question,
+      id: String(question.id || `question_set_${index + 1}`),
+      text,
+      source: String(question.source || questionSet.source || 'question_set'),
+      center_terms: questionSet.center_terms,
+    } as UploadedAssociationQuestion];
+  });
+}
+
 function buildEmptyPeriodProjection(
   centerTerm: string,
   centerTerms: string[],
@@ -536,7 +774,7 @@ function buildEmptyPeriodProjection(
   };
 }
 
-function hasReportContent(
+export function hasReportContent(
   projection: AmwayCirclePeriodViewResponse['projection'],
 ): boolean {
   return Boolean(
@@ -549,7 +787,7 @@ function hasReportContent(
   );
 }
 
-function reportQualityPassed(
+export function reportQualityPassed(
   projection: AmwayCirclePeriodViewResponse['projection'] | undefined,
 ): boolean {
   return projection?.report_quality_checks?.passed === true;
@@ -584,7 +822,7 @@ function PeriodSelector({
       ? '开始日期不能晚于结束日期。'
     : notice;
   return (
-    <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2">
+    <div className="min-w-0 xl:max-w-[560px]">
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-1 text-xs font-medium text-[var(--text-tertiary)]">观察周期</span>
         {PERIOD_OPTIONS.map((item) => {
@@ -596,11 +834,12 @@ function PeriodSelector({
               onClick={() => onChange?.(item.value)}
               disabled={disabled}
               aria-pressed={active}
-              className="h-9 rounded-full border px-3 text-xs font-medium transition"
+              className="h-9 rounded-lg border px-3 text-xs font-medium transition"
               style={{
                 borderColor: active ? 'var(--brand-border)' : 'var(--border-subtle)',
-                background: active ? 'var(--brand-bg)' : 'var(--bg-primary)',
-                color: active ? 'var(--brand-primary)' : 'var(--text-secondary)',
+                background: 'var(--bg-primary)',
+                color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+                boxShadow: active ? 'inset 0 -2px var(--brand-primary)' : 'none',
               }}
             >
               {item.label}
@@ -616,7 +855,7 @@ function PeriodSelector({
               max={customEnd || undefined}
               onChange={(event) => onChangeCustomStart?.(event.target.value)}
               disabled={disabled}
-              className="h-9 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs text-[var(--text-secondary)]"
+              className="h-9 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs text-[var(--text-secondary)]"
             />
             <span className="text-xs text-[var(--text-tertiary)]">至</span>
             <input
@@ -626,7 +865,7 @@ function PeriodSelector({
               min={customStart || undefined}
               onChange={(event) => onChangeCustomEnd?.(event.target.value)}
               disabled={disabled}
-              className="h-9 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs text-[var(--text-secondary)]"
+              className="h-9 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs text-[var(--text-secondary)]"
             />
           </div>
         ) : null}
@@ -641,7 +880,7 @@ function PeriodSelector({
             <button
               type="button"
               onClick={() => onChange?.('last_30_days')}
-              className="rounded-full border border-[var(--brand-border)] bg-[var(--bg-primary)] px-3 py-1 font-semibold text-[var(--brand-primary)] hover:bg-[var(--brand-bg)]"
+              className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-1 font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
             >
               返回最近 30 天
             </button>
@@ -674,7 +913,7 @@ function buildAssociationStrategyTerms(projection: OntologyAssociationCircleProj
   return Array.from(terms);
 }
 
-function mergeStageResults(primary: StageResult[], secondary: StageResult[]): StageResult[] {
+export function mergeStageResults(primary: StageResult[], secondary: StageResult[]): StageResult[] {
   if (!primary.length) return secondary;
   if (!secondary.length) return primary;
   const merged: StageResult[] = [];
@@ -721,7 +960,7 @@ type LiveNodeAccumulator = {
   samples: OntologyAssociationCircleEvidence[];
 };
 
-function buildLiveAssociationProjection(
+export function buildLiveAssociationProjection(
   stageResults: StageResult[],
   centerTerm: string,
   blockedCenterTerms: string[] = [centerTerm],
@@ -1045,7 +1284,7 @@ function ReportGenerationGate({
   onGenerate: () => void;
 }) {
   return (
-    <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-5 py-4">
+    <section className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-5 py-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold">{hasReport ? '查看' : '生成'}{activeCenterTerm}解读报告</h2>
@@ -1053,8 +1292,10 @@ function ReportGenerationGate({
             {isModeling
               ? '抓取与实时抽取还在进行，校准完成后会开放报告生成。'
               : hasReport
-                ? `已基于校准后的 ${answerCount || '-'} 条回答和 ${nodeCount || '-'} 个节点生成报告。`
-              : `基于当前 ${answerCount || '-'} 条回答和 ${nodeCount || '-'} 个节点，展开战略词验证、平台差异和下一轮建议。`}
+                ? `已基于校准后的 ${answerCount} 条回答和 ${nodeCount} 个节点生成报告。`
+              : answerCount > 0
+                ? `基于当前 ${answerCount} 条回答和 ${nodeCount} 个节点，展开战略词验证、平台差异和下一轮建议。`
+                : '运行图谱采集后，即可基于真实回答展开战略词验证、平台差异和下一轮建议。'}
           </p>
         </div>
         <button

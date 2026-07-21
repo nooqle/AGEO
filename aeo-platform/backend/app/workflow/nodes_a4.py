@@ -36,6 +36,8 @@ from app.core.fetchers.browser.browser_executor import (
     handle_browser_failure,
     resume_browser_action,
 )
+from app.core.llm import LLMUsage
+from app.services.llm_usage_service import record_provider_usage_async
 from app.tools.a4_fetch_agent import (
     AioAnswerFetchTool,
     build_legacy_platform_configs,
@@ -72,6 +74,12 @@ from app.workflow.skill_state import (
     build_harness_decision_update,
     build_skill_result_update,
     build_validation_result_update,
+)
+from app.workflow.topology_resolver import (
+    apply_platform_gate,
+    extract_chain_enabled,
+    load_flow_topology,
+    report_chain_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +148,121 @@ def _canonicalize_platform_id(platform: Any) -> str:
     if public_platform is None:
         return str(platform or "").strip().lower()
     return to_executor_platform_id(public_platform)
+
+
+def _int_from_mapping(mapping: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = mapping.get(key)
+        if value is None:
+            continue
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _api_usage_fields(response: Any, *, fallback_model: str) -> dict[str, Any]:
+    """Keep only provider-reported usage/model metadata from an A4 API response."""
+
+    raw_response = getattr(response, "raw_response", None)
+    if not isinstance(raw_response, dict):
+        return {}
+    raw_usage = raw_response.get("usage_aggregate") or raw_response.get("usage")
+    if not isinstance(raw_usage, dict):
+        return {}
+    model_name = str(raw_response.get("model") or fallback_model or "unknown").strip()
+    return {
+        "provider_usage": raw_usage,
+        "provider_model": model_name or "unknown",
+    }
+
+
+def _llm_usage_from_provider_payload(raw_usage: dict[str, Any]) -> LLMUsage:
+    prompt_details = raw_usage.get("prompt_tokens_details")
+    if not isinstance(prompt_details, dict):
+        prompt_details = raw_usage.get("input_tokens_details")
+    if not isinstance(prompt_details, dict):
+        prompt_details = None
+    cached_prompt_tokens = None
+    if prompt_details:
+        cached_prompt_tokens = _int_from_mapping(
+            prompt_details,
+            "cached_tokens",
+            "cache_read_input_tokens",
+        )
+    if cached_prompt_tokens is None:
+        cached_prompt_tokens = _int_from_mapping(
+            raw_usage,
+            "cached_prompt_tokens",
+            "prompt_cache_hit_tokens",
+        )
+    cache_miss_prompt_tokens = _int_from_mapping(
+        raw_usage,
+        "cache_miss_prompt_tokens",
+        "prompt_cache_miss_tokens",
+    )
+    return LLMUsage(
+        prompt_tokens=_int_from_mapping(
+            raw_usage,
+            "prompt_tokens",
+            "input_tokens",
+            "PromptTokens",
+            "promptTokens",
+        ),
+        completion_tokens=_int_from_mapping(
+            raw_usage,
+            "completion_tokens",
+            "output_tokens",
+            "CompletionTokens",
+            "completionTokens",
+        ),
+        total_tokens=_int_from_mapping(
+            raw_usage,
+            "total_tokens",
+            "TotalTokens",
+            "totalTokens",
+        ),
+        cached_prompt_tokens=cached_prompt_tokens,
+        cache_miss_prompt_tokens=cache_miss_prompt_tokens,
+        prompt_tokens_details=prompt_details,
+        raw=raw_usage,
+    )
+
+
+async def _record_a4_api_usage(
+    *,
+    session_id: str | None,
+    task_id: str | None,
+    question_id: str,
+    platform: str,
+    result: dict[str, Any],
+) -> None:
+    raw_usage = result.get("provider_usage")
+    if not isinstance(raw_usage, dict):
+        return
+    provider_by_platform = {
+        "doubao": "doubao",
+        "hunyuan": "hunyuan",
+        "kimi": "moonshot",
+    }
+    await record_provider_usage_async(
+        session_id=session_id,
+        task_id=task_id,
+        skill_key="answer_fetch",
+        step="A4",
+        step_name="平台答案抓取",
+        provider=provider_by_platform.get(platform, platform),
+        model_name=str(result.get("provider_model") or platform),
+        usage=_llm_usage_from_provider_payload(raw_usage),
+        latency_ms=max(int(float(result.get("duration") or 0) * 1000), 0),
+        extra_metadata={
+            "platform": platform,
+            "question_id": question_id,
+            "fetch_method": "api",
+            "usage_scope": "a4_platform_fetch",
+        },
+    )
 
 
 def _normalize_platform_filter(platform_filter: Any) -> list[str] | None:
@@ -375,165 +498,10 @@ async def _persist_amway_calibrated_run_snapshot(
             },
         )
         if circle_run is None:
-            raise RuntimeError("Calibration did not create an Amway circle run snapshot")
+            raise RuntimeError(
+                "Calibration did not create an Amway circle run snapshot"
+            )
         await db.commit()
-
-
-async def _build_amway_entity_pipeline_update(
-    state: AgentState,
-    *,
-    session_id: str,
-    fetch_results: list[dict[str, Any]],
-    realtime_extraction_result: dict[str, Any] | None = None,
-    task_id: str | None = None,
-) -> dict[str, Any]:
-    """Run A4->Extraction->Calibration before A5 report generation."""
-
-    if not _is_association_circle_context(state) or not fetch_results:
-        return {}
-
-    from app.services.amway_entity_calibration_service import (
-        AmwayEntityCalibrationService,
-    )
-    from app.services.amway_entity_extraction_service import (
-        AmwayEntityExtractionService,
-    )
-
-    registry = None
-    entity_uuid = _uuid_or_none(state.get("entity_id"))
-    if entity_uuid is not None:
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.services.amway_entity_lexicon_service import (
-                AmwayEntityLexiconService,
-            )
-
-            async with AsyncSessionLocal() as db:
-                registry = await AmwayEntityLexiconService(db).registry_for_entity(
-                    entity_uuid
-                )
-        except Exception as exc:
-            logger.warning("[A4] Failed to load Amway editable lexicon: %s", exc)
-
-    extraction_service = AmwayEntityExtractionService(registry=registry)
-    extraction_result = extraction_service.extract_from_fetch_results(fetch_results)
-    realtime_signal_count = 0
-    if isinstance(realtime_extraction_result, dict):
-        realtime_signal_count = int(realtime_extraction_result.get("signal_count") or 0)
-        extraction_result["realtime_extraction_enabled"] = bool(
-            realtime_extraction_result.get("realtime_extraction_enabled")
-        )
-        extraction_result["realtime_signal_count"] = realtime_signal_count
-        extraction_result["realtime_answer_signal_count"] = int(
-            realtime_extraction_result.get("answer_signal_count") or 0
-        )
-        extraction_result["realtime_answer_ids"] = list(
-            realtime_extraction_result.get("realtime_answer_ids") or []
-        )[:200]
-
-    if realtime_signal_count <= 0:
-        for answer_record in extraction_result.get("answer_signals", [])[:160]:
-            if not isinstance(answer_record, dict):
-                continue
-            signals = [
-                signal
-                for signal in answer_record.get("signals") or []
-                if isinstance(signal, dict)
-            ]
-            if not signals:
-                continue
-            stage_result_data = {
-                "answer_id": answer_record.get("answer_id"),
-                "question_id": answer_record.get("question_id"),
-                "question": answer_record.get("question"),
-                "platform": answer_record.get("platform"),
-                "signal_count": len(signals),
-                "is_realtime": False,
-                "signals": [
-                    {
-                        "entity_name": signal.get("entity_name"),
-                        "entity_type": signal.get("entity_type"),
-                        "matched_text": signal.get("matched_text"),
-                        "relation_type": signal.get("relation_type"),
-                        "term_origin": signal.get("term_origin"),
-                        "evidence_text": signal.get("evidence_text"),
-                        "answer_position": signal.get("answer_position"),
-                    }
-                    for signal in signals[:12]
-                ],
-            }
-            await send_stage_result(
-                session_id=session_id,
-                stage="EntityExtraction",
-                stage_name="实体关系抽取",
-                result_type="entity_extraction_signal",
-                data=stage_result_data,
-            )
-            await _persist_a4_stage_result(
-                state,
-                task_id=task_id,
-                stage="EntityExtraction",
-                stage_name="实体关系抽取",
-                result_type="entity_extraction_signal",
-                data=stage_result_data,
-            )
-
-    calibration_service = AmwayEntityCalibrationService(
-        extraction_service=extraction_service
-    )
-    calibration_result = calibration_service.calibrate(
-        fetch_results=fetch_results,
-        extraction_result=extraction_result,
-        center_terms=_association_center_terms_from_a4_state(state),
-    )
-    projection = calibration_result.get("association_circle_projection")
-    sample_scope = calibration_result.get("sample_scope")
-    platform_summary = calibration_result.get("platform_summary")
-    calibration_stage_data = {
-        "node_count": (
-            len(projection.get("nodes") or []) if isinstance(projection, dict) else 0
-        ),
-        "risk_count": (
-            calibration_result.get("risk_map", {}).get("risk_count", 0)
-            if isinstance(calibration_result.get("risk_map"), dict)
-            else 0
-        ),
-        "signal_count": extraction_result.get("signal_count", 0),
-        "sample_scope": sample_scope if isinstance(sample_scope, dict) else {},
-        "platform_summary": (
-            platform_summary if isinstance(platform_summary, dict) else {}
-        ),
-        "generated_from": (
-            projection.get("generated_from") if isinstance(projection, dict) else None
-        ),
-    }
-    await send_stage_result(
-        session_id=session_id,
-        stage="EntityCalibration",
-        stage_name="实体校准汇总",
-        result_type="entity_calibration_summary",
-        data=calibration_stage_data,
-    )
-    await _persist_a4_stage_result(
-        state,
-        task_id=task_id,
-        stage="EntityCalibration",
-        stage_name="实体校准汇总",
-        result_type="entity_calibration_summary",
-        data=calibration_stage_data,
-    )
-    await _persist_amway_calibrated_run_snapshot(
-        state,
-        fetch_results=fetch_results,
-        extraction_result=extraction_result,
-        calibration_result=calibration_result,
-    )
-    return {
-        "entity_extraction_result": extraction_result,
-        "entity_calibration_result": calibration_result,
-        "brand_association_report_input": calibration_result.get("report_input"),
-        "association_circle_projection": projection,
-    }
 
 
 def _action_question_ids_from_fetch_results(
@@ -2039,6 +2007,19 @@ async def _retry_fetch(
         "success": False,
         "error": "no attempt made",
     }
+    retry_usage_totals = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cached_prompt_tokens": 0,
+        "cache_miss_prompt_tokens": 0,
+    }
+    usage_observed = False
+
+    def attach_retry_usage(result: dict[str, Any]) -> dict[str, Any]:
+        if not usage_observed:
+            return result
+        return {**result, "provider_usage": dict(retry_usage_totals)}
 
     attempt = 0
     overload_retries = 0
@@ -2048,10 +2029,25 @@ async def _retry_fetch(
     while attempt <= max_retries:
         try:
             result = await fetch_fn(*args, **kwargs)
+            raw_usage = result.get("provider_usage")
+            if isinstance(raw_usage, dict):
+                parsed_usage = _llm_usage_from_provider_payload(raw_usage)
+                prompt_tokens = max(int(parsed_usage.prompt_tokens or 0), 0)
+                completion_tokens = max(int(parsed_usage.completion_tokens or 0), 0)
+                retry_usage_totals["prompt_tokens"] += prompt_tokens
+                retry_usage_totals["completion_tokens"] += completion_tokens
+                retry_usage_totals["total_tokens"] += prompt_tokens + completion_tokens
+                retry_usage_totals["cached_prompt_tokens"] += max(
+                    int(parsed_usage.cached_prompt_tokens or 0), 0
+                )
+                retry_usage_totals["cache_miss_prompt_tokens"] += max(
+                    int(parsed_usage.cache_miss_prompt_tokens or 0), 0
+                )
+                usage_observed = True
             if result.get("success"):
                 if attempt > 0:
                     logger.info("[A4] %s succeeded on retry %d", platform, attempt)
-                return result
+                return attach_retry_usage(result)
             last_result = result
         except Exception as e:
             last_result = {
@@ -2172,7 +2168,7 @@ async def _retry_fetch(
         max_retries + 1,
         last_result.get("error"),
     )
-    return last_result
+    return attach_retry_usage(last_result)
 
 
 async def _browser_fetch_with_timeout(
@@ -2474,10 +2470,37 @@ async def a4_fetch_node(state: AgentState) -> Command:
         ]
     )
     # 显式 tool_args.platforms 优先于历史 state.platform_filter，避免旧范围覆盖当前用户意图。
-    raw_platform_filter = (
+    base_platform_filter = (
         normalized_requested_platforms
         or targeted_platforms
         or state.get("platform_filter")
+    )
+    # 3b-1.3 拓扑平台门：画布上断开 fetch→platform-X 连线的平台本轮不抓取。
+    # 无拓扑记录时 apply_platform_gate 原样透传，行为与硬编码时代一致。
+    flow_topology = await load_flow_topology(state.get("entity_id"))
+    gated_platform_filter, topology_disabled_platforms = apply_platform_gate(
+        flow_topology, _normalize_platform_filter(base_platform_filter)
+    )
+    if topology_disabled_platforms and gated_platform_filter is None:
+        logger.info(
+            "[A4] Topology platform gate disconnected all platforms; skipping fetch."
+        )
+        return Command(
+            update={
+                "fetch_results": [],
+                "current_step": "A4",
+                "progress": 0.6,
+                "progress_message": "画布上所有采集平台连线均已断开，本次运行跳过答案抓取。",
+            },
+        )
+    if topology_disabled_platforms:
+        logger.info(
+            "[A4] Topology platform gate: disabled=%s effective=%s",
+            sorted(topology_disabled_platforms),
+            gated_platform_filter,
+        )
+    raw_platform_filter = (
+        gated_platform_filter if topology_disabled_platforms else base_platform_filter
     )
     platform_filter = _normalize_platform_filter(raw_platform_filter)
     question_platform_targets = _question_platform_targets_from_questions(questions)
@@ -3081,6 +3104,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                     if result is None:
                         continue
+                    await _record_a4_api_usage(
+                        session_id=session_id,
+                        task_id=str(task_id) if task_id else None,
+                        question_id=_question_id_from_state_question(questions[q_idx]),
+                        platform=platform,
+                        result=result,
+                    )
                     enriched_result = _attach_aio_platform_packet(
                         result,
                         question=questions[q_idx],
@@ -4052,16 +4082,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
             state,
             fetch_results=canonical_result["fetch_results"],
         )
-        entity_pipeline_update = await _build_amway_entity_pipeline_update(
-            state,
-            session_id=session_id,
-            fetch_results=canonical_result["fetch_results"],
-            realtime_extraction_result=realtime_entity_extraction_result,
-            task_id=str(task_id) if task_id else None,
-        )
-        if entity_pipeline_update:
-            canonical_result.update(entity_pipeline_update)
 
+        # 3b-1.2：实体抽取/圈层图谱已拆为独立节点（nodes_amway），
+        # A4 只负责把实时抽取信号写入 state，由 amway_extract 节点消费。
         # Write A4 materials into Knowledge Workspace for future retrieval.
         try:
             from app.core.database import AsyncSessionLocal
@@ -4117,14 +4140,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
         completion_progress_message = (
             "答案抓取完成，等待确认是否补采失败项或继续生成报告。"
             if bool(observation.get("requires_user_decision"))
-            else "答案抓取完成，正在准备生成分析报告。"
+            else (
+                "答案抓取完成，正在准备实体关系抽取。"
+                if _is_association_circle_context(state)
+                else "答案抓取完成，正在准备生成分析报告。"
+            )
         )
         update_dict: dict[str, Any] = {
             "a4_canonical_result": canonical_result,
             "a4_completion_observation": observation,
             "fetch_recovery_plan": dict(observation.get("recovery_plan") or {}),
             "fetch_results": canonical_result["fetch_results"],
-            **entity_pipeline_update,
+            "realtime_entity_extraction_result": realtime_entity_extraction_result,
             "current_step": "A4",
             "progress": 0.6,
             "progress_message": completion_progress_message,
@@ -4174,9 +4201,33 @@ async def a4_fetch_node(state: AgentState) -> Command:
         update_dict.update(skill_update)
         update_dict.update(merge_validation_update)
         update_dict.update(artifact_validation_update)
-        should_continue_to_report = artifact_validation.passed and not bool(
+        # 3b-1.2/1.3 拓扑链门：amway 圈层上下文链到独立的实体抽取节点
+        # （断开「答案采集 → 实体抽取」连线则止于抓取）；其他上下文保持
+        # A4 → A5 直链（断开「图谱构建 → 报告」连线则止于抓取）。
+        should_chain_forward = artifact_validation.passed and not bool(
             observation.get("requires_user_decision")
         )
+        association_circle_context = _is_association_circle_context(state)
+        topology_extract_enabled = extract_chain_enabled(flow_topology)
+        topology_report_enabled = report_chain_enabled(flow_topology)
+        if (
+            should_chain_forward
+            and association_circle_context
+            and not topology_extract_enabled
+        ):
+            update_dict["next_required_action"] = None
+            update_dict["progress_message"] = (
+                "画布已断开「答案采集 → 实体抽取」连线，本次运行止于答案抓取。"
+            )
+        elif (
+            should_chain_forward
+            and not association_circle_context
+            and not topology_report_enabled
+        ):
+            update_dict["next_required_action"] = None
+            update_dict["progress_message"] = (
+                "画布已断开「图谱构建 → 报告」连线，本次运行止于图谱构建。"
+            )
         if bool(observation.get("requires_user_decision")):
             update_dict["next_required_action"] = build_next_required_action(
                 tool_name="ask_user",
@@ -4196,7 +4247,23 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     "failure_count": int(observation.get("failure_count") or 0),
                 },
             )
-        elif should_continue_to_report:
+        elif (
+            should_chain_forward
+            and association_circle_context
+            and topology_extract_enabled
+        ):
+            update_dict["next_required_action"] = build_next_required_action(
+                tool_name="amway_entity_extract",
+                authority="authoritative_resume",
+                reason="A4 已完成并成功写回结果，继续执行实体关系抽取。",
+                source_step="a4_answer_fetch",
+                metadata={
+                    "headless_mode": bool(state.get("headless_mode")),
+                    "artifact_write_validated": True,
+                    "requires_user_decision": False,
+                },
+            )
+        elif should_chain_forward and topology_report_enabled:
             report_type = (
                 "panorama"
                 if str(state.get("analysis_mode") or "").strip().lower() == "baseline"
@@ -4282,6 +4349,10 @@ async def _fetch_from_doubao(client, question: str) -> dict[str, Any]:
         response = await client.ask_with_search(question)
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         answer_text = response.answer_text
+        usage_fields = _api_usage_fields(
+            response,
+            fallback_model=str(getattr(client, "model", "") or "doubao"),
+        )
 
         if not answer_text or not answer_text.strip():
             logger.warning(
@@ -4294,6 +4365,7 @@ async def _fetch_from_doubao(client, question: str) -> dict[str, Any]:
                 "success": False,
                 "error": "empty answer from API",
                 "duration": duration,
+                **usage_fields,
             }
 
         return {
@@ -4307,6 +4379,7 @@ async def _fetch_from_doubao(client, question: str) -> dict[str, Any]:
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
+            **usage_fields,
         }
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
@@ -4352,6 +4425,10 @@ async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
         response = await client.ask_with_search(question)
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         answer_text = response.answer_text
+        usage_fields = _api_usage_fields(
+            response,
+            fallback_model=str(getattr(client, "model", "") or "hunyuan"),
+        )
 
         if not answer_text or not answer_text.strip():
             logger.warning(
@@ -4364,6 +4441,7 @@ async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
                 "success": False,
                 "error": "empty answer from API",
                 "duration": duration,
+                **usage_fields,
             }
 
         return {
@@ -4377,6 +4455,7 @@ async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
+            **usage_fields,
         }
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
@@ -4410,6 +4489,10 @@ async def _fetch_from_kimi(client, question: str) -> dict[str, Any]:
         response = await client.ask_with_search(question)
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         answer_text = response.answer_text
+        usage_fields = _api_usage_fields(
+            response,
+            fallback_model=str(getattr(client, "model", "") or "kimi"),
+        )
 
         if not answer_text or not answer_text.strip():
             logger.warning(
@@ -4422,6 +4505,7 @@ async def _fetch_from_kimi(client, question: str) -> dict[str, Any]:
                 "success": False,
                 "error": "empty answer from API",
                 "duration": duration,
+                **usage_fields,
             }
 
         return {
@@ -4435,6 +4519,7 @@ async def _fetch_from_kimi(client, question: str) -> dict[str, Any]:
             },
             "citations": [ref.model_dump() for ref in response.search_references],
             "duration": duration,
+            **usage_fields,
         }
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:

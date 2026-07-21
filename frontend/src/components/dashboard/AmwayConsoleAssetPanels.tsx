@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Edit3,
   FileText,
@@ -21,6 +21,12 @@ import type {
 interface AssetPanelProps {
   entityId: string | null;
   entityName?: string;
+}
+
+interface QuestionHistoryPanelProps extends AssetPanelProps {
+  selectedForRunId?: string | null;
+  onSelectForRun?: (questionSet: AmwayQuestionHistorySet) => void;
+  onQuestionSetsChanged?: () => void;
 }
 
 type LexiconFormState = {
@@ -64,6 +70,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!entityId) return;
@@ -166,8 +173,11 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
 
   const deleteEntry = async (entry: AmwayEntityLexiconEntry) => {
     if (!entityId) return;
-    const confirmed = window.confirm(`确认删除实体词“${entry.canonical_name}”？`);
-    if (!confirmed) return;
+    if (deleteConfirmId !== entry.id) {
+      setDeleteConfirmId(entry.id);
+      return;
+    }
+    setDeleteConfirmId(null);
     setIsSaving(true);
     try {
       await api.deleteAmwayEntityLexiconEntry(entityId, entry.id);
@@ -189,7 +199,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
       <AssetPanelHeader
         eyebrow="实体词库"
         title="安利实体词库"
-        description="这里维护抓取回答后的实体识别边界。新增或调整后，后续 A4 实体抽取会读取这份词库。"
+        description="这里维护回答分析时的品牌实体识别范围，调整后下一轮分析生效。"
         meta={`${entityName || data?.entity_name || '安利实体'} · ${entries.length} 个实体词`}
         action={
           <div className="flex items-center gap-2">
@@ -216,7 +226,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
       {error ? <InlineError message={error} /> : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+        <div className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
           <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] p-4 md:flex-row md:items-center md:justify-between">
             <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 text-sm text-[var(--text-secondary)]">
               <Search size={15} />
@@ -288,10 +298,14 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                       <button
                         type="button"
                         onClick={() => void deleteEntry(entry)}
-                        className="inline-flex h-9 items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-sm text-[var(--error)] hover:bg-[var(--status-error-bg)]"
+                        className={`inline-flex h-9 items-center gap-1 rounded-xl border px-3 text-sm ${
+                          deleteConfirmId === entry.id
+                            ? 'border-[var(--error)] bg-[var(--status-error-bg)] font-semibold text-[var(--error)]'
+                            : 'border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--error)] hover:bg-[var(--status-error-bg)]'
+                        }`}
                       >
                         <Trash2 size={14} />
-                        删除
+                        {deleteConfirmId === entry.id ? '确认删除' : '删除'}
                       </button>
                     </div>
                   </article>
@@ -303,7 +317,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
           </div>
         </div>
 
-        <aside className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4">
+        <aside className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4">
           {editingId ? (
             <div className="space-y-4">
               <div className="flex items-start justify-between gap-3">
@@ -409,12 +423,24 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
   );
 }
 
-export function AmwayQuestionHistoryPanel({ entityId, entityName }: AssetPanelProps) {
+export function AmwayQuestionHistoryPanel({
+  entityId,
+  entityName,
+  selectedForRunId,
+  onSelectForRun,
+  onQuestionSetsChanged,
+}: QuestionHistoryPanelProps) {
   const [data, setData] = useState<AmwayQuestionHistoryResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editorMode, setEditorMode] = useState<'new' | 'edit' | null>(null);
+  const [draftTitle, setDraftTitle] = useState('');
+  const [draftQuestions, setDraftQuestions] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     if (!entityId) return;
@@ -447,7 +473,88 @@ export function AmwayQuestionHistoryPanel({ entityId, entityName }: AssetPanelPr
 
   useEffect(() => {
     setPage(1);
+    setEditorMode(null);
+    setDeleteConfirmId(null);
   }, [selectedId]);
+
+  const beginCreate = () => {
+    setDraftTitle(`安利圈层题库 ${new Date().toLocaleDateString('zh-CN')}`);
+    setDraftQuestions('');
+    setEditorMode('new');
+    setError(null);
+  };
+
+  const beginEdit = (questionSet: AmwayQuestionHistorySet) => {
+    setDraftTitle(questionSet.title || '安利圈层题库');
+    setDraftQuestions(questionSet.questions.map(questionText).filter(Boolean).join('\n'));
+    setEditorMode(questionSet.source_type === 'question_set' ? 'edit' : 'new');
+    setError(null);
+  };
+
+  useEffect(() => {
+    if (editorMode) titleInputRef.current?.focus();
+  }, [editorMode]);
+
+  const saveQuestionSet = async () => {
+    if (!entityId || (editorMode === 'edit' && !selectedSet)) return;
+    const questions = draftQuestions
+      .split(/\r?\n/)
+      .map((text) => text.trim())
+      .filter(Boolean);
+    if (!draftTitle.trim()) {
+      setError('请输入题库名称。');
+      return;
+    }
+    if (!questions.length) {
+      setError('请至少保留一道问题；每行填写一道。');
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      const saved = editorMode === 'edit' && selectedSet?.source_type === 'question_set'
+        ? await api.updateAmwayQuestionHistory(entityId, selectedSet.id, {
+            title: draftTitle.trim(),
+            center_terms: selectedSet.center_terms,
+            questions,
+          })
+        : await api.saveAmwayQuestionHistory({
+            entity_id: entityId,
+            title: draftTitle.trim(),
+            center_terms: selectedSet?.center_terms || [],
+            questions,
+          });
+      setEditorMode(null);
+      await load();
+      setSelectedId(saved.id);
+      onQuestionSetsChanged?.();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : '题库保存失败');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const deleteQuestionSet = async (questionSet: AmwayQuestionHistorySet) => {
+    if (!entityId || questionSet.source_type !== 'question_set') return;
+    if (deleteConfirmId !== questionSet.id) {
+      setDeleteConfirmId(questionSet.id);
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      await api.deleteAmwayQuestionHistory(entityId, questionSet.id);
+      setDeleteConfirmId(null);
+      setSelectedId(null);
+      await load();
+      onQuestionSetsChanged?.();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : '题库删除失败');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   if (!entityId) {
     return <AssetEmptyState title="未选择安利实体" description="请先进入一个已开通安利权限的品牌实体。" />;
@@ -456,30 +563,88 @@ export function AmwayQuestionHistoryPanel({ entityId, entityName }: AssetPanelPr
   return (
     <section className="space-y-4">
       <AssetPanelHeader
-        eyebrow="历史题库"
-        title="上传问题列表"
-        description="这里保留每次上传或启动图谱时使用的问题清单，用来复盘问题定义、追踪报告来源。"
+        eyebrow="问题集"
+        title="问题集管理"
+        description="新建、编辑或选择本轮采集使用的问题集；历史运行仍保留当时使用的问题快照。"
         meta={`${entityName || '安利实体'} · ${questionSets.length} 组题库`}
-        action={
-          <button
-            type="button"
-            onClick={load}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
-          >
-            <RefreshCw size={14} />
-            刷新
-          </button>
-        }
+        action={(
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={beginCreate}
+              className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)]"
+            >
+              <Plus size={14} />
+              新建题库
+            </button>
+            <button
+              type="button"
+              onClick={load}
+              className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
+            >
+              <RefreshCw size={14} />
+              刷新
+            </button>
+          </div>
+        )}
       />
       {error ? <InlineError message={error} /> : null}
+      {editorMode ? (
+        <section className="rounded-2xl border border-[var(--brand-border)] bg-[var(--bg-primary)] p-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+            <div className="xl:w-80">
+              <div className="text-xs font-medium text-[var(--brand-primary)]">
+                {editorMode === 'edit' ? '编辑当前题库' : '新建可复用题库'}
+              </div>
+              <input
+                ref={titleInputRef}
+                value={draftTitle}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                aria-label="题库名称"
+                className="mt-2 h-10 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 text-sm outline-none focus:border-[var(--brand-primary)]"
+                placeholder="题库名称"
+              />
+              <p className="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
+                每行一道问题。保存后可在品牌图谱页选为本轮题库；已经完成的历史运行不会被改写。
+              </p>
+            </div>
+            <textarea
+              value={draftQuestions}
+              onChange={(event) => setDraftQuestions(event.target.value)}
+              aria-label="题库问题列表"
+              className="min-h-48 flex-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--brand-primary)]"
+              placeholder={'每行填写一道问题\n例如：提到日常营养补充，你会想到哪些品牌？'}
+            />
+            <div className="flex shrink-0 gap-2 xl:flex-col">
+              <button
+                type="button"
+                onClick={() => void saveQuestionSet()}
+                disabled={isSaving}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] disabled:opacity-60"
+              >
+                {isSaving ? <Loader2 size={14} className="animate-spin" /> : null}
+                保存题库
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditorMode(null)}
+                disabled={isSaving}
+                className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-sm text-[var(--text-secondary)]"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
       <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+        <aside className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
           <div className="border-b border-[var(--border-subtle)] p-4 text-sm font-semibold">
             题库批次
           </div>
           <div className="max-h-[680px] overflow-auto p-3">
             {isLoading ? (
-              <LoadingRows label="正在读取历史题库" />
+              <LoadingRows label="正在读取问题集" />
             ) : questionSets.length ? (
               <div className="space-y-2">
                 {questionSets.map((item) => (
@@ -487,6 +652,7 @@ export function AmwayQuestionHistoryPanel({ entityId, entityName }: AssetPanelPr
                     key={item.id}
                     type="button"
                     onClick={() => setSelectedId(item.id)}
+                    aria-pressed={item.id === selectedSet?.id}
                     className="w-full rounded-xl border p-3 text-left transition"
                     style={{
                       borderColor: item.id === selectedSet?.id ? 'var(--brand-primary)' : 'var(--border-subtle)',
@@ -510,12 +676,12 @@ export function AmwayQuestionHistoryPanel({ entityId, entityName }: AssetPanelPr
                 ))}
               </div>
             ) : (
-              <AssetEmptyState title="暂无历史题库" description="上传问题并启动图谱后，这里会留下可审阅的问题批次。" />
+              <AssetEmptyState title="暂无问题集" description="可在上方新建，或上传问题后保存为本轮问题集。" />
             )}
           </div>
         </aside>
 
-        <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+        <section className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
           {selectedSet ? (
             <>
               <div className="border-b border-[var(--border-subtle)] p-5">
@@ -526,15 +692,59 @@ export function AmwayQuestionHistoryPanel({ entityId, entityName }: AssetPanelPr
                     </div>
                     <h2 className="mt-1 text-xl font-semibold">{selectedSet.title}</h2>
                     <p className="mt-2 text-sm text-[var(--text-secondary)]">
-                      {selectedSet.question_count} 道问题 · {formatDateTime(selectedSet.created_at)}
+                      {selectedSet.question_count} 道问题
+                      {selectedSet.version ? ` · 版本 ${selectedSet.version}` : ''}
+                      {' · '}{formatDateTime(selectedSet.created_at)}
                       {selectedSet.source_file_name ? ` · ${selectedSet.source_file_name}` : ''}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(selectedSet.center_terms || []).map((term) => (
-                      <StatusPill key={term} label={term} />
-                    ))}
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onSelectForRun?.(selectedSet)}
+                      className="h-9 rounded-xl border px-3 text-sm font-semibold"
+                      style={{
+                        borderColor: selectedForRunId === selectedSet.id ? 'var(--brand-primary)' : 'var(--brand-border)',
+                        background: selectedForRunId === selectedSet.id ? 'var(--brand-bg)' : 'var(--bg-primary)',
+                        color: 'var(--brand-primary)',
+                      }}
+                    >
+                      {selectedForRunId === selectedSet.id ? '本轮已选' : '设为本轮题库'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => beginEdit(selectedSet)}
+                      className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--border-subtle)] px-3 text-sm text-[var(--text-secondary)]"
+                    >
+                      <Edit3 size={14} />
+                      {selectedSet.source_type === 'question_set' ? '编辑' : '另存为'}
+                    </button>
+                    {selectedSet.source_type === 'question_set' ? (
+                      <button
+                        type="button"
+                        onClick={() => void deleteQuestionSet(selectedSet)}
+                        disabled={isSaving}
+                        className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--border-subtle)] px-3 text-sm text-[var(--error)] disabled:opacity-60"
+                      >
+                        <Trash2 size={14} />
+                        {deleteConfirmId === selectedSet.id ? '确认删除' : '删除'}
+                      </button>
+                    ) : null}
                   </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {(selectedSet.center_terms || []).map((term) => (
+                    <StatusPill key={term} label={term} />
+                  ))}
+                  {deleteConfirmId === selectedSet.id ? (
+                    <button
+                      type="button"
+                      onClick={() => setDeleteConfirmId(null)}
+                      className="text-xs text-[var(--text-tertiary)] underline underline-offset-2"
+                    >
+                      取消删除
+                    </button>
+                  ) : null}
                 </div>
               </div>
               <div className="divide-y divide-[var(--border-subtle)]">
@@ -588,7 +798,7 @@ export function AmwayQuestionHistoryPanel({ entityId, entityName }: AssetPanelPr
               </div>
             </>
           ) : (
-            <AssetEmptyState title="暂无可审阅的问题" description="上传 32 题并启动图谱后，可以从这里回看完整问题列表。" />
+            <AssetEmptyState title="暂无可审阅的问题" description="上传问题集文件并运行分析后，完整问题列表会显示在这里。" />
           )}
         </section>
       </div>
@@ -610,7 +820,7 @@ function AssetPanelHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-5">
+    <div className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="max-w-4xl">
           <div className="text-xs font-medium text-[var(--text-tertiary)]">{eyebrow}</div>
@@ -654,7 +864,7 @@ function LoadingRows({ label }: { label: string }) {
 
 function AssetEmptyState({ title, description }: { title: string; description: string }) {
   return (
-    <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8 text-center">
+    <div className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8 text-center">
       <FileText className="mx-auto text-[var(--text-tertiary)]" size={26} />
       <h2 className="mt-3 text-base font-semibold">{title}</h2>
       <p className="mt-2 text-sm text-[var(--text-secondary)]">{description}</p>

@@ -2,10 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { Orbit, Settings, Workflow } from 'lucide-react';
 import {
   AmwayAssociationCircleDashboard,
+  hasReportContent,
+  reportQualityPassed,
   type AssociationCircleStartPayload,
 } from './AmwayAssociationCircleDashboard';
+import { buildAssociationProjection } from './AmwayAssociationCircleDashboardViews';
+import { AmwayConsoleHeader } from './AmwayConsoleHeader';
+import { AmwayFlowCanvas, readEnabledFlowPlatforms } from './AmwayFlowCanvas';
 import { useEntityStore } from '@/stores/entityStore';
 import { useIntelligenceRunStore } from '@/stores/intelligenceRunStore';
 import { useOntologyStore } from '@/stores/ontologyStore';
@@ -30,8 +36,19 @@ import type {
 const ASSOCIATION_ANALYSIS_MODE = 'brand_association_circle';
 const ASSOCIATION_DASHBOARD_VARIANT = 'amway_association_circle';
 const DEFAULT_CENTER_TERMS = ['安利', '安利中国', '纽崔莱'];
-const DEFAULT_ASSOCIATION_PLATFORMS = ['deepseek', 'kimi', 'hunyuan', 'doubao'];
 const DEV_ENTITY_FALLBACK_DELAY_MS = 6000;
+
+type ConsoleView = 'circle' | 'flow' | 'settings';
+
+const CONSOLE_VIEWS: Array<{ id: ConsoleView; label: string; icon: typeof Orbit }> = [
+  { id: 'circle', label: '品牌圈层', icon: Orbit },
+  { id: 'flow', label: '品牌生产线', icon: Workflow },
+  { id: 'settings', label: '设置', icon: Settings },
+];
+
+function normalizeConsoleView(raw: string | null): ConsoleView {
+  return raw === 'flow' || raw === 'settings' ? raw : 'circle';
+}
 const ASSOCIATION_STAGE_RESULT_TYPES = new Set([
   'entity_extraction_signal',
   'entity_calibration_summary',
@@ -175,6 +192,9 @@ export function AmwayAssociationCircleConsolePage({
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedEntityId = lockedEntityId || searchParams.get('entity_id');
+  const consoleView = normalizeConsoleView(searchParams.get('view'));
+  const [runSettingsRequest, setRunSettingsRequest] = useState(0);
+  const [reportRequest, setReportRequest] = useState(0);
   const entities = useEntityStore((state) => state.entities);
   const entitiesLoading = useEntityStore((state) => state.isLoading);
   const entityError = useEntityStore((state) => state.error);
@@ -435,7 +455,8 @@ export function AmwayAssociationCircleConsolePage({
         const runCount = Number(nextPeriodView.current_period?.run_count || 0);
         const nodeCount = nextPeriodView.projection?.nodes?.length || 0;
         if (runCount <= 0 || nodeCount <= 0) {
-          setPeriodError('所选周期暂无采集数据。当前保留上一个有数据周期，请返回最近 30 天继续查看。');
+          setPeriodError(null);
+          setPeriodView(nextPeriodView);
           return;
         }
         setPeriodView(nextPeriodView);
@@ -573,8 +594,9 @@ export function AmwayAssociationCircleConsolePage({
       const uploadedQuestions =
         payload?.uploadedQuestions?.filter((question) => question.text.trim()) || [];
       try {
-        let uploadedQuestionSetId: string | null = null;
-        if (uploadedQuestions.length) {
+        let uploadedQuestionSetId: string | null = payload?.questionSetId || null;
+        let questionSetVersion: number | null = payload?.questionSetVersion || null;
+        if (uploadedQuestions.length && payload?.persistQuestionSet && !uploadedQuestionSetId) {
           const savedQuestionSet = await api.saveAmwayQuestionHistory({
             entity_id: selectedEntityId,
             title: payload?.uploadedQuestionSource || `安利上传题库 ${new Date().toLocaleDateString('zh-CN')}`,
@@ -588,6 +610,7 @@ export function AmwayAssociationCircleConsolePage({
             })),
           });
           uploadedQuestionSetId = savedQuestionSet.id;
+          questionSetVersion = savedQuestionSet.version || 1;
         }
         await createRun(selectedEntityId, {
           run_goal: '生成安利品牌联想圈层报告',
@@ -602,13 +625,15 @@ export function AmwayAssociationCircleConsolePage({
             active_center_term: effectiveCenterTerm,
             center_terms: effectiveCenterTerm ? [effectiveCenterTerm] : centerOptions,
             brand_cluster_terms: centerOptions.length ? centerOptions : DEFAULT_CENTER_TERMS,
-            platforms: DEFAULT_ASSOCIATION_PLATFORMS,
+            platforms: readEnabledFlowPlatforms(selectedEntityId),
+            fetch_mode: payload?.fetchMode || 'full',
             enabled_surfaces: ['amwaychina_console', 'chat', 'canvas', 'brand_world'],
             question_input_mode: uploadedQuestions.length ? 'uploaded_list' : 'default_matrix',
             ...(uploadedQuestions.length
               ? {
                   uploaded_question_source: payload?.uploadedQuestionSource || 'amwaychina_upload',
                   uploaded_question_set_id: uploadedQuestionSetId,
+                  question_set_version: questionSetVersion,
                   uploaded_question_count: uploadedQuestions.length,
                   uploaded_questions: uploadedQuestions.map((question) => ({
                     ...question,
@@ -709,9 +734,58 @@ export function AmwayAssociationCircleConsolePage({
     selectedEntityId,
   ]);
 
+  const handleSelectView = useCallback(
+    (view: ConsoleView) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (view === 'circle') params.delete('view');
+      else params.set('view', view);
+      const query = params.toString();
+      router.replace(query ? `?${query}` : '?', { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const handleOpenRunSettings = useCallback(() => {
+    handleSelectView('circle');
+    setRunSettingsRequest((current) => current + 1);
+  }, [handleSelectView]);
+
+  const handleOpenReport = useCallback(() => {
+    handleSelectView('circle');
+    setReportRequest((current) => current + 1);
+  }, [handleSelectView]);
+
+  const consoleProjection = useMemo(
+    () => buildAssociationProjection(selectedWorld, home),
+    [home, selectedWorld],
+  );
+  const headerIsRunning = isSelectedRunActive || Boolean(selectedEntity && submittingByEntity[selectedEntity.id]);
+  const headerStatusLabel = headerIsRunning
+    ? '正在运行'
+    : isProjectionLoading
+      ? '正在读取'
+      : consoleProjection.nodes.length > 0
+        ? '圈层已生成'
+        : '待运行';
+  const headerHasPeriodReport = Boolean(
+    periodView?.report_id && hasReportContent(periodView.projection),
+  );
+  const headerReportLabel = isPeriodReportGenerating
+    ? '生成中'
+    : headerHasPeriodReport
+      ? reportQualityPassed(periodView?.projection) ? '查看报告' : '查看待校验报告'
+      : '生成报告';
+  const headerReportDisabled = headerIsRunning
+    || Boolean(isPeriodReportGenerating)
+    || (!headerHasPeriodReport && !consoleProjection.nodes.length);
+
+  const handleQuickRun = useCallback(() => {
+    void handleStart();
+  }, [handleStart]);
+
   if (entitiesLoading && !consoleEntities.length) {
     return (
-      <div className="min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
+      <div className="amway-console min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
         <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8">
           正在加载安利品牌圈层 Console...
         </div>
@@ -721,7 +795,7 @@ export function AmwayAssociationCircleConsolePage({
 
   if ((entityError && !directEntity) || directEntityError || directWorldError || homeError) {
     return (
-      <div className="min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
+      <div className="amway-console min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
         <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8">
           <h1 className="text-2xl font-semibold">安利 Console 加载失败</h1>
           <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
@@ -734,7 +808,7 @@ export function AmwayAssociationCircleConsolePage({
 
   if (!selectedEntity) {
     return (
-      <div className="min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
+      <div className="amway-console min-h-screen bg-[var(--bg-secondary)] px-6 py-10 text-[var(--text-primary)]">
         <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8">
           <div className="text-xs font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
             安利专项权限
@@ -749,39 +823,125 @@ export function AmwayAssociationCircleConsolePage({
   }
 
   return (
-    <AmwayAssociationCircleDashboard
-      entities={amwayEntities}
-      selectedEntity={selectedEntity}
-      selectedEntityId={selectedEntityId}
-      centerOptions={centerOptions}
-      selectedCenterTerm={effectiveCenterTerm}
-      home={home}
-      world={selectedWorld}
-      activeRun={selectedRun}
-      activeTask={activeTask}
-      isRunActive={isSelectedRunActive}
-      isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
-      isProjectionLoading={isProjectionLoading}
-      runError={errorByEntity[selectedEntity.id]}
-      liveStageResults={streamedStageResults}
-      periodType={periodType}
-      periodCustomStart={periodCustomStart}
-      periodCustomEnd={periodCustomEnd}
-      periodView={periodView}
-      isPeriodLoading={isPeriodLoading}
-      isPeriodReportGenerating={isPeriodReportGenerating}
-      periodError={periodError}
-      periodReportError={periodReportError}
-      onSelectEntity={setSelectedEntityId}
-      onSelectCenterTerm={setSelectedCenterTerm}
-      onSelectPeriodType={setPeriodType}
-      onChangePeriodCustomStart={setPeriodCustomStart}
-      onChangePeriodCustomEnd={setPeriodCustomEnd}
-      onGeneratePeriodReport={handleGeneratePeriodReport}
-      onStart={(payload) => {
-        void handleStart(payload);
-      }}
-      onOpenLatestReport={handleOpenLatestReport}
-    />
+    <div className="amway-console flex min-h-screen bg-[var(--bg-secondary)]">
+      <nav
+        aria-label="安利 Console 导航"
+        className="sticky top-0 flex h-screen w-52 shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-5"
+      >
+        <div className="px-2 text-xs font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
+          安利品牌圈层
+        </div>
+        <div className="mt-4 space-y-1">
+          {CONSOLE_VIEWS.map((item) => {
+            const Icon = item.icon;
+            const active = consoleView === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handleSelectView(item.id)}
+                aria-current={active ? 'page' : undefined}
+                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                  active
+                    ? 'bg-[var(--brand-bg)] text-[var(--brand-primary)]'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Icon size={16} aria-hidden />
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      <div className="min-w-0 flex-1">
+        <AmwayConsoleHeader
+          viewLabel={CONSOLE_VIEWS.find((item) => item.id === consoleView)?.label || '品牌圈层'}
+          statusLabel={headerStatusLabel}
+          isRunning={headerIsRunning}
+          reportLabel={headerReportLabel}
+          reportDisabled={headerReportDisabled}
+          reportPrimary={headerHasPeriodReport}
+          onReportClick={handleOpenReport}
+        />
+        {consoleView === 'circle' ? (
+          <AmwayAssociationCircleDashboard
+            entities={amwayEntities}
+            selectedEntity={selectedEntity}
+            selectedEntityId={selectedEntityId}
+            centerOptions={centerOptions}
+            selectedCenterTerm={effectiveCenterTerm}
+            home={home}
+            world={selectedWorld}
+            activeRun={selectedRun}
+            activeTask={activeTask}
+            isRunActive={isSelectedRunActive}
+            isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
+            isProjectionLoading={isProjectionLoading}
+            runError={errorByEntity[selectedEntity.id]}
+            liveStageResults={streamedStageResults}
+            periodType={periodType}
+            periodCustomStart={periodCustomStart}
+            periodCustomEnd={periodCustomEnd}
+            periodView={periodView}
+            isPeriodLoading={isPeriodLoading}
+            isPeriodReportGenerating={isPeriodReportGenerating}
+            periodError={periodError}
+            periodReportError={periodReportError}
+            openRunSettingsSignal={runSettingsRequest}
+            openReportSignal={reportRequest}
+            onSelectEntity={setSelectedEntityId}
+            onSelectCenterTerm={setSelectedCenterTerm}
+            onSelectPeriodType={setPeriodType}
+            onChangePeriodCustomStart={setPeriodCustomStart}
+            onChangePeriodCustomEnd={setPeriodCustomEnd}
+            onGeneratePeriodReport={handleGeneratePeriodReport}
+            onStart={handleStart}
+            onOpenLatestReport={handleOpenLatestReport}
+          />
+        ) : null}
+
+        {consoleView === 'flow' ? (
+          <AmwayFlowCanvas
+            key={`flow:${selectedEntity.id}:${effectiveCenterTerm}`}
+            entityId={selectedEntity.id}
+            centerTerm={effectiveCenterTerm || DEFAULT_CENTER_TERMS[0]}
+            world={selectedWorld}
+            home={home}
+            periodView={periodView}
+            activeRun={selectedRun}
+            activeTask={activeTask}
+            isRunActive={isSelectedRunActive}
+            isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
+            liveStageResults={streamedStageResults}
+            onQuickRun={handleQuickRun}
+            onOpenRunSettings={handleOpenRunSettings}
+            onOpenCircle={() => handleSelectView('circle')}
+          />
+        ) : null}
+
+        {consoleView === 'settings' ? (
+          <div className="mx-auto max-w-[1920px] px-5 py-4 text-[var(--text-primary)] lg:px-7 2xl:px-10">
+            <section className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-5 py-4 shadow-sm">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--brand-primary)]">
+                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--brand-primary)]" />
+                系统设置
+              </div>
+              <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                <h1 className="text-2xl font-semibold leading-tight tracking-tight">设置</h1>
+                <p className="text-sm text-[var(--text-secondary)]">账号、登录与权限管理</p>
+              </div>
+            </section>
+            <div className="mt-4 max-w-2xl rounded-2xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-primary)] p-8">
+              <h2 className="text-base font-semibold">系统设置入口已保留</h2>
+              <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                账号信息、登录方式与权限管理会放在这里，目前正在规划中。实体词库与问题集仍在「品牌圈层」页内维护。
+              </p>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }

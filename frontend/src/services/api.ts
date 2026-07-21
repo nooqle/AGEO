@@ -124,6 +124,19 @@ export function getApiBaseUrl(): string {
 
 type RequestOptions = Pick<RequestInit, 'signal'>;
 
+/** 画布拓扑文档（与后端 app.workflow.node_contracts.FlowTopology 同构）。 */
+export interface AmwayFlowTopologyDoc {
+  version: number;
+  customNodes: Array<{
+    id: string;
+    type: string;
+    position?: { x: number; y: number };
+    config?: Record<string, unknown>;
+  }>;
+  customEdges: Array<{ id: string; source: string; target: string }>;
+  removedEdgeIds: string[];
+}
+
 export interface QuestionTableIntakeResult {
   table_kind?: string;
   confidence?: number;
@@ -1614,6 +1627,36 @@ class ApiService {
     return resp.question_set;
   }
 
+  async updateAmwayQuestionHistory(
+    entityId: string,
+    questionSetId: string,
+    data: {
+      title?: string;
+      source_file_name?: string | null;
+      center_term?: string | null;
+      center_terms?: string[];
+      questions?: Array<Record<string, unknown> | string>;
+    },
+  ): Promise<AmwayQuestionHistorySet> {
+    const resp = await this.request<{ question_set: AmwayQuestionHistorySet }>(
+      `/amwaychina/entities/${entityId}/question-sets/${questionSetId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      },
+    );
+    return resp.question_set;
+  }
+
+  async deleteAmwayQuestionHistory(
+    entityId: string,
+    questionSetId: string,
+  ): Promise<{ question_set_id: string; deleted: boolean }> {
+    return this.request(`/amwaychina/entities/${entityId}/question-sets/${questionSetId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async listAmwayCircleRuns(
     entityId: string,
     limit = 30,
@@ -1681,6 +1724,22 @@ class ApiService {
       `/amwaychina/entities/${entityId}/circle-node-insight?${query}`,
     );
     return resp.insight;
+  }
+
+  async getAmwayFlowTopology(
+    entityId: string,
+  ): Promise<{ topology: AmwayFlowTopologyDoc; updated_at: string | null }> {
+    return this.request(`/amwaychina/entities/${entityId}/flow-topology`);
+  }
+
+  async putAmwayFlowTopology(
+    entityId: string,
+    topology: AmwayFlowTopologyDoc,
+  ): Promise<{ topology: AmwayFlowTopologyDoc; updated_at: string | null }> {
+    return this.request(`/amwaychina/entities/${entityId}/flow-topology`, {
+      method: 'PUT',
+      body: JSON.stringify({ topology }),
+    });
   }
 
   async listMonitoringPlans(params?: {

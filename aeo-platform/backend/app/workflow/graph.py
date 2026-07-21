@@ -13,6 +13,7 @@ from app.workflow.orchestrator_node import orchestrator_node, wait_for_user_node
 from app.workflow.nodes import a1_brand_node, a2_persona_node
 from app.workflow.nodes_a3 import a3_question_node
 from app.workflow.nodes_a4 import a4_fetch_node
+from app.workflow.nodes_amway import amway_extract_node, amway_projection_node
 from app.workflow.nodes_a5 import a5_analytics_node
 from app.workflow.nodes_retired import retired_confidence_executor_node
 from app.workflow.nodes_site_confidence import site_confidence_assessment_executor_node
@@ -62,6 +63,9 @@ def build_workflow() -> StateGraph:
     workflow.add_node("a2_persona", a2_persona_node)
     workflow.add_node("a3_question", a3_question_node)
     workflow.add_node("a4_fetch", a4_fetch_node)
+    # 3b-1.2：amway 实体抽取/圈层图谱独立节点（拓扑可调度，见 nodes_amway）
+    workflow.add_node("amway_extract", amway_extract_node)
+    workflow.add_node("amway_projection", amway_projection_node)
     workflow.add_node("a5_analytics", a5_analytics_node)
     workflow.add_node(
         "confidence_analysis_executor",
@@ -97,6 +101,8 @@ def build_workflow() -> StateGraph:
         "a2_persona",
         "a3_question",
         "a4_fetch",
+        "amway_extract",
+        "amway_projection",
         "a5_analytics",
         "site_confidence_assessment_executor",
         "table_intake",

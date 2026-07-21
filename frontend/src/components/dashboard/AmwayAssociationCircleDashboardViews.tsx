@@ -1,14 +1,14 @@
-﻿import { useState, type ChangeEvent } from 'react';
+﻿import { useState, type CSSProperties } from 'react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import {
   ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
+  Check,
   Download,
+  Info,
   Orbit,
+  Play,
   RefreshCw,
   ShieldAlert,
-  Upload,
   X,
 } from 'lucide-react';
 import type { DashboardHomeData } from '@/types/dashboard';
@@ -33,16 +33,9 @@ import type {
   OntologyAssociationCircleStorylineAnalysis,
   OntologyWorldSummary,
 } from '@/types/ontology';
-import {
-  displayQuestionMetadataStatus,
-  hasVisibleAssociationTags,
-  normalizeAssociationQuestionForReview,
-} from './amwayQuestionBank';
-import type { UploadedAssociationQuestion } from './AmwayAssociationCircleDashboard';
 
 type AssociationMapGroupKey = 'strong' | 'growth' | 'story' | 'risk';
 type AssociationMapMode = 'associations' | 'risk';
-type AssociationMapViewMode = 'flat' | 'spatial';
 type OrbitDistanceBand = 'near' | 'bridge' | 'far' | 'risk';
 type AssociationNodeFilterKey = 'stable' | 'opportunity' | 'watch';
 const DEFAULT_OVERVIEW_HIGHLIGHT_LIMIT = 28;
@@ -83,12 +76,10 @@ type PlatformEvidenceSummary = {
 };
 
 const DEFAULT_CENTER_TERMS = ['安利', '安利中国', '纽崔莱'];
-const REPORT_SERIF_FONT = '"PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif';
-const QUESTION_PAGE_SIZE = 8;
 
 export function AssociationProjectionLoadingPanel({ centerTerm }: { centerTerm: string }) {
   return (
-    <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8">
+    <section className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-8">
       <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--brand-border)] bg-[var(--brand-bg)] text-[var(--brand-primary)]">
           <RefreshCw size={20} className="animate-spin" />
@@ -124,34 +115,6 @@ export function InfoPill({
   );
 }
 
-function QuestionUploadButton({
-  isReadingUpload,
-  onUploadFileChange,
-  compact = false,
-}: {
-  isReadingUpload: boolean;
-  onUploadFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  compact?: boolean;
-}) {
-  return (
-    <label
-      className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border border-[var(--brand-border)] bg-[var(--bg-primary)] text-sm font-medium text-[var(--brand-primary)] hover:bg-[var(--brand-bg)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--brand-primary)] ${
-        compact ? 'h-9 px-3' : 'px-4 py-2'
-      }`}
-    >
-      <Upload size={16} />
-      {isReadingUpload ? '正在读取' : '上传问题'}
-      <input
-        type="file"
-        accept=".csv,.xlsx,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        className="sr-only"
-        disabled={isReadingUpload}
-        onChange={onUploadFileChange}
-      />
-    </label>
-  );
-}
-
 interface AssociationMapGroup {
   key: AssociationMapGroupKey;
   title: string;
@@ -184,6 +147,7 @@ export function CommercialOrbitView({
   strategyTerms,
   prioritySummary,
   onSelectNode,
+  onStartRun,
 }: {
   centerTerm: string;
   groups: AssociationMapGroup[];
@@ -199,12 +163,13 @@ export function CommercialOrbitView({
   strategyTerms: string[];
   prioritySummary?: OntologyAssociationCirclePrioritySummary | null;
   onSelectNode: (nodeId: string | null) => void;
+  onStartRun?: () => void;
 }) {
   const [mapMode, setMapMode] = useState<AssociationMapMode>('associations');
   const [activeNodeFilters, setActiveNodeFilters] = useState<AssociationNodeFilterKey[]>([]);
   const [hoverTrackFilter, setHoverTrackFilter] = useState<AssociationNodeFilterKey | null>(null);
   const externalReturnFocusRef = useRef<HTMLButtonElement | null>(null);
-  const viewMode: AssociationMapViewMode = 'flat';
+  const autoFocusedTrackRef = useRef(false);
   const riskGroup = groups.find((group) => group.key === 'risk') || null;
   const riskNodes = riskGroup?.nodes || [];
   const associationGroups = groups.filter((group) => group.key !== 'risk');
@@ -250,6 +215,7 @@ export function CommercialOrbitView({
     ? trackCounts[activeTrackFilter]
     : Math.min(totalDefaultNodeCount, DEFAULT_OVERVIEW_HIGHLIGHT_LIMIT);
   const updateNodeFilters = (nextFilters: AssociationNodeFilterKey[]) => {
+    autoFocusedTrackRef.current = false;
     setHoverTrackFilter(null);
     setActiveNodeFilters(nextFilters);
     if (
@@ -262,12 +228,14 @@ export function CommercialOrbitView({
     }
   };
   const closeRiskView = () => {
+    autoFocusedTrackRef.current = false;
     setMapMode('associations');
     setHoverTrackFilter(null);
     setActiveNodeFilters([]);
     onSelectNode(null);
   };
   const openRiskView = () => {
+    autoFocusedTrackRef.current = false;
     setMapMode('risk');
     setHoverTrackFilter(null);
     setActiveNodeFilters([]);
@@ -275,6 +243,11 @@ export function CommercialOrbitView({
   };
   const revealNode = (nodeId: string | null, returnFocusTarget?: HTMLButtonElement) => {
     if (!nodeId) {
+      if (autoFocusedTrackRef.current) {
+        setActiveNodeFilters([]);
+        setHoverTrackFilter(null);
+        autoFocusedTrackRef.current = false;
+      }
       onSelectNode(null);
       return;
     }
@@ -286,9 +259,11 @@ export function CommercialOrbitView({
     if (groupKey === 'risk') {
       setMapMode('risk');
       setActiveNodeFilters([]);
-    } else {
+      autoFocusedTrackRef.current = false;
+    } else if (returnFocusTarget) {
       setMapMode('associations');
       setActiveNodeFilters([groupKeyToTrackFilter(groupKey)]);
+      autoFocusedTrackRef.current = true;
     }
     onSelectNode(nodeId);
   };
@@ -296,13 +271,15 @@ export function CommercialOrbitView({
   return (
     <section className="space-y-5">
       <section className="space-y-5">
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+        <div className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border-subtle)] px-5 py-3">
-            <div>
-              <h2 className="text-xl font-semibold tracking-tight">
-                {mapMode === 'risk' ? `${centerTerm} 风险与竞争关系图` : `${centerTerm} 品牌联想圈层图`}
-              </h2>
-              <OrbitMapReadingGuide mapMode={mapMode} />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-xl font-semibold tracking-tight">
+                  {mapMode === 'risk' ? `${centerTerm} 风险与竞争关系图` : `${centerTerm} 品牌联想圈层图`}
+                </h2>
+                <OrbitMapLegend mapMode={mapMode} />
+              </div>
               {isLivePreview ? (
                 <LiveExtractionStatusStrip
                   answerCount={liveStats.answerCount}
@@ -332,20 +309,14 @@ export function CommercialOrbitView({
                 riskCount={riskNodes.length}
                 onChange={(mode) => mode === 'risk' ? openRiskView() : closeRiskView()}
               />
-              <div className="flex flex-wrap justify-end gap-2 text-xs text-[var(--text-secondary)]">
-                <InfoPill label="有效回答" value={String(sampleAnswerCount(sampleScope) || '-')} />
-                <InfoPill label="有效平台" value={String(samplePlatformCount(sampleScope) || '-')} />
-              </div>
             </div>
           </div>
           <CommercialOrbitMap
             centerTerm={centerTerm}
             groups={mapMode === 'risk' ? (riskGroup ? [riskGroup] : []) : associationGroups}
             mapMode={mapMode}
-            viewMode={viewMode}
             riskNodes={riskNodes}
             showDefaultRiskNodes={showDefaultRiskNodes}
-            focusNode={focusNode}
             evidenceSamples={evidenceSamples}
             evidenceFindings={evidenceFindings}
             sourceAppendix={sourceAppendix}
@@ -364,6 +335,7 @@ export function CommercialOrbitView({
             onSelectNode={revealNode}
             onOpenRiskView={openRiskView}
             onExitRiskView={closeRiskView}
+            onStartRun={onStartRun}
             activeTrackFilter={activeTrackFilter}
             hoverTrackFilter={hoverTrackFilter}
           />
@@ -371,7 +343,6 @@ export function CommercialOrbitView({
             summary={prioritySummary}
             groups={groups}
             onSelectNode={revealNode}
-            onOpenRiskView={openRiskView}
           />
         </div>
       </section>
@@ -397,36 +368,106 @@ function LiveExtractionStatusStrip({
   currentStage?: string | null;
 }) {
   const cleanProgress = cleanWorkflowProgressMessage(progressMessage);
-  const stageLabel = currentStage ? currentStage.toUpperCase() : 'A4';
-  const steps = [
-    { label: '目标平台', value: targetPlatforms.length ? `${targetPlatforms.length} 个` : '读取中', active: targetPlatforms.length > 0 },
-    { label: `${stageLabel} 抓取`, value: cleanProgress || '进行中', active: true },
-    { label: '回答入库', value: answerCount ? `${answerCount} 条` : '等待首条', active: answerCount > 0 },
-    { label: '抽取事件', value: eventCount ? `${eventCount} 条` : '等待事件', active: eventCount > 0 },
-    { label: '实体信号', value: signalCount ? `${signalCount} 个` : '等待信号', active: signalCount > 0 },
-    { label: '图谱入轨', value: nodeCount ? `${nodeCount} 个节点` : '等待节点', active: nodeCount > 0 },
-    { label: '校准收束', value: eventCount ? '抓完后确认' : '排队中', active: false },
+  const normalizedStage = String(currentStage || '').trim().toUpperCase();
+  const activeStepIndex = normalizedStage === 'A5'
+    ? 5
+    : normalizedStage === 'A4'
+      ? nodeCount > 0
+        ? 4
+        : signalCount > 0 || eventCount > 0
+          ? 3
+          : answerCount > 0
+            ? 2
+            : 1
+      : 0;
+  const stepContent: Array<{
+    label: string;
+    value: string;
+  }> = [
+    {
+      label: '运行配置',
+      value: targetPlatforms.length ? `${targetPlatforms.length} 个平台已就绪` : '读取运行配置',
+    },
+    {
+      label: '平台抓取',
+      value: cleanProgress || '正在获取平台回答',
+    },
+    {
+      label: '回答入库',
+      value: answerCount ? `${answerCount} 条已保存` : '等待首条回答',
+    },
+    {
+      label: '实体抽取',
+      value: signalCount ? `${signalCount} 个信号 / ${eventCount} 条事件` : '等待可抽取答案',
+    },
+    {
+      label: '图谱入轨',
+      value: nodeCount ? `${nodeCount} 个节点已出现` : '等待实体信号',
+    },
+    {
+      label: '校准收束',
+      value: normalizedStage === 'A5' ? '正在确认最终轨道' : '抓取完成后确认轨道',
+    },
   ];
+  const steps = stepContent.map((step, index) => ({
+    ...step,
+    state: index < activeStepIndex
+      ? 'complete' as const
+      : index === activeStepIndex
+        ? 'active' as const
+        : 'pending' as const,
+  }));
 
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--brand-border)] bg-[var(--brand-bg)] px-3 py-2 text-xs">
-      <span className="inline-flex items-center gap-2 font-semibold text-[var(--brand-primary)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand-primary)] shadow-[0_0_0_5px_rgba(31,122,107,0.10)]" />
-        实时入轨中
-      </span>
-      {steps.map((step) => (
+    <div className="mt-4 overflow-x-auto border-y border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1 py-3">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <span className="text-xs font-semibold text-[var(--text-primary)]">本轮进度</span>
+        <span className="text-xs text-[var(--text-tertiary)]">节点为阶段产物，最终轨道以校准结果为准</span>
+      </div>
+      <ol className="relative mt-3 grid min-w-[900px] grid-cols-6" aria-label="实时抓取与图谱生成流程">
         <span
-          key={step.label}
-          className="inline-flex items-center gap-1.5 rounded-full border bg-[var(--bg-primary)] px-2.5 py-1"
-          style={{
-            borderColor: step.active ? 'var(--brand-border)' : 'var(--border-subtle)',
-            color: step.active ? 'var(--brand-primary)' : 'var(--text-tertiary)',
-          }}
-        >
-          <span>{step.label}</span>
-          <span className="font-semibold">{step.value}</span>
-        </span>
-      ))}
+          aria-hidden="true"
+          data-amway-live-flow-track="base"
+          className="absolute top-3 h-px bg-[var(--border-strong)]"
+          style={{ left: '8.333%', right: '8.333%' }}
+        />
+        <span
+          aria-hidden="true"
+          data-amway-live-flow-track="progress"
+          className="absolute top-3 h-px bg-[var(--text-secondary)] transition-[width] duration-300"
+          style={{ left: '8.333%', width: `${activeStepIndex * 16.667}%` }}
+        />
+        {steps.map((step, index) => {
+          const complete = step.state === 'complete';
+          const active = step.state === 'active';
+          return (
+            <li
+              key={step.label}
+              className="relative z-10 flex min-w-0 flex-col items-center px-2 text-center"
+              aria-current={active ? 'step' : undefined}
+            >
+              <span
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold"
+                style={{
+                  borderColor: active ? 'var(--brand-primary)' : complete ? 'var(--text-secondary)' : 'var(--border-strong)',
+                  background: complete ? 'var(--text-secondary)' : 'var(--bg-primary)',
+                  color: complete ? 'var(--bg-primary)' : active ? 'var(--brand-primary)' : 'var(--text-tertiary)',
+                }}
+              >
+                {complete ? <Check size={13} strokeWidth={2.2} /> : index + 1}
+              </span>
+              <div className="mt-2 min-w-0 w-full">
+                <div className={`text-xs font-semibold ${active ? 'text-[var(--brand-primary)]' : 'text-[var(--text-primary)]'}`}>
+                  {step.label}
+                </div>
+                <div className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]" title={step.value}>
+                  {step.value}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
@@ -435,12 +476,10 @@ function PriorityFocusStrip({
   summary,
   groups,
   onSelectNode,
-  onOpenRiskView,
 }: {
   summary?: OntologyAssociationCirclePrioritySummary | null;
   groups: AssociationMapGroup[];
   onSelectNode: (nodeId: string | null, returnFocusTarget?: HTMLButtonElement) => void;
-  onOpenRiskView: () => void;
 }) {
   const fallbackRiskGroup = groups.find((group) => group.key === 'risk')?.nodes || [];
   const fallbackRisks = fallbackRiskGroup.filter((node) => !isCompetitorNode(node));
@@ -463,7 +502,7 @@ function PriorityFocusStrip({
   const hasItems = riskItems.length || competitorItems.length || opportunityItems.length;
   if (!hasItems) return null;
   return (
-    <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-5 py-4">
+    <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-5 py-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-xs font-medium text-[var(--text-tertiary)]">本周先看</div>
@@ -471,15 +510,6 @@ function PriorityFocusStrip({
             按证据量、平台覆盖和关系性质排序。其他节点保留在图谱里作为复测背景。
           </p>
         </div>
-        {riskItems.length ? (
-          <button
-            type="button"
-            onClick={onOpenRiskView}
-            className="rounded-full border border-[var(--error)] bg-[var(--bg-primary)] px-3 py-1 text-xs font-semibold text-[var(--error)] hover:bg-[var(--bg-secondary)]"
-          >
-            查看风险关系
-          </button>
-        ) : null}
       </div>
       <div className="grid gap-3 xl:grid-cols-3">
         <PriorityColumn
@@ -538,7 +568,7 @@ function PriorityColumn({
             key={`${title}-${item.node_id || item.term || index}`}
             type="button"
             onClick={(event) => item.node_id && onSelectNode(item.node_id, event.currentTarget)}
-            className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-left transition hover:border-[var(--brand-border)] hover:bg-[var(--brand-bg)]"
+            className="amway-card-interactive w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-left hover:border-[var(--brand-border)] hover:bg-[var(--brand-bg)]"
           >
             <div className="flex items-center justify-between gap-2">
               <span className="min-w-0 truncate text-sm font-semibold">
@@ -618,26 +648,65 @@ function cleanWorkflowProgressMessage(value?: string | null): string {
     .slice(0, 56);
 }
 
-function OrbitMapReadingGuide({ mapMode }: { mapMode: AssociationMapMode }) {
-  if (mapMode === 'risk') {
-    return (
-      <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
-        <OrbitGuidePill label="风险中心" text="旧认知和争议入口" tone="risk" />
-        <OrbitGuidePill label="连线" text="看它如何回到品牌" />
-        <OrbitGuidePill label="证据" text="点击节点查看问题、平台和回答摘录" />
-      </div>
-    );
+function OrbitMapLegend({ mapMode }: { mapMode: AssociationMapMode }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [prevMapMode, setPrevMapMode] = useState(mapMode);
+  if (prevMapMode !== mapMode) {
+    setPrevMapMode(mapMode);
+    if (open) setOpen(false);
   }
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [open]);
   return (
-    <div className="mt-2 flex max-w-5xl flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
-      <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5">
-        <OrbitGuidePill label="稳定" text="已绑定" tone="strong" />
-        <OrbitGuidePill label="机会" text="可拉近" tone="growth" />
-        <OrbitGuidePill label="观察" text="待补证" tone="story" />
-        <OrbitGuidePill label="战略" text="方形" tone="strong" marker="square" />
-        <OrbitGuidePill label="回答" text="圆形" marker="circle" />
-        <OrbitGuidePill label="大小" text="节点出现量" marker="scale" />
-      </div>
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={open ? '收起图例' : '查看图例'}
+        onClick={() => setOpen((current) => !current)}
+        className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition ${
+          open
+            ? 'border-[var(--brand-border)] bg-[var(--brand-bg)] text-[var(--brand-primary)]'
+            : 'border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-tertiary)] hover:border-[var(--brand-border)] hover:text-[var(--brand-primary)]'
+        }`}
+      >
+        <Info size={12} strokeWidth={2} aria-hidden="true" />
+        图例
+      </button>
+      {open ? (
+        <div className="animate-scale-in absolute left-0 top-[calc(100%+8px)] z-40 w-max max-w-[min(560px,calc(100vw-48px))] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-3 shadow-lg">
+          {mapMode === 'risk' ? (
+            <div className="flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+              <OrbitGuidePill label="风险中心" text="旧认知和争议入口" tone="risk" />
+              <OrbitGuidePill label="连线" text="看它如何回到品牌" />
+              <OrbitGuidePill label="证据" text="点击节点查看问题、平台和回答摘录" />
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+              <OrbitGuidePill label="稳定" text="已绑定" tone="strong" />
+              <OrbitGuidePill label="机会" text="可拉近" tone="growth" />
+              <OrbitGuidePill label="观察" text="待补证" tone="story" />
+              <OrbitGuidePill label="战略" text="方形" tone="strong" marker="square" />
+              <OrbitGuidePill label="回答" text="圆形" marker="circle" />
+              <OrbitGuidePill label="大小" text="节点出现量" marker="scale" />
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -715,7 +784,7 @@ function AssociationNodeFilterBar({
         onClick={() => onChange([])}
         className={`rounded-full border px-2.5 py-1 font-medium transition ${
           allActive
-            ? 'border-[var(--brand-border)] bg-[var(--brand-bg)] text-[var(--brand-primary)]'
+            ? 'border-[var(--brand-border)] bg-[var(--bg-primary)] text-[var(--text-primary)]'
             : 'border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-secondary)] hover:border-[var(--brand-border)] hover:text-[var(--brand-primary)]'
         }`}
       >
@@ -742,7 +811,11 @@ function AssociationNodeFilterBar({
                 ? 'bg-[var(--bg-primary)]'
                 : 'border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-secondary)] hover:border-[var(--brand-border)] hover:text-[var(--brand-primary)]'
             }`}
-            style={active || previewed ? { borderColor: color, color } : undefined}
+            style={active
+              ? { borderColor: color, color, boxShadow: `inset 0 0 0 1px ${color}` }
+              : previewed
+                ? { borderColor: color, color, borderStyle: 'dashed' }
+                : undefined}
           >
             <span className="h-2 w-2 rounded-full" style={{ background: color }} />
             {option.label} {option.count}
@@ -769,7 +842,7 @@ function AssociationMapModeControl({
         type="button"
         aria-pressed={mode === 'associations'}
         onClick={() => onChange('associations')}
-        className={`inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition duration-200 ease-out ${mode === 'associations' ? 'bg-[var(--bg-primary)] text-[var(--brand-primary)] shadow-sm' : 'text-[var(--text-secondary)]'}`}
+        className={`inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition duration-200 ease-out ${mode === 'associations' ? 'bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-secondary)]'}`}
       >
         <Orbit size={14} strokeWidth={1.8} />
         联想总览
@@ -835,10 +908,8 @@ function CommercialOrbitMap({
   centerTerm,
   groups,
   mapMode,
-  viewMode,
   riskNodes,
   showDefaultRiskNodes,
-  focusNode,
   evidenceSamples,
   evidenceFindings,
   sourceAppendix,
@@ -853,16 +924,15 @@ function CommercialOrbitMap({
   onSelectNode,
   onOpenRiskView,
   onExitRiskView,
+  onStartRun,
   activeTrackFilter,
   hoverTrackFilter,
 }: {
   centerTerm: string;
   groups: AssociationMapGroup[];
   mapMode: AssociationMapMode;
-  viewMode: AssociationMapViewMode;
   riskNodes: OntologyAssociationCircleNode[];
   showDefaultRiskNodes: boolean;
-  focusNode: OntologyAssociationCircleNode | null;
   evidenceSamples: OntologyAssociationCircleEvidence[];
   evidenceFindings: OntologyAssociationCircleEvidenceFinding[];
   sourceAppendix: OntologyAssociationCircleSourceAppendixItem[];
@@ -877,6 +947,7 @@ function CommercialOrbitMap({
   onSelectNode: (nodeId: string | null) => void;
   onOpenRiskView: () => void;
   onExitRiskView: () => void;
+  onStartRun?: () => void;
   activeTrackFilter: AssociationNodeFilterKey | null;
   hoverTrackFilter: AssociationNodeFilterKey | null;
 }) {
@@ -902,9 +973,8 @@ function CommercialOrbitMap({
         collisionXScale,
         collisionMinGap,
       );
-  const focusNodeId = selectedNodeId || focusNode?.node_id || null;
   const isRiskMode = mapMode === 'risk';
-  const isSpatialMode = !isRiskMode && viewMode === 'spatial';
+  const showStartCta = !isRiskMode && !isLivePreview && entries.length === 0 && Boolean(onStartRun);
   const trackBandFocusFilter = activeTrackFilter || hoverTrackFilter;
   const focusTrackFilter = activeTrackFilter;
   const focusGroupKey = trackFilterToGroupKey(activeTrackFilter);
@@ -936,14 +1006,9 @@ function CommercialOrbitMap({
   const [keyboardNodeId, setKeyboardNodeId] = useState<string | null>(null);
   const keyboardEntryIds = entries
     .filter((entry) => {
-      const focused = entry.node.node_id === selectedFocusNodeId;
       const trackFocused = orbitFocusedEntry(entry, focusGroupKey);
       const mutedByTrack = Boolean(focusTrackFilter) && !trackFocused;
-      const mutedByOverview = !isRiskMode
-        && !focusTrackFilter
-        && !focused
-        && !overviewHighlightedNodeIds.has(entry.node.node_id);
-      return !mutedByTrack && !mutedByOverview;
+      return !mutedByTrack;
     })
     .map((entry) => entry.node.node_id);
   const activeKeyboardNodeId = keyboardEntryIds.includes(keyboardNodeId || '')
@@ -988,10 +1053,7 @@ function CommercialOrbitMap({
     <div
       ref={mapRef}
       data-amway-orbit-map="true"
-      className={`amway-orbit-surface relative min-h-[380px] overflow-hidden lg:min-h-[640px] 2xl:min-h-[680px] ${
-        isSpatialMode ? 'isolate' : ''
-      }`}
-      style={isSpatialMode ? { perspective: '1200px' } : undefined}
+      className="amway-orbit-surface relative min-h-[380px] overflow-hidden lg:min-h-[640px] 2xl:min-h-[680px]"
     >
       <OrbitLiveAnimationStyle />
       <p className="sr-only">图谱重点节点可用方向键、Home 和 End 键移动。</p>
@@ -1027,26 +1089,6 @@ function CommercialOrbitMap({
                 strokeWidth={entry.node.node_id === selectedFocusNodeId ? 0.4 : 0.17}
                 strokeDasharray={entry.node.node_id === selectedFocusNodeId ? undefined : '0.8 1.2'}
                 opacity={entry.node.node_id === selectedFocusNodeId ? 0.82 : 0.12}
-              />
-            ))}
-          </>
-        ) : isSpatialMode ? (
-          <>
-            <ellipse cx="50" cy="53" rx="21" ry="7.2" fill="var(--brand-bg)" fillOpacity="0.48" stroke="var(--brand-border)" strokeWidth="0.2" />
-            <ellipse cx="50" cy="53" rx="24" ry="8.4" fill="none" stroke="var(--brand-border)" strokeOpacity="0.7" strokeWidth="0.18" />
-            <ellipse cx="50" cy="53" rx="35" ry="12.3" fill="none" stroke="var(--border-subtle)" strokeWidth="0.15" strokeDasharray="0.8 1" />
-            <ellipse cx="50" cy="53" rx="47" ry="16.8" fill="none" stroke="var(--border-subtle)" strokeWidth="0.15" />
-            <line x1="18" y1="53" x2="82" y2="53" stroke="var(--border-subtle)" strokeWidth="0.1" opacity="0.54" />
-            {entries.map((entry) => (
-              <line
-                key={`spatial-ray-${entry.node.node_id}`}
-                x1="50"
-                y1="53"
-                x2={entry.left}
-                y2={entry.top}
-                stroke={entry.node.node_id === focusNodeId ? selectedRelationLineColor(entry.groupKey) : 'var(--border-subtle)'}
-                strokeWidth={entry.node.node_id === focusNodeId ? 0.3 : 0.08}
-                opacity={entry.node.node_id === focusNodeId ? 0.6 : 0.2}
               />
             ))}
           </>
@@ -1097,14 +1139,26 @@ function CommercialOrbitMap({
       </svg>
       <button
         type="button"
-        onClick={isRiskMode ? onExitRiskView : () => onSelectNode(null)}
-        className={`absolute z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border-2 border-[var(--brand-primary)] bg-[var(--brand-bg)] text-center shadow-sm ${
-          isRiskMode ? 'top-[30%] h-32 w-32' : isSpatialMode ? 'top-[53%] h-40 w-40' : 'top-1/2 h-40 w-40'
+        onClick={showStartCta ? onStartRun : isRiskMode ? onExitRiskView : () => onSelectNode(null)}
+        title={showStartCta ? '设置并运行图谱采集' : isRiskMode ? '退出风险聚焦' : '点击取消节点选中'}
+        className={`absolute z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border-2 border-[var(--brand-primary)] bg-[var(--brand-bg)] text-center shadow-sm transition duration-200 ease-out hover:border-[var(--brand-hover)] hover:shadow-[0_0_0_8px_var(--brand-bg)] ${
+          isRiskMode ? 'top-[30%] h-32 w-32' : 'top-1/2 h-40 w-40'
         }`}
         style={{ left: `${canvasWidthPercent / 2}%` }}
       >
-        <span className="text-xs text-[var(--brand-primary)]">中心品牌</span>
-        <span className="mt-2 text-3xl font-semibold tracking-tight text-[var(--brand-primary)]">{centerTerm}</span>
+        {showStartCta ? (
+          <>
+            <span className="amway-orbit-start-cta flex h-14 w-14 items-center justify-center rounded-full bg-[var(--brand-primary)] text-[var(--brand-contrast)]">
+              <Play size={22} fill="currentColor" aria-hidden="true" />
+            </span>
+            <span className="mt-2.5 text-sm font-semibold text-[var(--brand-primary)]">开始运行</span>
+          </>
+        ) : (
+          <>
+            <span className="text-xs text-[var(--brand-primary)]">中心品牌</span>
+            <span className="mt-2 text-3xl font-semibold tracking-tight text-[var(--brand-primary)]">{centerTerm}</span>
+          </>
+        )}
       </button>
       {isRiskMode ? (
         <>
@@ -1133,14 +1187,13 @@ function CommercialOrbitMap({
             <button
               type="button"
               onClick={onOpenRiskView}
-              className={`absolute left-[15%] top-[74%] flex h-24 w-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border-2 border-[var(--error)] bg-[var(--bg-primary)] text-center text-[var(--error)] shadow-sm transition hover:scale-105 hover:bg-[var(--bg-secondary)] ${
-                focusTrackFilter ? 'z-10 opacity-25 saturate-50' : 'z-50 opacity-100'
+              className={`absolute left-[15%] top-[74%] flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full border border-[var(--error)] bg-[var(--bg-elevated)] px-3.5 py-2 text-xs font-semibold text-[var(--error)] shadow-sm transition duration-200 ease-out hover:-translate-y-[54%] hover:shadow-md ${
+                focusTrackFilter ? 'z-10 opacity-25 saturate-50' : 'z-30 opacity-100'
               }`}
               title={`聚焦查看 ${riskNodes.length} 个风险与竞争节点`}
             >
-              <span className="text-xs">风险与竞争</span>
-              <span className="mt-1 text-2xl font-semibold">{riskNodes.length}</span>
-              <span className="mt-1 text-[11px] text-[var(--text-tertiary)]">聚焦查看</span>
+              <ShieldAlert size={13} strokeWidth={2} aria-hidden="true" />
+              风险与竞争 {riskNodes.length}
             </button>
           ) : null}
         </>
@@ -1176,9 +1229,8 @@ function CommercialOrbitMap({
           && !focusTrackFilter
           && !focused
           && !overviewHighlightedNodeIds.has(entry.node.node_id);
-        const depth = isSpatialMode ? spatialDepthForEntry(entry) : 1;
         const origin = nodeOriginRead(entry.node, strategyTerms);
-        const position = orbitScreenPosition(entry, associationXScale, isRiskMode || isSpatialMode);
+        const position = orbitScreenPosition(entry, associationXScale, isRiskMode);
         const labelVisible = focusGroupKey
           ? focusedTrackLabelNodeIds.has(entry.node.node_id)
           : entry.labelPriority;
@@ -1188,8 +1240,8 @@ function CommercialOrbitMap({
             type="button"
             data-amway-orbit-node="true"
             data-node-id={entry.node.node_id}
-            tabIndex={mutedByTrack || mutedByOverview || entry.node.node_id !== activeKeyboardNodeId ? -1 : 0}
-            aria-hidden={mutedByTrack || mutedByOverview ? true : undefined}
+            tabIndex={mutedByTrack || entry.node.node_id !== activeKeyboardNodeId ? -1 : 0}
+            aria-hidden={mutedByTrack ? true : undefined}
             onFocus={(event) => {
               selectedNodeTriggerRef.current = event.currentTarget;
               setKeyboardNodeId(entry.node.node_id);
@@ -1221,7 +1273,7 @@ function CommercialOrbitMap({
                   ? 'ring-2 ring-[var(--error)] ring-offset-2 ring-offset-[var(--bg-secondary)]'
                   : 'ring-2 ring-[var(--brand-border)] ring-offset-2 ring-offset-[var(--bg-secondary)]'
                 : ''
-            } ${mutedByTrack || mutedByOverview ? 'pointer-events-none' : ''} ${isLivePreview ? 'amway-orbit-live-node' : ''}`}
+            } ${mutedByTrack ? 'pointer-events-none' : ''} ${isLivePreview ? 'amway-orbit-live-node' : ''}`}
             style={{
               left: `${position.left * canvasWidthPercent / 100}%`,
               top: `${position.top}%`,
@@ -1229,12 +1281,13 @@ function CommercialOrbitMap({
                 ? 10
                 : selected
                   ? 40
-                  : isSpatialMode
-                    ? Math.round(20 + entry.top)
-                    : 30,
-              transform: `translate(-50%, -50%) scale(${depth * (selected ? 1.06 : 1)})`,
+                  : 30,
+              transform: `translate(-50%, -50%) scale(${selected ? 1.06 : 1})`,
               animationDelay: isLivePreview ? `${nodeAnimationDelay(entry.node.node_id)}ms` : undefined,
-              opacity: mutedByTrack ? 0.14 : mutedByOverview ? 0.2 : 1,
+              opacity: mutedByTrack ? 0.14 : mutedByOverview ? 0.12 : 1,
+              ...(selected && !isRiskMode
+                ? { '--tw-ring-color': orbitToneColor(entry.groupKey) } as CSSProperties
+                : {}),
             }}
             title={`${entry.node.term}：${relationshipRead(entry.node).headline}`}
           >
@@ -1251,13 +1304,11 @@ function CommercialOrbitMap({
                 opacity: focused || trackFocused ? 1 : 0.76,
                 boxShadow: focused
                   ? `0 0 0 8px ${orbitHaloColor(entry.groupKey)}`
-                  : isSpatialMode
-                    ? `0 ${Math.max(4, depth * 7)}px ${Math.max(10, depth * 13)}px rgba(38, 45, 43, 0.16)`
-                    : undefined,
+                  : undefined,
               }}
             />
             <span
-              className={`amway-orbit-node-label absolute left-1/2 top-[calc(100%+6px)] inline-flex min-w-max -translate-x-1/2 items-center gap-1.5 rounded-full border bg-[var(--bg-primary)] px-2.5 py-1 text-xs font-medium shadow-sm transition duration-200 ${
+              className={`amway-orbit-node-label absolute left-1/2 top-[calc(100%+6px)] inline-flex min-w-max -translate-x-1/2 items-center gap-1.5 rounded-full border bg-[var(--bg-elevated)] px-2.5 py-1 text-xs font-medium shadow-sm transition duration-200 ${
                 !mutedByTrack && (focused || labelVisible)
                   ? 'opacity-100'
                   : 'opacity-0 group-hover:opacity-100'
@@ -1282,11 +1333,7 @@ function CommercialOrbitMap({
             </span>
           </button>
         );
-      }) : (
-        <div className="absolute left-1/2 top-[62%] w-[min(520px,calc(100%-48px))] -translate-x-1/2 text-center text-sm leading-6 text-[var(--text-secondary)]">
-          还没有外围节点。开始抓取并完成解析后，图谱会收录回答中出现的真实联想。
-        </div>
-      )}
+      }) : null}
     </div>
   );
 }
@@ -1339,8 +1386,28 @@ function OrbitLiveAnimationStyle() {
       .amway-orbit-live-node {
         animation: amwayOrbitNodeIn 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }
+      @keyframes amwayOrbitStartPulse {
+        0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand-primary) 26%, transparent); }
+        55% { box-shadow: 0 0 0 12px transparent; }
+      }
+      .amway-orbit-start-cta {
+        animation: amwayOrbitStartPulse 2.4s ease-out infinite;
+      }
       .amway-orbit-node:focus .amway-orbit-node-label {
         opacity: 1 !important;
+      }
+      .amway-orbit-node::after {
+        content: "";
+        position: absolute;
+        inset: 3px;
+        border-radius: 9999px;
+        border: 1.5px solid transparent;
+        transition: border-color 150ms ease-out;
+        pointer-events: none;
+      }
+      .amway-orbit-node:hover::after,
+      .amway-orbit-node:focus-visible::after {
+        border-color: var(--border-strong);
       }
       @media (prefers-reduced-motion: reduce) {
         .amway-orbit-live-node {
@@ -1380,10 +1447,12 @@ function OrbitTrackBand({
         ry={ry}
         fill="none"
         stroke={color}
-        strokeOpacity={faded ? 0.025 : active ? 0.18 : 0.07}
         strokeWidth={strokeWidth}
         pointerEvents="none"
-        style={{ transition: 'stroke-opacity 220ms cubic-bezier(0.22, 1, 0.36, 1)' }}
+        style={{
+          strokeOpacity: faded ? 0.025 : active ? 0.18 : 'var(--amway-track-band, 0.07)',
+          transition: 'stroke-opacity 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+        }}
       />
       <ellipse
         cx="50"
@@ -1428,20 +1497,23 @@ function LiveExtractionMapPanel({
   samples: OrbitEvidenceItem[];
 }) {
   const cleanProgress = cleanWorkflowProgressMessage(progressMessage);
-  const stageLabel = currentStage ? currentStage.toUpperCase() : 'A4';
+  const stageLabel = String(currentStage || '').trim().toUpperCase() === 'A5'
+    ? '图谱校准中'
+    : '平台抓取中';
   return (
-    <aside className="absolute left-5 top-5 z-40 w-[min(420px,calc(100%-40px))] rounded-2xl border border-[var(--border-subtle)] bg-[rgba(250,248,242,0.92)] p-4 shadow-sm">
+    <aside className="absolute left-5 top-5 z-50 w-[min(420px,calc(100%-40px))] rounded-xl border border-[var(--border-strong)] bg-[var(--bg-elevated)]/95 p-4 shadow-md backdrop-blur-sm">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-medium text-[var(--brand-primary)]">{stageLabel} 抓取中</div>
+          <div className="text-xs font-medium text-[var(--text-tertiary)]">{stageLabel}</div>
           <div className="mt-1 text-sm font-semibold text-[var(--text-primary)]">答案入库后立即抽词，节点同步进入图谱</div>
         </div>
-        <div className="rounded-full border border-[var(--brand-border)] bg-[var(--brand-bg)] px-2.5 py-1 text-xs font-semibold text-[var(--brand-primary)]">
+        <div className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)]">
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-primary)]" aria-hidden="true" />
           运行中
         </div>
       </div>
       {cleanProgress ? (
-        <div className="mt-3 rounded-xl border border-[var(--brand-border)] bg-[var(--brand-bg)] px-3 py-2 text-xs font-semibold text-[var(--brand-primary)]">
+        <div className="mt-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-xs font-medium text-[var(--text-secondary)]">
           当前进度：{cleanProgress}
         </div>
       ) : null}
@@ -1515,12 +1587,15 @@ function OrbitNodeInsightPanel({
   onClose: () => void;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const selectedNodeId = node?.node_id;
+  useEffect(() => {
+    if (selectedNodeId) closeButtonRef.current?.focus();
+  }, [selectedNodeId]);
   useEffect(() => {
     if (!node) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
-    closeButtonRef.current?.focus();
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [node, onClose]);
@@ -2228,12 +2303,6 @@ function nodeAnimationDelay(nodeId?: string) {
     hash = (hash * 31 + source.charCodeAt(index)) % 240;
   }
   return hash;
-}
-
-function spatialDepthForEntry(entry: CommercialOrbitEntry) {
-  const frontDepth = (entry.top - 38) / 54;
-  const evidenceDepth = Math.min(0.12, nodeEvidenceCount(entry.node) / 260);
-  return clampNumber(0.86 + frontDepth * 0.24 + evidenceDepth, 0.84, 1.16);
 }
 
 function nodeVisualSize(node: OntologyAssociationCircleNode, groupKey: AssociationMapGroupKey) {
@@ -3589,7 +3658,7 @@ export function AssociationReportPanel({
     : [];
   return (
     <section>
-      <article className="border-t-4 border-[var(--brand-primary)] bg-[var(--bg-primary)] px-6 py-7 sm:px-10 sm:py-10">
+      <article className="amway-surface border-t-4 border-[var(--brand-primary)] bg-[var(--bg-primary)] px-6 py-7 sm:px-10 sm:py-10">
         <header className="mx-auto max-w-[1040px] border-b border-[var(--border-subtle)] pb-7">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -3679,465 +3748,6 @@ export function AssociationReportPanel({
           />
         </div>
       </article>
-    </section>
-  );
-}
-
-export function AssociationTrackingPanel({
-  projection,
-  groups,
-  activeCenterTerm,
-}: {
-  projection: OntologyAssociationCircleProjection;
-  groups: AssociationMapGroup[];
-  activeCenterTerm: string;
-}) {
-  const nodes = projection.nodes || [];
-  const tracking = readTrackingProjection(projection);
-  const trackingStatus = String(tracking?.status || '');
-  const trackingStatusLabel = String(tracking?.status_label || '首期基线');
-  const actions = projection.association_actions || [];
-  const riskNodes = groups.find((group) => group.key === 'risk')?.nodes || [];
-  const competitorNodes = riskNodes.filter(isCompetitorNode);
-  const pureRiskNodes = riskNodes.filter((node) => !isCompetitorNode(node));
-  const growthNodes = groups.find((group) => group.key === 'growth')?.nodes || [];
-  const storyNodes = groups.find((group) => group.key === 'story')?.nodes || [];
-
-  return (
-    <section className="space-y-5">
-      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="text-xs font-medium text-[var(--text-tertiary)]">下一轮追踪</div>
-            <h2 className="mt-2 text-2xl font-semibold">{activeCenterTerm} 联想变化追踪</h2>
-            <p className="mt-2 max-w-4xl text-sm leading-7 text-[var(--text-secondary)]">
-              每一轮抓取都会形成一个可比较版本。追踪页关注节点是否被拉近、风险是否下降、平台偏好是否改变。
-            </p>
-          </div>
-          <InfoPill
-            label="当前状态"
-            value={trackingStatusLabel}
-            tone={trackingStatus === 'baseline' ? 'warning' : 'brand'}
-          />
-        </div>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          <TrackingMetric title="本轮节点" value={String(nodes.length)} text="本轮可追踪的联想节点总数" />
-          <TrackingMetric title="机会节点" value={String(growthNodes.length)} text="机会轨，观察是否继续靠近" />
-          <TrackingMetric title="观察节点" value={String(storyNodes.length)} text="观察轨，优先补证据" />
-          <TrackingMetric title="风险认知" value={String(pureRiskNodes.length)} text="下轮观察是否被压降" tone="risk" />
-          <TrackingMetric title="竞品参照" value={String(competitorNodes.length)} text="下轮观察竞争场景是否迁移" />
-          <TrackingMetric title="行动闭环" value={String(actions.length)} text="可进入复测的行动建议" />
-        </div>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-          <h3 className="text-xl font-semibold">本轮基线</h3>
-          <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-            没有上一轮时，先把当前强联想、机会、新叙事和风险作为基线。下一轮会观察哪些正向节点被拉近，哪些风险认知被压低。
-          </p>
-          <div className="mt-5 space-y-3">
-            {groups.map((group) => (
-              <div key={group.key} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="font-semibold">{group.title}</div>
-                  <div className="text-sm text-[var(--text-tertiary)]">{group.nodes.length} 个节点</div>
-                </div>
-                <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-                  {group.nodes.length ? group.nodes.slice(0, 5).map((node) => `${node.term} ${scoreText(node.gravity_score ?? node.closeness_score)}`).join(' / ') : group.emptyText}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-5">
-            <h3 className="text-lg font-semibold">下轮重点看什么</h3>
-            <div className="mt-4 space-y-3 text-sm leading-6 text-[var(--text-secondary)]">
-              <TrackingRule title="机会是否拉近" text="增长机会和新叙事是否更稳定地回到中心品牌，回答数量和平台共识是否增加。" />
-              <TrackingRule title="风险是否压降" text="风险旧认知是否减少出现，是否被正向解释路径替代。" />
-              <TrackingRule title="平台是否转向" text="不同平台是否从旧认知转向健康、社群、抗衰和生活方式路径。" />
-            </div>
-          </section>
-          <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-5">
-            <h3 className="text-lg font-semibold">行动复测</h3>
-            <div className="mt-4 space-y-3">
-              {actions.length ? actions.slice(0, 4).map((action) => (
-                <div key={action.id} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-                  <div className="text-sm font-semibold">{action.title || action.node_term || '圈层行动'}</div>
-                  <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">
-                    {commercialReportCopy(action.review_criteria || action.expected_impact || '下一轮复测该节点是否发生变化。')}
-                  </p>
-                  <div className="mt-3 grid gap-2 text-xs leading-5 text-[var(--text-tertiary)]">
-                    {action.target_scene ? <div>场景：{action.target_scene}</div> : null}
-                    {action.target_platforms?.length ? <div>平台：{action.target_platforms.slice(0, 3).join('、')}</div> : null}
-                    {action.goal_metric ? <div>目标：{action.goal_metric}</div> : null}
-                  </div>
-                </div>
-              )) : (
-                <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-6 text-sm leading-6 text-[var(--text-secondary)]">
-                  暂无行动建议。生成行动后，这里会展示下一轮复测标准。
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-export function QuestionBankPanel({
-  home,
-  sampleScope,
-  questionBank,
-  uploadedQuestions,
-  uploadedQuestionSource,
-  uploadError,
-  isReadingUpload,
-  onUploadFileChange,
-  onStart,
-}: {
-  home?: DashboardHomeData | null;
-  sampleScope: Record<string, unknown>;
-  questionBank: OntologyAssociationCircleQuestion[];
-  uploadedQuestions: UploadedAssociationQuestion[];
-  uploadedQuestionSource: string | null;
-  uploadError: string | null;
-  isReadingUpload: boolean;
-  onUploadFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  onStart: () => void;
-}) {
-  const [questionPage, setQuestionPage] = useState(0);
-  const preview = home?.latest_report?.question_preview || [];
-  const historicalQuestions = questionBank
-    .map((question, index) => normalizeAssociationQuestionForReview(question, index))
-    .filter((question): question is UploadedAssociationQuestion => Boolean(question));
-  const displayedQuestions: UploadedAssociationQuestion[] = uploadedQuestions.length
-    ? uploadedQuestions
-    : historicalQuestions.length
-      ? historicalQuestions
-      : preview.map((question, index) => ({
-        id: `report_preview_${index + 1}`,
-        text: question,
-        metadata_status: '来自最近报告',
-        source: 'latest_report_preview',
-      }));
-  const questionPageCount = Math.max(1, Math.ceil(displayedQuestions.length / QUESTION_PAGE_SIZE));
-  const safeQuestionPage = Math.min(questionPage, questionPageCount - 1);
-  const questionStartIndex = safeQuestionPage * QUESTION_PAGE_SIZE;
-  const pagedQuestions = displayedQuestions.slice(
-    questionStartIndex,
-    questionStartIndex + QUESTION_PAGE_SIZE,
-  );
-  const reviewQuestionCount = uploadedQuestions.length || historicalQuestions.length;
-  const taggedQuestionCount = displayedQuestions.filter((question) => hasVisibleAssociationTags(question)).length;
-
-  return (
-    <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-2xl font-semibold">问题与样本</h2>
-          <p className="mt-2 text-sm text-[var(--text-secondary)]">问题需要带人群、场景、探针类型和机会点标签，后续抓取和解析都复用这些元数据。</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <QuestionUploadButton isReadingUpload={isReadingUpload} onUploadFileChange={onUploadFileChange} />
-          <button type="button" onClick={onStart} className="rounded-xl bg-[var(--brand-primary)] px-4 py-2 text-sm font-medium text-[var(--brand-contrast)]">
-            开始抓取并解析
-          </button>
-        </div>
-      </div>
-      {uploadError ? (
-        <div className="mt-4 rounded-xl border border-[var(--status-warning-bg)] bg-[var(--status-warning-bg)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
-          {uploadError}
-        </div>
-      ) : null}
-      <MetricGrid
-        rows={[
-          ['问题数量', String(uploadedQuestions.length || sampleQuestionCount(sampleScope))],
-          ['答案样本', String(sampleAnswerCount(sampleScope))],
-          ['有效平台', String(samplePlatformCount(sampleScope))],
-          ['关键标签覆盖', reviewQuestionCount ? `${taggedQuestionCount}/${reviewQuestionCount}` : '待生成'],
-        ]}
-      />
-      {uploadedQuestions.length ? (
-        <div className="mt-5 rounded-xl border border-[var(--brand-border)] bg-[var(--brand-bg)] px-4 py-3 text-sm leading-6 text-[var(--brand-primary)]">
-          已读取 {uploadedQuestions.length} 条上传问题{uploadedQuestionSource ? `：${uploadedQuestionSource}` : ''}。缺失标签会按安利圈层规则补标，并标记为待复核。
-        </div>
-      ) : historicalQuestions.length ? (
-        <div className="mt-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
-          已从最近一次圈层报告恢复 {historicalQuestions.length} 条问题。上传新问题后，本页会切换为本轮待抓取清单。
-        </div>
-      ) : null}
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-5">
-        <div>
-          <div className="text-sm font-semibold text-[var(--text-primary)]">题目审阅</div>
-          <div className="mt-1 text-xs text-[var(--text-tertiary)]">
-            {displayedQuestions.length
-              ? `显示 ${questionStartIndex + 1}-${Math.min(questionStartIndex + QUESTION_PAGE_SIZE, displayedQuestions.length)} / ${displayedQuestions.length}`
-              : '暂无题目'}
-          </div>
-        </div>
-        {questionPageCount > 1 ? (
-          <div className="inline-flex items-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-1">
-            <button
-              type="button"
-              aria-label="上一页问题"
-              disabled={safeQuestionPage === 0}
-              onClick={() => setQuestionPage((page) => Math.max(0, page - 1))}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <span className="w-16 px-1 text-center text-xs font-medium text-[var(--text-tertiary)]">
-              {safeQuestionPage + 1} / {questionPageCount}
-            </span>
-            <button
-              type="button"
-              aria-label="下一页问题"
-              disabled={safeQuestionPage >= questionPageCount - 1}
-              onClick={() => setQuestionPage((page) => Math.min(questionPageCount - 1, page + 1))}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
-        ) : null}
-      </div>
-      <div className="mt-4 space-y-3">
-        {pagedQuestions.length ? pagedQuestions.map((question, index) => (
-          <div key={`${question.id}-${questionStartIndex + index}`} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 text-sm leading-6 text-[var(--text-secondary)]">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-medium text-[var(--text-primary)]">{question.text}</span>
-              <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 text-xs text-[var(--text-tertiary)]">
-                {displayQuestionMetadataStatus(question)}
-              </span>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--text-tertiary)]">
-              <span>人群：{question.audience_segment || '待补充'}</span>
-              <span>场景：{question.life_scene || '待补充'}</span>
-              <span>探针：{question.probe_type || '待补充'}</span>
-              <span>机会点：{question.opportunity_point || '待补充'}</span>
-            </div>
-          </div>
-        )) : (
-          <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-6 text-sm leading-6 text-[var(--text-secondary)]">
-            暂无问题预览。上传问题或生成问题矩阵后，这里展示入库问题和标签覆盖情况。
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-export function EvidenceWorkbenchPanel({
-  projection,
-  activeCenterTerm,
-}: {
-  projection: OntologyAssociationCircleProjection;
-  activeCenterTerm: string;
-}) {
-  const evidenceSamples = projection.evidence_samples || [];
-  const platformComparison = projection.platform_comparison || [];
-  const questionDefinition = projection.question_definition || buildQuestionDefinitionFallback(projection, activeCenterTerm);
-  const platformSourceSummary = projection.platform_source_summary || buildPlatformSourceSummaryFallback(projection);
-  const evidenceFindings = buildEvidenceFindingsFallback(projection);
-  const sourceAppendix = projection.source_appendix?.length
-    ? projection.source_appendix
-    : buildSourceAppendixFallback(evidenceSamples);
-  const analysisTrace = projection.analysis_tool_trace?.length
-    ? projection.analysis_tool_trace
-    : buildAnalysisTraceFallback(questionDefinition, platformSourceSummary, evidenceFindings);
-  const actions = projection.association_actions || [];
-  return (
-    <section className="space-y-5">
-      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6 sm:p-8">
-        <div className="text-xs font-medium text-[var(--text-tertiary)]">Evidence Workbench</div>
-        <h2 className="mt-2 text-3xl font-semibold leading-tight">证据与原文</h2>
-        <p className="mt-3 max-w-5xl text-sm leading-7 text-[var(--text-secondary)]">
-          这里把判断读数放回证据链：这一轮问了什么、哪些平台给了有效回答、哪些原文把节点带回品牌，以及下一轮应该复测什么。
-        </p>
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <EvidenceMetric title="问题边界" value={String(questionDefinition?.question_count || sampleQuestionCount(projection.sample_scope || {}) || '-')} text="上传或生成的问题数量" />
-          <EvidenceMetric title="有效回答" value={String(platformSourceSummary?.valid_answer_count || sampleAnswerCount(projection.sample_scope || {}) || '-')} text="进入圈层解析的回答" />
-          <EvidenceMetric title="平台来源" value={String(platformSourceSummary?.platform_count || samplePlatformCount(projection.sample_scope || {}) || '-')} text="有可读答案的平台" />
-          <EvidenceMetric title="证据节点" value={String(evidenceFindings.length || projection.nodes.length || '-')} text="能追溯到原文的判断" />
-        </div>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <article className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-          <div className="text-xs font-medium text-[var(--text-tertiary)]">判断步骤</div>
-          <h3 className="mt-2 text-2xl font-semibold">回答怎样进入圈层</h3>
-          <div className="mt-5 space-y-4">
-            {analysisTrace.length ? analysisTrace.slice(0, 6).map((trace, index) => (
-              <div key={trace.step || trace.title || index} className="grid grid-cols-[34px_minmax(0,1fr)] gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--brand-border)] bg-[var(--brand-bg)] text-sm font-semibold text-[var(--brand-primary)]">
-                  {index + 1}
-                </div>
-                <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-                  <div className="font-semibold">{trace.title || trace.step}</div>
-                  <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">{trace.summary}</p>
-                  {trace.outputs?.length ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {trace.outputs.slice(0, 6).map((output) => (
-                        <span key={output} className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 py-1 text-xs text-[var(--text-tertiary)]">
-                          {output}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            )) : (
-              <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-6 text-sm leading-6 text-[var(--text-secondary)]">
-                暂无分析轨迹。完成抓取和解析后，这里会展示题目扫描、平台核验、节点归并和行动合成。
-              </div>
-            )}
-          </div>
-        </article>
-
-        <aside className="space-y-5">
-          <article className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-            <div className="text-xs font-medium text-[var(--text-tertiary)]">问题范围</div>
-            <h3 className="mt-2 text-xl font-semibold">这轮题目覆盖了什么</h3>
-            {questionDefinition?.definition_sentence ? (
-              <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">{questionDefinition.definition_sentence}</p>
-            ) : (
-              <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">暂无题目定义。上传问题或生成问题矩阵后，报告会记录人群、场景、探针和机会点。</p>
-            )}
-            <div className="mt-4 grid gap-3">
-              <EvidenceScopeCard title="人群" items={questionDefinition?.audience_segments || []} />
-              <EvidenceScopeCard title="机会点" items={questionDefinition?.opportunity_points || []} />
-              <EvidenceScopeCard title="探针" items={questionDefinition?.probe_types || []} />
-            </div>
-          </article>
-
-          <article className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-            <div className="text-xs font-medium text-[var(--text-tertiary)]">平台来源</div>
-            <h3 className="mt-2 text-xl font-semibold">哪些平台贡献了样本</h3>
-            <div className="mt-4 space-y-3">
-              {(platformSourceSummary?.platforms?.length ? platformSourceSummary.platforms : platformComparison).slice(0, 6).map((item) => (
-                <div key={item.platform} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-semibold">{platformLabel(item.platform || '')}</span>
-                    {'valid_answer_count' in item ? (
-                      <span className="text-xs text-[var(--text-tertiary)]">{item.valid_answer_count || 0} 条有效</span>
-                    ) : null}
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-                    {item.answer_preference || '偏好待观察'}
-                  </p>
-                </div>
-              ))}
-              {!(platformSourceSummary?.platforms?.length || platformComparison.length) ? (
-                <div className="text-sm leading-6 text-[var(--text-secondary)]">暂无平台对比样本。</div>
-              ) : null}
-            </div>
-          </article>
-        </aside>
-      </div>
-
-      <article className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6 sm:p-8">
-        <div className="text-xs font-medium text-[var(--text-tertiary)]">节点证据</div>
-        <h3 className="mt-2 text-2xl font-semibold">每个判断回到哪条回答</h3>
-        <div className="mt-5 grid gap-4 lg:grid-cols-2">
-          {evidenceFindings.length ? evidenceFindings.slice(0, 8).map((finding) => (
-            <div key={finding.node_id || finding.node_term} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5">
-              <div className="flex flex-wrap items-center gap-2">
-                <h4 className="text-lg font-semibold">{commercialReportCopy(finding.node_term || '联想节点')}</h4>
-                {finding.business_tag ? (
-                  <span className="rounded-full border border-[var(--brand-border)] bg-[var(--brand-bg)] px-2 py-1 text-xs text-[var(--brand-primary)]">
-                    {finding.business_tag}
-                  </span>
-                ) : null}
-              </div>
-              <p className="mt-3 text-sm leading-7 text-[var(--text-primary)]">{evidenceFindingCopy(finding.claim, finding, projection.nodes)}</p>
-              <ul className="mt-3 space-y-1 text-xs leading-5 text-[var(--text-secondary)]">
-                {uniqueEvidenceFindingFacts(finding, projection.nodes, 3).map((fact) => (
-                  <li key={fact}>• {fact}</li>
-                ))}
-              </ul>
-              {finding.sample_excerpt ? (
-                <blockquote className="mt-4 border-l-2 border-[var(--brand-border)] pl-3 text-xs leading-5 text-[var(--text-secondary)]">
-                  {finding.sample_platform} / {cleanEvidenceExcerpt(finding.sample_question, 120)}: {cleanEvidenceExcerpt(finding.sample_excerpt, 220)}
-                </blockquote>
-              ) : null}
-            </div>
-          )) : (
-            <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-6 text-sm leading-6 text-[var(--text-secondary)] lg:col-span-2">
-              暂无回答证据。启动抓取后，有效回答、失败回答和样本不足会在样本口径中区分。
-            </div>
-          )}
-        </div>
-      </article>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <article className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-          <div className="text-xs font-medium text-[var(--text-tertiary)]">原文附录</div>
-          <h3 className="mt-2 text-xl font-semibold">可复核回答样本</h3>
-          <div className="mt-4 space-y-3">
-            {sourceAppendix.length ? sourceAppendix.slice(0, 10).map((item) => (
-              <div key={item.evidence_id || `${item.platform}-${item.node_term}`} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-                <div className="text-xs text-[var(--text-tertiary)]">{item.evidence_id || '证据'} · {platformLabel(item.platform || '')} · {commercialReportCopy(item.node_term || '节点')}</div>
-                <p className="mt-2 text-sm leading-6 text-[var(--text-primary)]">{item.question}</p>
-                <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">{cleanEvidenceExcerpt(item.answer_excerpt, 160)}</p>
-              </div>
-            )) : (
-              <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-6 text-sm leading-6 text-[var(--text-secondary)]">
-                暂无来源附录。
-              </div>
-            )}
-          </div>
-        </article>
-
-        <aside className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-          <div className="text-xs font-medium text-[var(--text-tertiary)]">复测动作</div>
-          <h3 className="mt-2 text-xl font-semibold">这轮之后怎么验证</h3>
-          <div className="mt-4 space-y-3">
-            {actions.length ? actions.slice(0, 6).map((action) => (
-              <div key={action.id} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-                <div className="text-sm font-semibold">{action.title || action.action_label || action.node_term || '圈层行动'}</div>
-                <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">{commercialReportCopy(action.review_criteria || action.expected_impact || '下一轮复测该节点是否发生变化。')}</p>
-                {(action.evidence_refs || []).length ? (
-                  <p className="mt-2 text-xs text-[var(--text-tertiary)]">证据：{(action.evidence_refs || []).join('、')}</p>
-                ) : null}
-              </div>
-            )) : (
-              <div className="text-sm leading-6 text-[var(--text-secondary)]">暂无复测动作。报告生成后，这里会列出对应节点、平台和回答摘录。</div>
-            )}
-          </div>
-        </aside>
-      </div>
-    </section>
-  );
-}
-
-function EvidenceMetric({ title, value, text }: { title: string; value: string; text: string }) {
-  return (
-    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-      <div className="text-xs text-[var(--text-tertiary)]">{title}</div>
-      <div className="mt-2 text-2xl font-semibold">{value}</div>
-      <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">{text}</p>
-    </div>
-  );
-}
-
-export function WeightRulePanel() {
-  return (
-    <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-6">
-      <h2 className="text-2xl font-semibold">判断规则</h2>
-      <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-        圈层位置不由前端手工摆放，只读取回答解析后的关系强弱、出现位置、证据规模和平台一致性。
-      </p>
-      <div className="mt-6 grid gap-4 xl:grid-cols-5">
-        <WeightCard title="出现频率" value="30%" text="概念在有效回答中出现得越多，越容易成为稳定联想。" />
-        <WeightCard title="位置分" value="20%" text="答案开头、定义句或推荐前列出现，比尾部补充更靠近中心。" />
-        <WeightCard title="关系类型" value="20%" text="定义、推荐和风险关系强于普通解释关系。" />
-        <WeightCard title="场景覆盖" value="15%" text="覆盖越多母题、人群或生活场景，联想越稳定。" />
-        <WeightCard title="模型一致性" value="15%" text="跨平台都出现的节点，比单平台信号更接近中心。" />
-      </div>
     </section>
   );
 }
@@ -4399,50 +4009,6 @@ function signedNumber(value: unknown) {
   return num > 0 ? `+${Math.round(num)}` : String(Math.round(num));
 }
 
-function TrackingMetric({
-  title,
-  value,
-  text,
-  tone = 'neutral',
-}: {
-  title: string;
-  value: string;
-  text: string;
-  tone?: 'neutral' | 'risk';
-}) {
-  return (
-    <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5">
-      <div className="text-xs text-[var(--text-tertiary)]">{title}</div>
-      <div className={`mt-2 text-3xl font-semibold ${tone === 'risk' ? 'text-[var(--error)]' : 'text-[var(--text-primary)]'}`}>
-        {value}
-      </div>
-      <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">{text}</p>
-    </div>
-  );
-}
-
-function TrackingRule({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="border-l-4 border-[var(--brand-border)] bg-[var(--bg-secondary)] px-4 py-3">
-      <div className="font-semibold text-[var(--text-primary)]">{title}</div>
-      <p className="mt-1">{text}</p>
-    </div>
-  );
-}
-
-function MetricGrid({ rows }: { rows: Array<[string, string]> }) {
-  return (
-    <div className="mt-5 grid grid-cols-2 gap-3">
-      {rows.map(([label, value]) => (
-        <div key={label} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-          <div className="text-xs text-[var(--text-tertiary)]">{label}</div>
-          <div className="mt-1 text-xl font-semibold">{value}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 interface StrategyValidationRow {
   term: string;
   status: 'validated' | 'partial' | 'risk' | 'missing';
@@ -4494,10 +4060,10 @@ function StrategyValidationSection({
     <section className="border-t border-[var(--border-subtle)] pt-10">
       <header>
         <div className="text-xs font-medium text-[var(--text-tertiary)]">战略验证</div>
-        <h3 className="mt-2 text-[26px] font-semibold leading-snug" style={{ fontFamily: REPORT_SERIF_FONT }}>
+        <h3 className="report-font mt-2 text-[26px] font-semibold leading-snug">
           把安利的战略词放回 AI 回答里检验
         </h3>
-        <p className="mt-4 text-[17px] leading-9 text-[var(--text-secondary)]" style={{ fontFamily: REPORT_SERIF_FONT }}>
+        <p className="report-font mt-4 text-[17px] leading-9 text-[var(--text-secondary)]">
           这一部分按品牌战略词展开。先看哪些题在验证它，再看各个平台是否把它带回{activeCenterTerm}，最后回到图谱里的位置和证据。
         </p>
         <p className="mt-3 text-sm leading-7 text-[var(--text-tertiary)]">
@@ -4508,10 +4074,10 @@ function StrategyValidationSection({
       <div className="mt-7 space-y-8">
         {rows.map((row) => (
           <article key={row.term} className="border-t border-[var(--border-subtle)] pt-7 first:border-t-0 first:pt-0">
-            <h4 className="text-2xl font-semibold" style={{ fontFamily: REPORT_SERIF_FONT }}>{row.term}</h4>
+            <h4 className="report-font text-2xl font-semibold">{row.term}</h4>
             <p className="mt-1 text-sm text-[var(--text-tertiary)]">{row.statusLabel}</p>
 
-            <div className="mt-5 space-y-4 text-[16px] leading-8 text-[var(--text-secondary)]" style={{ fontFamily: REPORT_SERIF_FONT }}>
+            <div className="report-font mt-5 space-y-4 text-[16px] leading-8 text-[var(--text-secondary)]">
               <p><span className="font-semibold text-[var(--text-primary)]">战略意图：</span>{row.intent}</p>
               <p><span className="font-semibold text-[var(--text-primary)]">相关问题：</span>共 {row.questionCount} 道题在验证这个方向。</p>
               {row.relatedQuestions.length ? (
@@ -5130,8 +4696,7 @@ function ReportSection({
         ) : null}
         <div className="min-w-0 flex-1">
           <h3
-            className={isVerdict ? 'text-[24px] font-semibold leading-snug text-[var(--brand-primary)] sm:text-[28px]' : 'text-[26px] font-semibold leading-snug text-[var(--text-primary)]'}
-            style={{ fontFamily: REPORT_SERIF_FONT }}
+            className={isVerdict ? 'report-font text-[24px] font-semibold leading-snug text-[var(--brand-primary)] sm:text-[28px]' : 'report-font text-[26px] font-semibold leading-snug text-[var(--text-primary)]'}
           >
             {section.title}
           </h3>
@@ -5145,22 +4710,22 @@ function ReportSection({
       {section.takeaway ? (
         isVerdict ? (
           <div
-            className="mt-5 rounded-r-lg border-l-4 bg-[rgba(31,122,107,0.18)] px-5 py-4 text-[17px] leading-8 text-[var(--brand-primary)]"
-            style={{ fontFamily: REPORT_SERIF_FONT, borderLeftColor: 'var(--brand-primary)' }}
+            className="report-font mt-5 rounded-r-lg border-l-4 bg-[var(--report-takeaway-strong-bg)] px-5 py-4 text-[17px] leading-8 text-[var(--brand-primary)]"
+            style={{ borderLeftColor: 'var(--brand-primary)' }}
           >
             {renderParagraphWithBoldEntities(section.takeaway, entityTerms)}
           </div>
         ) : isBlindSpot ? (
           <div
-            className="mt-5 rounded-r-lg border-l-4 bg-[rgba(239,91,107,0.10)] px-5 py-4 text-[17px] leading-8 text-[var(--error)]"
-            style={{ fontFamily: REPORT_SERIF_FONT, borderLeftColor: 'var(--error)' }}
+            className="report-font mt-5 rounded-r-lg border-l-4 bg-[var(--report-takeaway-risk-bg)] px-5 py-4 text-[17px] leading-8 text-[var(--error)]"
+            style={{ borderLeftColor: 'var(--error)' }}
           >
             {renderParagraphWithBoldEntities(section.takeaway, entityTerms)}
           </div>
         ) : (
           <div
-            className="mt-5 rounded-r-lg border-l-4 bg-[rgba(31,122,107,0.08)] px-5 py-4 text-[17px] leading-8 text-[var(--text-primary)]"
-            style={{ fontFamily: REPORT_SERIF_FONT, borderLeftColor: 'var(--brand-primary)' }}
+            className="report-font mt-5 rounded-r-lg border-l-4 bg-[var(--report-takeaway-bg)] px-5 py-4 text-[17px] leading-8 text-[var(--text-primary)]"
+            style={{ borderLeftColor: 'var(--brand-primary)' }}
           >
             {renderParagraphWithBoldEntities(section.takeaway, entityTerms)}
           </div>
@@ -5195,15 +4760,14 @@ function ReportSection({
               className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-4 py-3"
               style={{ borderLeft: '4px solid var(--brand-primary)' }}
             >
-              <p className="text-[15px] leading-7 text-[var(--text-secondary)]" style={{ fontFamily: REPORT_SERIF_FONT }}>
+              <p className="report-font text-[15px] leading-7 text-[var(--text-secondary)]">
                 {renderParagraphWithBoldEntities(paragraph, entityTerms)}
               </p>
             </div>
           ) : (
             <p
               key={paragraph}
-              className="text-[17px] leading-9 text-[var(--text-secondary)]"
-              style={{ fontFamily: REPORT_SERIF_FONT }}
+              className="report-font text-[17px] leading-9 text-[var(--text-secondary)]"
             >
               {renderParagraphWithBoldEntities(paragraph, entityTerms)}
             </p>
@@ -5413,7 +4977,7 @@ function ReportBlindSpotTable({ metrics }: { metrics?: OntologyAssociationCircle
   const formatCount = (value: number | null) => value === null ? '未评估' : String(value);
   const formatRate = (value: number | null) => value === null ? '未评估' : `${Math.round(value * 1000) / 10}%`;
   return (
-    <div className="mt-6 rounded-xl border border-[var(--error)] bg-[rgba(239,91,107,0.06)] p-5">
+    <div className="mt-6 rounded-xl border border-[var(--error)] bg-[var(--report-blindspot-bg)] p-5">
       <div className="text-sm font-semibold text-[var(--error)]">最值得重视的一组数字</div>
       <table className="mt-3 w-full text-sm">
         <thead>
@@ -5624,7 +5188,7 @@ function renderAnswerMarkdown(text: string) {
     const hMatch = trimmed.match(/^#{1,6}\s+(.+)$/);
     if (hMatch) {
       return (
-        <div key={i} className="mt-3 mb-1 font-semibold text-[var(--text-primary)]" style={{ fontFamily: REPORT_SERIF_FONT }}>
+        <div key={i} className="report-font mt-3 mb-1 font-semibold text-[var(--text-primary)]">
           {renderParagraphWithBoldEntities(hMatch[1], [])}
         </div>
       );
@@ -5632,7 +5196,7 @@ function renderAnswerMarkdown(text: string) {
     const liMatch = trimmed.match(/^[-*]\s+(.+)$/);
     if (liMatch) {
       return (
-        <div key={i} className="pl-3 leading-7" style={{ fontFamily: REPORT_SERIF_FONT }}>
+        <div key={i} className="report-font pl-3 leading-7">
           <span className="text-[var(--text-tertiary)]">· </span>
           {renderParagraphWithBoldEntities(liMatch[1], [])}
         </div>
@@ -5642,7 +5206,7 @@ function renderAnswerMarkdown(text: string) {
       return <div key={i} className="h-2" />;
     }
     return (
-      <div key={i} className="leading-7" style={{ fontFamily: REPORT_SERIF_FONT }}>
+      <div key={i} className="report-font leading-7">
         {renderParagraphWithBoldEntities(line, [])}
       </div>
     );
@@ -5654,7 +5218,7 @@ function ReportEvidenceSamples({ quotes }: { quotes: string[] }) {
   if (!uniqueQuotes.length) return null;
   return (
     <section className="border-t border-[var(--border-subtle)] pt-10">
-      <h3 className="text-[26px] font-semibold leading-snug text-[var(--text-primary)]" style={{ fontFamily: REPORT_SERIF_FONT }}>
+      <h3 className="report-font text-[26px] font-semibold leading-snug text-[var(--text-primary)]">
         事实举例
       </h3>
       <p className="mt-3 text-sm leading-7 text-[var(--text-tertiary)]">
@@ -5690,7 +5254,7 @@ function ReportEvidenceSamples({ quotes }: { quotes: string[] }) {
               </div>
               {isLong ? (
                 <details className="px-4 pb-3 pt-2">
-                  <summary className="cursor-pointer leading-7" style={{ fontFamily: REPORT_SERIF_FONT }}>
+                  <summary className="report-font cursor-pointer leading-7">
                     {preview}
                   </summary>
                   <div className="mt-3">{renderAnswerMarkdown(body)}</div>
@@ -5726,11 +5290,11 @@ function ReportEvidenceBrief({
   return (
     <section className="border-t border-[var(--border-subtle)] pt-10">
       <div className="text-xs font-medium text-[var(--text-tertiary)]">附录</div>
-      <h3 className="mt-2 text-[26px] font-semibold leading-snug" style={{ fontFamily: REPORT_SERIF_FONT }}>
+      <h3 className="report-font mt-2 text-[26px] font-semibold leading-snug">
         样本、平台与原文证据
       </h3>
       {questionDefinition?.definition_sentence ? (
-        <p className="mt-4 text-[16px] leading-8 text-[var(--text-secondary)]" style={{ fontFamily: REPORT_SERIF_FONT }}>
+        <p className="report-font mt-4 text-[16px] leading-8 text-[var(--text-secondary)]">
           {questionDefinition.definition_sentence}
         </p>
       ) : null}
@@ -5805,17 +5369,6 @@ function ReportEvidenceBrief({
 
       </div>
     </section>
-  );
-}
-
-function EvidenceScopeCard({ title, items }: { title: string; items: string[] }) {
-  return (
-    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
-      <div className="text-xs text-[var(--text-tertiary)]">{title}</div>
-      <div className="mt-2 text-sm leading-6 text-[var(--text-primary)]">
-        {items.length ? items.join('、') : '待补充'}
-      </div>
-    </div>
   );
 }
 
@@ -6528,18 +6081,6 @@ function renderExportParagraphHtml(text: string, entities: string[]): string {
   return parts.join('');
 }
 
-function WeightCard({ title, value, text }: { title: string; value: string; text: string }) {
-  return (
-    <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="font-semibold">{title}</h3>
-        <span className="rounded-full border border-[var(--brand-border)] bg-[var(--bg-primary)] px-2 py-1 text-xs text-[var(--brand-primary)]">{value}</span>
-      </div>
-      <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">{text}</p>
-    </div>
-  );
-}
-
 export function buildAssociationProjection(
   world?: OntologyWorldSummary | null,
   home?: DashboardHomeData | null,
@@ -6609,10 +6150,6 @@ export function normalizeCenterTerms(value?: unknown): string[] {
   if (!Array.isArray(value)) return DEFAULT_CENTER_TERMS;
   const result = value.map((item) => String(item || '').trim()).filter(Boolean);
   return result.length ? Array.from(new Set(result)).slice(0, 3) : DEFAULT_CENTER_TERMS;
-}
-
-function scoreText(value?: number) {
-  return typeof value === 'number' && Number.isFinite(value) ? String(Math.round(value)) : '-';
 }
 
 function sampleQuestionCount(sampleScope: Record<string, unknown>) {

@@ -3101,11 +3101,23 @@ async def handle_confirmation_langgraph(
                 logger.info("[LangGraph] Inline confirmation: run_supplemental_fetch")
         elif selected_option_id == "run_analysis_report":
             user_content = "用户选择重新生成分析报告"
+            # 3b-1.2：amway 圈层上下文的"继续分析"必须先走实体抽取 → 图谱构建，
+            # 再由图谱节点链入 A5；其他上下文保持直链 A5。
+            from app.workflow.nodes_a4 import _is_association_circle_context
+
+            if _is_association_circle_context(state_values):
+                report_tool_name = "amway_entity_extract"
+                report_reason = "用户在恢复面板中选择继续分析，先执行实体关系抽取。"
+                report_reply = "已按您的选择，继续执行实体关系抽取与图谱构建，随后生成分析报告。"
+            else:
+                report_tool_name = "analysis_report_skill"
+                report_reason = "用户在恢复面板中选择重新生成分析报告。"
+                report_reply = "已按您的选择，重新生成分析报告。"
             state_values["next_required_action"] = build_next_required_action(
-                tool_name="analysis_report_skill",
+                tool_name=report_tool_name,
                 authority="user_confirmation",
-                reason="用户在恢复面板中选择重新生成分析报告。",
-                reply_text="已按您的选择，重新生成分析报告。",
+                reason=report_reason,
+                reply_text=report_reply,
                 source_step="error_recovery",
             )
             logger.info("[LangGraph] Inline confirmation: run_analysis_report")

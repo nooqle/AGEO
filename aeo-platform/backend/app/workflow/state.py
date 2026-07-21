@@ -199,6 +199,25 @@ class AgentState(TypedDict):
     fetch_recovery_plan: dict | None
 
     # =========================================================================
+    # Amway association-circle pipeline (3b-1.2: extract/projection 独立节点)
+    # =========================================================================
+    realtime_entity_extraction_result: dict | None
+    # A4 采集期实时抽取信号汇总，供 amway_extract 节点合并进正式抽取结果。
+
+    entity_extraction_result: dict | None
+    # amway_extract 节点输出：实体关系抽取结果（answer_signals / signal_count /
+    # realtime_* 汇总）。
+
+    entity_calibration_result: dict | None
+    # amway_projection 节点输出：按样本量校准后的实体置信度结果。
+
+    association_circle_projection: dict | None
+    # amway_projection 节点输出：圈层图谱投影（nodes/risk_map/sample_scope/...）。
+
+    brand_association_report_input: dict | None
+    # 校准结果中供 A5 报告技能消费的输入快照。
+
+    # =========================================================================
     # A5 Output: Analytics & Report
     # =========================================================================
     metrics: dict | None

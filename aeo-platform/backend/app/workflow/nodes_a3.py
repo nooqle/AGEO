@@ -41,6 +41,7 @@ from app.workflow.brand_state import build_effective_brand_profile
 
 from app.core.constants import PlatformConstants, WorkflowConstants
 from app.workflow.runtime_policy_executor import build_next_required_action
+from app.workflow.topology_resolver import fetch_chain_enabled, load_flow_topology
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +382,22 @@ async def _question_set_confirmation_update(
             "next_required_action": None,
             "progress_message": (
                 f"问题集已生成，共 {question_count} 个问题，未自动进入答案抓取。"
+            ),
+        }
+
+    # 3b-1.3 拓扑链门：画布断开「问题 → 采集」连线时，不链入 A4。
+    # 无拓扑记录时 load_flow_topology 返回空拓扑，链门恒开，行为不变。
+    flow_topology = await load_flow_topology(state.get("entity_id"))
+    if not fetch_chain_enabled(flow_topology):
+        return {
+            "awaiting_user": False,
+            "execution_status": "completed",
+            "pending_confirmation": None,
+            "pending_question_set_confirmation": None,
+            "next_required_action": None,
+            "progress_message": (
+                f"问题集已生成，共 {question_count} 个问题；"
+                "画布已断开「问题 → 采集」连线，未进入答案抓取。"
             ),
         }
 

@@ -118,6 +118,8 @@ _VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
     "persona_generation": "画像生成",
     "question_simulation": "问题模拟",
     "answer_fetch": "答案抓取",
+    "amway_entity_extract": "实体抽取",
+    "amway_circle_projection": "图谱构建",
     "analysis_report_skill": "分析报告",
     "data_analytics": "分析报告",
     "confidence_analysis_skill": "引用置信度评估",
@@ -4251,7 +4253,9 @@ def _format_relationships_for_reply(
     supporting_only: bool = False,
 ) -> str:
     core_relationships = ontology_world.get("relationship_summary") or []
-    supporting_relationships = ontology_world.get("supporting_relationship_summary") or []
+    supporting_relationships = (
+        ontology_world.get("supporting_relationship_summary") or []
+    )
     if supporting_only:
         if supporting_relationships:
             relationships = supporting_relationships
@@ -4958,6 +4962,9 @@ TOOL_TO_NODE: dict[str, str] = {
     "persona_generation": "a2_persona",
     "question_simulation": "a3_question",
     "answer_fetch": "a4_fetch",
+    # 3b-1.2: amway 实体抽取/圈层图谱独立节点（拓扑感知编排）
+    "amway_entity_extract": "amway_extract",
+    "amway_circle_projection": "amway_projection",
     "table_intake_skill": "table_intake",
     "analysis_report_skill": "a5_analytics",
     "data_analytics": "a5_analytics",
@@ -4980,6 +4987,8 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "persona_generation": "用户画像生成",
     "question_simulation": "问题模拟生成",
     "answer_fetch": "AI答案抓取",
+    "amway_entity_extract": "实体关系抽取",
+    "amway_circle_projection": "圈层图谱构建",
     "table_intake_skill": "表格导入理解",
     "analysis_report_skill": "完整分析报告",
     "data_analytics": "数据分析报告",
