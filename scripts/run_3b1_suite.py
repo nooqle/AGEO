@@ -25,6 +25,7 @@ SUITES = [
     "tests/test_flow_plan_context.py",
     "tests/test_topology_patch.py",  # 3c-B deterministic ops (shares topology freeze)
     "tests/test_topology_nl_compiler.py",  # 3c-C1 rule NL→ops
+    "tests/test_topology_nl_llm.py",  # 3c-C2 hybrid LLM compile
 ]
 
 

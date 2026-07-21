@@ -1813,6 +1813,8 @@ class ApiService {
     body: {
       text: string;
       expected_version?: number | null;
+      /** C2: rule miss → stable-prompt LLM (default true on server). */
+      allow_llm?: boolean;
     },
   ): Promise<{
     base: { topology: AmwayFlowTopologyDoc; version: number };
@@ -1829,7 +1831,7 @@ class ApiService {
   }> {
     return this.request(`/amwaychina/entities/${entityId}/flow-topology/compile-nl`, {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ allow_llm: true, ...body }),
     });
   }
 

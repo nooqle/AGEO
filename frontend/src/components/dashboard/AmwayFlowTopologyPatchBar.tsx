@@ -23,6 +23,7 @@ type PatchPreview = {
   planSummary: string;
   plannedPlatforms: string[];
   compileMatched?: string;
+  compileMode?: string;
 };
 
 function parseTopologyDoc(raw: unknown): FlowTopologyDoc {
@@ -67,7 +68,7 @@ export function AmwayFlowTopologyPatchBar({
       ops?: Array<Record<string, unknown>>;
       summary?: { text?: string };
       plan?: { summary?: string; planned_platforms?: string[] };
-      compile?: { matched?: string };
+      compile?: { matched?: string; mode?: string };
     }, source: 'preset' | 'nl', intentId?: TopologyPatchIntentId) => {
       if (typeof resp.base?.version === 'number') {
         setExpectedVersion(resp.base.version);
@@ -89,6 +90,7 @@ export function AmwayFlowTopologyPatchBar({
         planSummary: String(resp.plan?.summary || ''),
         plannedPlatforms: planned,
         compileMatched: resp.compile?.matched ? String(resp.compile.matched) : undefined,
+        compileMode: resp.compile?.mode ? String(resp.compile.mode) : undefined,
       });
       setError(null);
     },
@@ -136,6 +138,7 @@ export function AmwayFlowTopologyPatchBar({
       const resp = await api.compileAmwayFlowTopologyNl(entityId, {
         text,
         expected_version: getExpectedVersion(),
+        allow_llm: true,
       });
       ingestPreview(resp, 'nl');
     } catch (err) {
@@ -263,9 +266,18 @@ export function AmwayFlowTopologyPatchBar({
           <p className="text-xs leading-5 text-[var(--text-secondary)]">
             <span className="font-medium text-[var(--text-primary)]">变更摘要：</span>
             {preview.summaryText}
-            {preview.compileMatched ? (
+            {preview.compileMatched || preview.compileMode ? (
               <span className="ml-1 text-[var(--text-tertiary)]">
-                （匹配：{preview.compileMatched}）
+                （
+                {preview.compileMode === 'llm'
+                  ? '智能'
+                  : preview.compileMode === 'rule'
+                    ? '规则'
+                    : preview.source === 'nl'
+                      ? '编译'
+                      : '预设'}
+                {preview.compileMatched ? `：${preview.compileMatched}` : ''}
+                ）
               </span>
             ) : null}
           </p>

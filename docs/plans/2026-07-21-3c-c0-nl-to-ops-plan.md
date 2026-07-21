@@ -115,7 +115,7 @@ C1 不调用 LLM，但仍按同一形状实现 `compile_nl`，以便 C2 只换�
 | C1-3 | 稳定 prompt 文件骨架（C2 用，C1 不调） | ✅ `prompts/topology_ops_compiler.md` |
 | C1-4 | `AmwayFlowTopologyPatchBar` 抽出 + NL 输入 | ✅ Canvas ~2768→~2590 行 |
 | C1-5 | suite + tsc + 本地 commit | ✅ |
-| C2 | LLM 编译 | ⏭ |
+| C2 | LLM 编译（rule-first + 稳定 prompt） | ✅ `topology_nl_llm.py` |
 
 ---
 

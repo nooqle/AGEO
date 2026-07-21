@@ -797,10 +797,12 @@ class FlowTopologyPatchRequest(BaseModel):
 
 
 class FlowTopologyCompileNlRequest(BaseModel):
-    """3c-C1: natural language → ops (rule compiler; no write)."""
+    """3c-C1/C2: natural language → ops (rule-first, optional LLM; no write)."""
 
     text: str = Field(..., min_length=1, max_length=500)
     expected_version: int | None = None
+    # C2: when True, miss on rules falls through to stable-prompt LLM compile
+    allow_llm: bool = True
 
 
 def _load_topology_row(db_result_row: Any) -> tuple[dict[str, Any], int]:
@@ -880,8 +882,11 @@ async def compile_flow_topology_nl(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """3c-C1: NL → ops → same preview shape (no write, no LLM)."""
-    from app.workflow.topology_nl_compiler import compile_nl_to_ops
+    """3c-C1/C2: NL → ops → preview shape (no write).
+
+    Rule compiler first; optional LLM with stable ``topology_ops_compiler`` prompt.
+    """
+    from app.workflow.topology_nl_llm import compile_nl_auto
 
     entity = await _require_amway_entity(db, current_user, entity_id)
     row = (
@@ -899,7 +904,11 @@ async def compile_flow_topology_nl(
             ),
         )
     try:
-        compiled = compile_nl_to_ops(body.text, base_topology)
+        compiled = await compile_nl_auto(
+            body.text,
+            base_topology,
+            allow_llm=bool(body.allow_llm),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

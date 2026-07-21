@@ -33,5 +33,5 @@
 
 ## 下一步
 
-- C2：读稳定 prompt + 动态尾消息调用 LLM，输出 ops JSON  
-- 继续拆 Canvas panels / God 后端文件（另里程碑）  
+- ~~C2：读稳定 prompt + 动态尾消息调用 LLM~~ → 见 C2 提交 / `topology_nl_llm.py`  
+- 继续拆 Canvas panels：`docs/plans/2026-07-21-god-file-split-backlog.md`
