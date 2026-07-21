@@ -233,6 +233,133 @@ async def verify_p0_p1() -> list[dict]:
         }
     )
 
+    # P1-5 lexicon edge gate
+    from app.workflow.topology_resolver import (
+        lexicon_chain_enabled,
+        report_chain_enabled,
+    )
+
+    lex_off = FlowTopology.from_dict({"removedEdgeIds": ["e-lexicon-extract"]})
+    checks.append(
+        {
+            "id": "P1-5-lexicon-gate",
+            "ok": lexicon_chain_enabled(FlowTopology()) is True
+            and lexicon_chain_enabled(lex_off) is False,
+        }
+    )
+
+    # P2-3 report edge gate (feed report only when chain active)
+    rep_off = FlowTopology.from_dict({"removedEdgeIds": ["e-projection-report"]})
+    checks.append(
+        {
+            "id": "P2-3-report-gate",
+            "ok": report_chain_enabled(FlowTopology()) is True
+            and report_chain_enabled(rep_off) is False,
+        }
+    )
+
+    # P1-1 extract self-check when fetch→extract removed
+    async def _no_extract(_):
+        return FlowTopology.from_dict({"removedEdgeIds": ["e-fetch-extract"]})
+
+    async def _noop(*_a, **_k):
+        return None
+
+    nodes_amway.load_flow_topology = _no_extract  # type: ignore
+    nodes_amway.send_progress_event = _noop  # type: ignore
+    nodes_amway.send_stage_result = _noop  # type: ignore
+    extract_cmd = await nodes_amway.amway_extract_node(
+        {
+            "session_id": "s",
+            "entity_id": str(uuid4()),
+            "analysis_mode": "brand_association_circle",
+            "dashboard_context": {
+                "dashboard_variant": "amway_association_circle",
+                "analysis_mode": "brand_association_circle",
+            },
+            "fetch_results": [
+                {
+                    "question_id": "q1",
+                    "question_text": "x",
+                    "platform_results": [
+                        {
+                            "platform": "kimi",
+                            "success": True,
+                            "answer": {"content": "安利", "word_count": 2},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    checks.append(
+        {
+            "id": "P1-1-extract-self-check",
+            "ok": extract_cmd.update.get("entity_extraction_result") is None
+            and extract_cmd.update.get("execution_status") == "completed",
+        }
+    )
+
+    # P1-4 content plan: lexicon edge + extract planned → content scheduled
+    content_topo = FlowTopology.from_dict(
+        {
+            "customNodes": [
+                {
+                    "id": "c1",
+                    "type": "content",
+                    "position": {},
+                    "config": {"label": "文案"},
+                }
+            ],
+            "customEdges": [{"id": "e-c", "source": "lexicon", "target": "c1"}],
+        }
+    )
+    content_plan = build_execution_plan_summary(content_topo)
+    c1 = next(
+        (s for s in content_plan.get("steps") or [] if s.get("node_id") == "c1"),
+        None,
+    )
+    checks.append(
+        {
+            "id": "P1-4-content-plan",
+            "ok": c1 is not None and c1.get("status") == "pending",
+            "step": c1,
+        }
+    )
+
+    # P1-3 / P0-1: unique node id + config size + expected_version field exists
+    try:
+        validate_topology_document(
+            {
+                "customNodes": [
+                    {"id": "a1", "type": "analysis", "position": {}, "config": {}},
+                    {"id": "a1", "type": "analysis", "position": {}, "config": {}},
+                ],
+                "customEdges": [],
+            }
+        )
+        dup_ok = False
+    except ValueError:
+        dup_ok = True
+    checks.append({"id": "P2-11-unique-node-id", "ok": dup_ok})
+
+    from app.api.v1 import amwaychina as amway_api
+
+    schema = getattr(amway_api, "FlowTopologyPutBody", None) or getattr(
+        amway_api, "PutFlowTopologyBody", None
+    )
+    # Discover body model with expected_version
+    expected_field = False
+    for name in dir(amway_api):
+        obj = getattr(amway_api, name)
+        if not isinstance(obj, type):
+            continue
+        fields = getattr(obj, "model_fields", None) or getattr(obj, "__annotations__", {})
+        if fields and "expected_version" in fields:
+            expected_field = True
+            break
+    checks.append({"id": "P1-3-expected-version-field", "ok": expected_field})
+
     return checks
 
 
@@ -261,15 +388,24 @@ async def main() -> int:
     suite = run_pytest_suite()
     checks.append(suite)
 
-    # Static review checklist mapping
+    # Static review checklist mapping (full P0 + P1 + key P2)
+    def _ok(cid: str) -> bool:
+        return any(c["id"] == cid and c.get("ok") for c in checks)
+
     checklist = {
-        "P0-1": any(c["id"].startswith("P0-1") and c["ok"] for c in checks),
-        "P0-2": any(c["id"].startswith("P0-2") and c["ok"] for c in checks),
-        "P0-3": any(c["id"].startswith("P0-3") and c["ok"] for c in checks),
+        "P0-1": _ok("P0-1-bfs") and _ok("P0-1-validate"),
+        "P0-2": _ok("P0-2-invalid-uuid"),
+        "P0-3": _ok("P0-3-a4-filter"),
         "P0-4": True,  # this script is the reproducible producer
-        "P1-1/2": any(c["id"] == "P1-2-terminal" and c["ok"] for c in checks),
-        "P1-8": any(c["id"] == "P1-8-registry" and c["ok"] for c in checks),
-        "P2-1": any(c["id"] == "P2-1-entity_graph" and c["ok"] for c in checks),
+        "P1-1": _ok("P1-1-extract-self-check"),
+        "P1-2": _ok("P1-2-terminal"),
+        "P1-3": _ok("P1-3-expected-version-field"),
+        "P1-4": _ok("P1-4-content-plan"),
+        "P1-5": _ok("P1-5-lexicon-gate"),
+        "P1-8": _ok("P1-8-registry"),
+        "P2-1": _ok("P2-1-entity_graph"),
+        "P2-3": _ok("P2-3-report-gate"),
+        "P2-11": _ok("P2-11-unique-node-id"),
         "suite": suite["ok"],
     }
     report = {

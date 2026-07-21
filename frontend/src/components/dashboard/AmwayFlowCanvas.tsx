@@ -1341,17 +1341,40 @@ export function AmwayFlowCanvas({
   );
 
   const [runningCustomNodeId, setRunningCustomNodeId] = useState<string | null>(null);
+  // Sync lock: setState 异步，连点时 runningCustomNodeId 仍可能为 null（P1-3 前端半边）
+  const customRunLockRef = useRef<string | null>(null);
   const [customNodeError, setCustomNodeError] = useState<string | null>(null);
 
+  const refreshTopologyVersion = useCallback(async () => {
+    try {
+      const latest = await api.getAmwayFlowTopology(entityId);
+      if (typeof latest?.version === 'number') {
+        topologyVersionRef.current = latest.version;
+      }
+    } catch {
+      // best-effort; next PUT may 409 and surface via topologySaveError
+    }
+  }, [entityId]);
+
   // 3b-1.5 / 3b-1.6: analysis/content 真执行；cascade 跑下游分支。
+  // P1-3 前端半边：全局互斥 + PUT 带 expected_version；成功后不 dirty 回写（服务端已落库）。
   const runCustomNode = useCallback(
     async (nodeId: string, options?: { cascade?: boolean }) => {
+      if (customRunLockRef.current) return;
       const customNode = topology.customNodes.find((node) => node.id === nodeId);
       if (!customNode || (customNode.type !== 'analysis' && customNode.type !== 'content')) return;
+      customRunLockRef.current = nodeId;
       setCustomNodeError(null);
       setRunningCustomNodeId(nodeId);
       try {
-        await api.putAmwayFlowTopology(entityId, topology);
+        const putResp = await api.putAmwayFlowTopology(
+          entityId,
+          topology,
+          topologyVersionRef.current,
+        );
+        if (typeof putResp?.version === 'number') {
+          topologyVersionRef.current = putResp.version;
+        }
         const body =
           customNode.type === 'analysis'
             ? {
@@ -1369,9 +1392,11 @@ export function AmwayFlowCanvas({
               };
         const resp = await api.runAmwayFlowNode(entityId, nodeId, body);
         const remote = parseFlowTopology(resp.topology);
-        topologyDirtyRef.current = true;
+        // Server already persisted results; avoid dirty→PUT race with bumped row.version
+        topologyDirtyRef.current = false;
         setTopology(remote);
         writeFlowTopology(entityId, remote);
+        await refreshTopologyVersion();
       } catch (error) {
         if (customNode.type === 'analysis' && projectionNodes.length > 0 && !options?.cascade) {
           const dimensions = (Array.isArray(customNode.config.dimensions)
@@ -1389,37 +1414,64 @@ export function AmwayFlowCanvas({
           setCustomNodeError('后端运行失败，已使用本地确定性分析。');
         } else {
           const message = error instanceof Error ? error.message : '节点运行失败';
-          setCustomNodeError(message);
+          setCustomNodeError(
+            message.includes('版本冲突')
+              ? '拓扑版本冲突：请刷新页面后重试，以免覆盖其他运行结果。'
+              : message,
+          );
         }
       } finally {
+        customRunLockRef.current = null;
         setRunningCustomNodeId(null);
       }
     },
-    [entityId, projection, projectionNodes.length, topology, updateCustomNodeConfig],
+    [
+      entityId,
+      projection,
+      projectionNodes.length,
+      refreshTopologyVersion,
+      topology,
+      updateCustomNodeConfig,
+    ],
   );
 
   const runBranchFrom = useCallback(
     async (fromNodeId: string, mode: 'node_only' | 'downstream' = 'downstream') => {
+      if (customRunLockRef.current) return;
+      customRunLockRef.current = fromNodeId;
       setCustomNodeError(null);
       setRunningCustomNodeId(fromNodeId);
       try {
-        await api.putAmwayFlowTopology(entityId, topology);
+        const putResp = await api.putAmwayFlowTopology(
+          entityId,
+          topology,
+          topologyVersionRef.current,
+        );
+        if (typeof putResp?.version === 'number') {
+          topologyVersionRef.current = putResp.version;
+        }
         const resp = await api.runAmwayFlowBranch(entityId, {
           from_node_id: fromNodeId,
           mode,
         });
         const remote = parseFlowTopology(resp.topology);
-        topologyDirtyRef.current = true;
+        topologyDirtyRef.current = false;
         setTopology(remote);
         writeFlowTopology(entityId, remote);
+        await refreshTopologyVersion();
       } catch (error) {
         const message = error instanceof Error ? error.message : '分支运行失败';
-        setCustomNodeError(message);
+        setCustomNodeError(
+          message.includes('版本冲突')
+            ? '拓扑版本冲突：请刷新页面后重试，以免覆盖其他运行结果。'
+            : message,
+        );
       } finally {
+        customRunLockRef.current = null;
         setRunningCustomNodeId(null);
       }
     },
-    [entityId, topology],
+    [entityId, refreshTopologyVersion, topology],
   );
 
   const runAnalysis = useCallback(
@@ -1937,7 +1989,8 @@ export function AmwayFlowCanvas({
                       <CustomNodeDetail
                         node={selectedNode}
                         customNode={customNode}
-                        running={runningCustomNodeId === customNode.id}
+                        // 全局互斥：任一自定义/分支运行中，所有运行按钮禁用（不限当前节点）
+                        running={Boolean(runningCustomNodeId)}
                         error={customNodeError}
                         onUpdateConfig={updateCustomNodeConfig}
                         onDelete={deleteCustomNode}
@@ -1955,7 +2008,7 @@ export function AmwayFlowCanvas({
                       enabledPlatforms={enabledPlatforms}
                       questionSets={questionSets}
                       running={running}
-                      branchRunning={runningCustomNodeId === selectedNode.id}
+                      branchRunning={Boolean(runningCustomNodeId)}
                       branchError={customNodeError}
                       onRetry={onQuickRun}
                       onOpenRunSettings={onOpenRunSettings}

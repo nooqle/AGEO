@@ -32,5 +32,7 @@
 
 ## 未在本批做的（P2 / 残留）
 
-- `circle` 端口泛化、God component 拆分、branch 总时限后台化等 P2
+- God component 拆分、branch 总时限后台化、reason-code 引擎层等 P2
 - live UI 全链路手点（环境依赖）
+
+> 后续 `67c6edc` 已收口关键 P2（含 `circle`→`entity_graph`）；完整对照见 `2026-07-21-review-closure-final.md`。

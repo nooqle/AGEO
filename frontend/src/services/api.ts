@@ -1728,7 +1728,7 @@ class ApiService {
 
   async getAmwayFlowTopology(
     entityId: string,
-  ): Promise<{ topology: AmwayFlowTopologyDoc; updated_at: string | null }> {
+  ): Promise<{ topology: AmwayFlowTopologyDoc; updated_at: string | null; version?: number }> {
     return this.request(`/amwaychina/entities/${entityId}/flow-topology`);
   }
 
