@@ -1,0 +1,74 @@
+{
+  "generated_at": "2026-07-21T11:41:51.290919+00:00",
+  "producer": "scripts/review_p0_p1_p2_verify.py",
+  "review_doc": "docs/review-3b1-3b2-blueprint-2026-07-21.md",
+  "checks": [
+    {
+      "id": "P0-1-bfs",
+      "ok": true,
+      "detail": "ghost self-loop does not hang"
+    },
+    {
+      "id": "P0-1-validate",
+      "ok": true,
+      "detail": "self-loop rejected"
+    },
+    {
+      "id": "P0-2-invalid-uuid",
+      "ok": true,
+      "detail": "invalid uuid degrades"
+    },
+    {
+      "id": "P0-3-a4-filter",
+      "ok": true,
+      "platform_filter": [
+        "deepseek",
+        "kimi",
+        "hunyuan"
+      ]
+    },
+    {
+      "id": "P1-2-terminal",
+      "ok": true
+    },
+    {
+      "id": "P2-1-entity_graph",
+      "ok": true
+    },
+    {
+      "id": "P1-8-registry",
+      "ok": true
+    },
+    {
+      "id": "P2-context-flow-plan",
+      "ok": true
+    },
+    {
+      "id": "attach-flow-plan",
+      "ok": true
+    },
+    {
+      "id": "plan-no-doubao",
+      "ok": true
+    },
+    {
+      "id": "pytest-3b1-suite",
+      "ok": true,
+      "passed": 58,
+      "returncode": 0,
+      "tail": "..................................               [100%]\n58 passed in 4.18s\ncwd= D:\\AGEO-worktrees\\amwaychina-mainline\\aeo-platform\\backend\ncmd= C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python312\\python.exe -m pytest tests/test_topology_resolver.py tests/test_topology_gate_wiring.py tests/test_topology_p0_p1_fixes.py tests/test_node_contracts.py tests/test_nodes_amway.py tests/test_amway_flow_custom_nodes.py tests/test_flow_topology_api.py tests/test_flow_plan_context.py -q --tb=line\n"
+    }
+  ],
+  "checklist_summary": {
+    "P0-1": true,
+    "P0-2": true,
+    "P0-3": true,
+    "P0-4": true,
+    "P1-1/2": true,
+    "P1-8": true,
+    "P2-1": true,
+    "suite": true
+  },
+  "all_ok": true,
+  "verdict": "PASS"
+}

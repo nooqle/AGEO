@@ -374,6 +374,8 @@ class AgentState(TypedDict):
         bool, _last_bool
     ]  # True when running from scheduler without user interaction
     dashboard_context: dict | None
+    # Brand-intelligence / dashboard run scope (platforms, flow_plan snapshot, …)
+    input_scope: dict | None
     latest_question_set_id: str | None
     latest_monitoring_plan_id: str | None
     monitoring_schedule_id: str | None

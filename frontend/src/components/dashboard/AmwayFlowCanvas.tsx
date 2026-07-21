@@ -516,7 +516,8 @@ const BUILTIN_OUTPUT_TYPE: Record<string, string> = {
   lexicon: 'lexicon',
   fetch: 'answers',
   extract: 'entities',
-  projection: 'circle',
+  // P2-1: domain-agnostic port name (legacy alias "circle" still accepted below)
+  projection: 'entity_graph',
   report: 'report',
 };
 
@@ -524,7 +525,7 @@ const BUILTIN_ACCEPTED_INPUTS: Record<string, string[]> = {
   fetch: ['questions'],
   extract: ['lexicon', 'answers'],
   projection: ['entities'],
-  report: ['circle'],
+  report: ['entity_graph', 'circle'],
 };
 
 const CUSTOM_NODE_OUTPUT_TYPE: Record<CustomFlowNodeType, string> = {
@@ -533,7 +534,7 @@ const CUSTOM_NODE_OUTPUT_TYPE: Record<CustomFlowNodeType, string> = {
 };
 
 const CUSTOM_NODE_ACCEPTED_INPUTS: Record<CustomFlowNodeType, string[]> = {
-  analysis: ['circle', 'report'],
+  analysis: ['entity_graph', 'circle', 'report'],
   content: ['lexicon', 'analysis'],
 };
 
@@ -2120,11 +2121,16 @@ function CustomNodeDetail({
         item === 'platform' || item === 'entities' || item === 'risk')
     : DEFAULT_ANALYSIS_DIMENSIONS);
   const template = String(customNode.config.promptTemplate || DEFAULT_CONTENT_PROMPT_TEMPLATE);
-  void node;
+  const nodeLabel = node.data?.label || customNode.config.label || CUSTOM_NODE_META[customNode.type].label;
 
   return (
     <div className="space-y-5">
-      <p className="text-sm leading-6 text-[var(--text-secondary)]">{customNode.type === 'analysis' ? CUSTOM_NODE_META.analysis.description : CUSTOM_NODE_META.content.description}</p>
+      <p className="text-sm leading-6 text-[var(--text-secondary)]">
+        {customNode.type === 'analysis'
+          ? CUSTOM_NODE_META.analysis.description
+          : CUSTOM_NODE_META.content.description}
+        {nodeLabel ? `（${String(nodeLabel)}）` : ''}
+      </p>
 
       <div>
         <label className="text-xs font-medium text-[var(--text-tertiary)]" htmlFor="custom-node-label">

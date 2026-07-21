@@ -38,13 +38,13 @@ def test_port_types_match_frontend_canvas():
     assert output_type_of("lexicon") == "lexicon"
     assert output_type_of("fetch") == "answers"
     assert output_type_of("extract") == "entities"
-    assert output_type_of("projection") == "circle"
+    assert output_type_of("projection") == "entity_graph"
     assert output_type_of("report") == "report"
     assert accepted_input_types("fetch") == ("questions",)
     assert accepted_input_types("extract") == ("lexicon", "answers")
     assert accepted_input_types("projection") == ("entities",)
-    assert accepted_input_types("report") == ("circle",)
-    assert set(accepted_input_types("analysis")) == {"circle", "report"}
+    assert accepted_input_types("report") == ("entity_graph",)
+    assert set(accepted_input_types("analysis")) == {"entity_graph", "report"}
     assert set(accepted_input_types("content")) == {"lexicon", "analysis"}
 
 
@@ -115,7 +115,7 @@ def test_custom_node_port_resolution():
     )
     assert output_type_of("custom-analysis-abc", topo.custom_nodes) == "analysis"
     assert set(accepted_input_types("custom-analysis-abc", topo.custom_nodes)) == {
-        "circle",
+        "entity_graph",
         "report",
     }
     assert output_type_of("platform-doubao") == "answers"

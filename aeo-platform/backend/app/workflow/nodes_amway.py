@@ -43,6 +43,36 @@ from app.workflow.topology_resolver import (
 logger = logging.getLogger(__name__)
 
 
+async def _load_editable_lexicon_registry(entity_uuid, *, enabled: bool = True):
+    """Shared lexicon loader (P2-4). Returns None when disabled or on failure."""
+    if not enabled or entity_uuid is None:
+        return None
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.amway_entity_lexicon_service import AmwayEntityLexiconService
+
+        async with AsyncSessionLocal() as db:
+            return await AmwayEntityLexiconService(db).registry_for_entity(entity_uuid)
+    except Exception as exc:
+        logger.warning("[Amway] Failed to load editable lexicon: %s", exc)
+        return None
+
+
+async def _load_lexicon_entries(entity_uuid) -> list[Any]:
+    if entity_uuid is None:
+        return []
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.amway_entity_lexicon_service import AmwayEntityLexiconService
+
+        async with AsyncSessionLocal() as db:
+            payload = await AmwayEntityLexiconService(db).payload_for_entity(entity_uuid)
+            return list(payload.get("entries") or [])
+    except Exception as exc:
+        logger.warning("[Amway] Failed to load lexicon entries: %s", exc)
+        return []
+
+
 async def amway_extract_node(state: AgentState) -> Command:
     """Entity extraction: answers + lexicon → entity signals.
 
@@ -93,27 +123,15 @@ async def amway_extract_node(state: AgentState) -> Command:
             }
         )
 
-    registry = None
     entity_uuid = _uuid_or_none(state.get("entity_id"))
-    if entity_uuid is not None and lexicon_chain_enabled(flow_topology):
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.services.amway_entity_lexicon_service import (
-                AmwayEntityLexiconService,
-            )
-
-            async with AsyncSessionLocal() as db:
-                registry = await AmwayEntityLexiconService(db).registry_for_entity(
-                    entity_uuid
-                )
-        except Exception as exc:
-            logger.warning(
-                "[AmwayExtract] Failed to load Amway editable lexicon: %s", exc
-            )
-    elif entity_uuid is not None and not lexicon_chain_enabled(flow_topology):
+    load_lexicon = lexicon_chain_enabled(flow_topology)
+    if entity_uuid is not None and not load_lexicon:
         logger.info(
             "[AmwayExtract] Lexicon edge disconnected; skipping editable lexicon load."
         )
+    registry = await _load_editable_lexicon_registry(
+        entity_uuid, enabled=load_lexicon
+    )
 
     extraction_service = AmwayEntityExtractionService(registry=registry)
     extraction_result = extraction_service.extract_from_fetch_results(fetch_results)
@@ -253,23 +271,13 @@ async def amway_projection_node(state: AgentState) -> Command:
         AmwayEntityExtractionService,
     )
 
-    registry = None
     entity_uuid = _uuid_or_none(state.get("entity_id"))
-    if entity_uuid is not None:
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.services.amway_entity_lexicon_service import (
-                AmwayEntityLexiconService,
-            )
-
-            async with AsyncSessionLocal() as db:
-                registry = await AmwayEntityLexiconService(db).registry_for_entity(
-                    entity_uuid
-                )
-        except Exception as exc:
-            logger.warning(
-                "[AmwayProjection] Failed to load Amway editable lexicon: %s", exc
-            )
+    # Projection still uses lexicon for calibration when available; respect
+    # lexicon edge if topology is loaded (same gate as extract).
+    flow_topology_for_lex = await load_flow_topology(state.get("entity_id"))
+    registry = await _load_editable_lexicon_registry(
+        entity_uuid, enabled=lexicon_chain_enabled(flow_topology_for_lex)
+    )
 
     extraction_service = AmwayEntityExtractionService(registry=registry)
     calibration_service = AmwayEntityCalibrationService(
@@ -432,12 +440,12 @@ async def amway_analysis_node(state: AgentState) -> Command:
     persist_patch: dict[str, dict[str, Any]] = {}
     for node in nodes:
         sources = custom_incoming_sources(flow_topology, node.id)
+        # P2-3: only feed inputs that are actually wired on the canvas
+        node_projection = projection if "projection" in sources else None
         node_report = report if "report" in sources else None
-        # projection is always preferred when available; report-only still runs
-        # if projection missing (API/on-demand paths may only have report).
         result = await run_analysis_node(
-            projection=projection,
-            report=node_report if node_report is not None else report,
+            projection=node_projection,
+            report=node_report,
             config=dict(node.config or {}),
             use_llm=True,
         )
@@ -521,22 +529,8 @@ async def amway_content_node(state: AgentState) -> Command:
         run_content_node,
     )
 
-    lexicon_entries: list[Any] = []
     entity_uuid = _uuid_or_none(state.get("entity_id"))
-    if entity_uuid is not None:
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.services.amway_entity_lexicon_service import (
-                AmwayEntityLexiconService,
-            )
-
-            async with AsyncSessionLocal() as db:
-                payload = await AmwayEntityLexiconService(db).payload_for_entity(
-                    entity_uuid
-                )
-                lexicon_entries = list(payload.get("entries") or [])
-        except Exception as exc:
-            logger.warning("[AmwayContent] lexicon load failed: %s", exc)
+    lexicon_entries = await _load_lexicon_entries(entity_uuid)
 
     center_term = _center_term_from_state(state)
     drafts: dict[str, Any] = dict(state.get("flow_content_drafts") or {})

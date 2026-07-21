@@ -355,7 +355,7 @@ async def run_analysis_node(
     except Exception as exc:  # pragma: no cover - network/provider path
         logger.warning("[flow-custom] analysis LLM failed: %s", exc)
         out = dict(deterministic)
-        out["fallback_reason"] = f"llm_unavailable:{exc}"
+        out["fallback_reason"] = f"llm_unavailable:{type(exc).__name__}"
         out["prompt"] = custom_prompt
         return out
 
@@ -469,7 +469,7 @@ async def run_content_node(
             "mode": "template",
             "draft": prompt_used,
             "promptUsed": prompt_used,
-            "fallback_reason": f"llm_unavailable:{exc}",
+            "fallback_reason": f"llm_unavailable:{type(exc).__name__}",
         }
 
 

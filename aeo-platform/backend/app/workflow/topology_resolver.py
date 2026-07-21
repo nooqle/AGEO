@@ -18,6 +18,7 @@ every builtin edge active — which reproduces the pre-3b hardcoded behavior.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -307,6 +308,16 @@ def validate_topology_document(raw: dict[str, Any] | None) -> dict[str, Any]:
         raise ValueError("自定义连线数量超出上限（60）")
 
     node_ids = {n.id for n in parsed.custom_nodes}
+    if len(node_ids) != len(parsed.custom_nodes):
+        raise ValueError("自定义节点 id 必须唯一")
+    # P2-11: cap config payload size (prompt templates etc.)
+    for n in parsed.custom_nodes:
+        try:
+            encoded = json.dumps(n.config or {}, ensure_ascii=False)
+        except (TypeError, ValueError):
+            raise ValueError(f"节点 {n.id} 的 config 无法序列化") from None
+        if len(encoded) > 32_000:
+            raise ValueError(f"节点 {n.id} 的配置过大（上限 32KB）")
     # Builtin canvas endpoints custom edges may legally target/source
     builtin_ids = {
         "question-set",

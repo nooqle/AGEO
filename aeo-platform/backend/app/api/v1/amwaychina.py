@@ -684,9 +684,17 @@ async def get_flow_plan(
     enabled = None
     if platforms:
         wanted = {p.strip() for p in platforms.split(",") if p.strip()}
-        enabled = [p for p in CANVAS_PLATFORM_IDS if p in wanted] or list(
-            CANVAS_PLATFORM_IDS
-        )
+        if not wanted:
+            raise HTTPException(status_code=400, detail="platforms 参数不能为空")
+        enabled = [p for p in CANVAS_PLATFORM_IDS if p in wanted]
+        unknown = sorted(wanted - set(CANVAS_PLATFORM_IDS))
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效平台参数：{', '.join(unknown)}",
+            )
+        if not enabled:
+            raise HTTPException(status_code=400, detail="无有效平台参数")
     plan = build_execution_plan_summary(topology, enabled_platforms=enabled)
     return {
         "plan": plan,
@@ -969,14 +977,27 @@ async def run_flow_custom_node(
     # content
     lexicon_payload = await AmwayEntityLexiconService(db).payload_for_entity(entity.id)
     lexicon_entries = list(lexicon_payload.get("entries") or [])
+    # P2-10: prefer analysis results from wired upstream edges only
+    from app.workflow.topology_resolver import custom_incoming_sources
+
     analysis_result = None
-    for node in topology.custom_nodes:
-        if node.type != "analysis":
-            continue
-        stored = (node.config or {}).get("result")
+    sources = custom_incoming_sources(topology, node_id)
+    analysis_by_id = {
+        n.id: (n.config or {}).get("result")
+        for n in topology.custom_nodes
+        if n.type == "analysis"
+    }
+    for source in sources:
+        stored = analysis_by_id.get(source)
         if isinstance(stored, dict) and stored.get("cards"):
             analysis_result = stored
             break
+    if analysis_result is None and "lexicon" in sources:
+        # lexicon-only content nodes may still use any analysis as soft context
+        for stored in analysis_by_id.values():
+            if isinstance(stored, dict) and stored.get("cards"):
+                analysis_result = stored
+                break
     center_terms = []
     if isinstance(projection, dict):
         center_terms = list(projection.get("center_terms") or [])

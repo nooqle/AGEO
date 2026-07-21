@@ -25,7 +25,7 @@ NodeKind = Literal["asset", "executor", "producer"]
 @dataclass(frozen=True)
 class PortSpec:
     """A typed data port. `type` is the domain-agnostic artifact type used for
-    connection validation (questions/lexicon/answers/entities/circle/report/...)."""
+    connection validation (questions/lexicon/answers/entities/entity_graph/report/...)."""
 
     type: str
     required: bool = True
@@ -180,7 +180,7 @@ AMWAY_NODE_CONTRACTS: dict[str, NodeContract] = {
         id="projection",
         kind="executor",
         inputs=(PortSpec("entities"),),
-        outputs=(PortSpec("circle"),),
+        outputs=(PortSpec("entity_graph"),),
         graph_node="amway_projection",
         tool_name="amway_circle_projection",
         stage_code="building_circle",
@@ -189,7 +189,7 @@ AMWAY_NODE_CONTRACTS: dict[str, NodeContract] = {
     "report": NodeContract(
         id="report",
         kind="executor",
-        inputs=(PortSpec("circle"),),
+        inputs=(PortSpec("entity_graph"),),
         outputs=(PortSpec("report"),),
         graph_node="a5_analytics",
         tool_name="analysis_report_skill",
@@ -200,7 +200,10 @@ AMWAY_NODE_CONTRACTS: dict[str, NodeContract] = {
     "analysis": NodeContract(
         id="analysis",
         kind="executor",
-        inputs=(PortSpec("circle", required=False), PortSpec("report", required=False)),
+        inputs=(
+            PortSpec("entity_graph", required=False),
+            PortSpec("report", required=False),
+        ),
         outputs=(PortSpec("analysis"),),
         config_schema=(
             ConfigField("label", "string", "", "display name"),
