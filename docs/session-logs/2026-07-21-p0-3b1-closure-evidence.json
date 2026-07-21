@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-21T05:59:05.408536+00:00",
+  "generated_at": "2026-07-21T10:24:46.433387+00:00",
   "scope": "P0 closure for blueprint 3b-1 (gate + real LLM custom nodes)",
   "checks": [
     {
@@ -27,19 +27,20 @@
       "name": "real_llm_analysis",
       "ok": true,
       "mode": "llm",
-      "card_count": 1,
+      "card_count": 2,
       "card_titles": [
-        "平台覆盖与实体洞察"
+        "平台覆盖与产出分析",
+        "品牌实体与风险洞察"
       ],
-      "summary_preview": "纽崔莱在已产出平台核心声量稳固，但 Doubao 平台覆盖缺失且存在监管风险关联，需针对性补齐监测。",
+      "summary_preview": "纽崔莱在Kimi与DeepSeek平台关联度强，但Doubao未产出需关注，同时存在轻微监管风险信号。",
       "fallback_reason": null
     },
     {
       "name": "real_llm_content",
       "ok": true,
       "mode": "llm",
-      "draft_len": 59,
-      "draft_preview": "坚持打卡纽崔莱，大品牌从种植到生产全程严控，品质让人放心。日常补充营养，选对很重要，状态自然在线。#纽崔莱 #健康生活",
+      "draft_len": 73,
+      "draft_preview": "坚持打卡纽崔莱，大品牌有“蓝帽子”认证才安心。源自自然的植物营养，每天补充一点，为健康生活打底。健康没有捷径，唯有细水长流的坚持，安心守护每一天。",
       "fallback_reason": null
     }
   ],

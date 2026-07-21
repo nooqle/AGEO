@@ -325,6 +325,11 @@ class DashboardContextPacket:
     question_set_label: str | None
     sample_summary: str | None
     ai_sources: tuple[str, ...]
+    # 3b-1-A: topology-constrained execution plan summary (constraint mode)
+    flow_plan_summary: str | None = None
+    flow_plan_source: str | None = None
+    flow_planned_platforms: tuple[str, ...] = ()
+    flow_skipped_steps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1413,10 +1418,53 @@ def build_active_skill_packet(state: dict[str, Any]) -> ActiveSkillPacket:
     )
 
 
+def _flow_plan_fields_from_context(
+    raw_context: dict[str, Any],
+    state: dict[str, Any],
+) -> tuple[str | None, str | None, tuple[str, ...], tuple[str, ...]]:
+    """Extract topology plan snapshot from dashboard_context or state.input_scope."""
+    flow_plan = raw_context.get("flow_plan")
+    if not isinstance(flow_plan, dict):
+        input_scope = state.get("input_scope")
+        if isinstance(input_scope, dict):
+            flow_plan = input_scope.get("flow_plan")
+    if not isinstance(flow_plan, dict):
+        # allow flattened fields on dashboard_context
+        summary = _compact_text(raw_context.get("flow_plan_summary"), 240) or None
+        source = _compact_text(raw_context.get("flow_plan_source"), 80) or None
+        platforms = _normalize_text_items(
+            raw_context.get("flow_planned_platforms")
+            or raw_context.get("planned_platforms")
+        )
+        skipped = _normalize_text_items(raw_context.get("flow_skipped_steps"))
+        return summary, source, platforms, skipped
+
+    summary = _compact_text(flow_plan.get("summary"), 240) or None
+    source = _compact_text(flow_plan.get("source"), 80) or None
+    platforms = _normalize_text_items(flow_plan.get("planned_platforms"))
+    skipped: list[str] = []
+    for step in flow_plan.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("status") or "") != "skipped":
+            continue
+        label = _compact_text(step.get("label") or step.get("node_id"), 40)
+        reason = _compact_text(step.get("skip_reason"), 60)
+        if label and reason:
+            skipped.append(f"{label}（{reason}）")
+        elif label:
+            skipped.append(label)
+    return summary, source, platforms, tuple(skipped[:12])
+
+
 def build_dashboard_context_packet(state: dict[str, Any]) -> DashboardContextPacket:
     raw_context = state.get("dashboard_context") or {}
     if not isinstance(raw_context, dict):
         raw_context = {}
+
+    flow_summary, flow_source, flow_platforms, flow_skipped = (
+        _flow_plan_fields_from_context(raw_context, state)
+    )
 
     return DashboardContextPacket(
         entry_source=_compact_text(raw_context.get("entry_source"), 80) or None,
@@ -1440,6 +1488,10 @@ def build_dashboard_context_packet(state: dict[str, Any]) -> DashboardContextPac
         or None,
         sample_summary=_compact_text(raw_context.get("sample_summary"), 180) or None,
         ai_sources=_normalize_text_items(raw_context.get("ai_sources")),
+        flow_plan_summary=flow_summary,
+        flow_plan_source=flow_source,
+        flow_planned_platforms=flow_platforms,
+        flow_skipped_steps=flow_skipped,
     )
 
 
@@ -2005,6 +2057,9 @@ def render_dashboard_context_packet(packet: DashboardContextPacket) -> str:
             packet.question_set_label,
             packet.sample_summary,
             packet.ai_sources,
+            packet.flow_plan_summary,
+            packet.flow_planned_platforms,
+            packet.flow_skipped_steps,
         )
     ):
         return ""
@@ -2036,6 +2091,22 @@ def render_dashboard_context_packet(packet: DashboardContextPacket) -> str:
         lines.append(f"- 样本摘要：{packet.sample_summary}")
     if packet.ai_sources:
         lines.append(f"- 回答来源：{'、'.join(packet.ai_sources)}")
+    if (
+        packet.flow_plan_summary
+        or packet.flow_planned_platforms
+        or packet.flow_skipped_steps
+    ):
+        lines.append("- 画布拓扑执行计划（约束模式，须遵守；跳过的平台/步骤不可再调度）：")
+        if packet.flow_plan_source:
+            lines.append(f"  - 计划来源：{packet.flow_plan_source}")
+        if packet.flow_plan_summary:
+            lines.append(f"  - 计划摘要：{packet.flow_plan_summary}")
+        if packet.flow_planned_platforms:
+            lines.append(
+                f"  - 允许采集平台：{'、'.join(packet.flow_planned_platforms)}"
+            )
+        if packet.flow_skipped_steps:
+            lines.append(f"  - 已跳过：{'；'.join(packet.flow_skipped_steps)}")
     return "\n".join(lines)
 
 

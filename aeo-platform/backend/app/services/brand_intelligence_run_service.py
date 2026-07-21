@@ -301,10 +301,26 @@ def _build_brand_run_initial_state(
         "source": "brand_intelligence_run",
         "run_id": str(run.id),
         "analysis_mode": run.analysis_mode,
+        "entry_source": "brand_intelligence_run",
     }
     if association_context:
         dashboard_context.update(association_context)
         input_scope = _merge_json(input_scope, association_context) or input_scope
+
+    # 3b-1-A: surface topology-constrained plan into orchestrator-readable context
+    flow_plan = input_scope.get("flow_plan")
+    if isinstance(flow_plan, dict) and flow_plan:
+        dashboard_context["flow_plan"] = flow_plan
+        dashboard_context["flow_plan_summary"] = str(flow_plan.get("summary") or "")
+        dashboard_context["flow_plan_source"] = str(
+            flow_plan.get("source") or "topology_constraint"
+        )
+        dashboard_context["flow_planned_platforms"] = list(
+            flow_plan.get("planned_platforms") or []
+        )
+        # Align state.platform_filter with topology-constrained plan (gate + switches)
+        if flow_plan.get("planned_platforms") is not None:
+            platform_filter = _string_list(flow_plan.get("planned_platforms"))
 
     user_decisions = {
         "fetch_mode": fetch_mode,
@@ -372,6 +388,8 @@ def _build_brand_run_initial_state(
         "selected_tool_mode": None,
         "latest_user_input": run.run_goal or DEFAULT_RUN_GOAL,
         "dashboard_context": dashboard_context,
+        # Keep a top-level handle for nodes/packets that read plan outside dashboard_context
+        "input_scope": input_scope,
         "table_intake_result": uploaded_question_payload,
         "confirmed_import_action": (
             {"import_mode": uploaded_question_payload["import_intent"]["mode"]}

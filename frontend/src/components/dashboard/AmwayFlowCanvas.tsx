@@ -2173,7 +2173,7 @@ function CustomNodeDetail({
             </button>
           </div>
           <p className="mt-1.5 text-xs text-[var(--text-tertiary)]">
-            「运行此分支」会连同下游已接线的内容创作节点一起执行。
+            「运行此分支」会连同下游已接线的内容创作节点一起执行（仍不重跑采集/抽取/报告）。
           </p>
           {analysisResult ? (
             <button
@@ -2346,7 +2346,7 @@ function FlowNodeDetail({
         <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 py-3">
           <div className="text-xs font-medium text-[var(--text-tertiary)]">局部运行</div>
           <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-            不重跑采集，仅执行从此节点连出的数据分析 / 内容创作自定义分支。
+            边界：只重跑画布上的自定义节点（数据分析 / 内容创作），不重跑答案采集、实体抽取、图谱构建或报告生成内核。
           </p>
           <button
             type="button"
