@@ -87,7 +87,7 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 - [x] 3c 编排条从 Canvas 拆出  
 - [x] NL 规则 / LLM 编译独立模块 + 稳定 prompt  
 - [x] Canvas P0：types/constants/topologyDoc/analysis/graphUtils/NodeCard/Panels  
-- [ ] amwaychina 路由分包（P1）  
+- [x] amwaychina 路由分包（P1）  
 - [ ] orchestrator_node 拆分设计稿（P2）  
 
-**下次继续**：**P1** `amwaychina.py` 路由分包（topology / flow-run），或 **P2** Orch 巨石设计稿。
+**下次继续**：**P2** Orch / a5 巨石设计稿（独立里程碑，勿与产品功能混做）。
