@@ -37,6 +37,10 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/services/api';
+import {
+  TOPOLOGY_PATCH_PRESETS,
+  type TopologyPatchIntentId,
+} from '@/lib/amwayFlowTopologyPatch';
 import { useTheme } from '@/hooks/useTheme';
 import type { DashboardHomeData } from '@/types/dashboard';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
@@ -1345,6 +1349,87 @@ export function AmwayFlowCanvas({
   const customRunLockRef = useRef<string | null>(null);
   const [customNodeError, setCustomNodeError] = useState<string | null>(null);
 
+  // 3c-B: deterministic topology patch preview / confirm (no NL)
+  const [patchBusy, setPatchBusy] = useState(false);
+  const [patchError, setPatchError] = useState<string | null>(null);
+  const [patchPreview, setPatchPreview] = useState<{
+    intentId: TopologyPatchIntentId;
+    summaryText: string;
+    planSummary: string;
+    plannedPlatforms: string[];
+  } | null>(null);
+
+  const previewTopologyPatch = useCallback(
+    async (intentId: TopologyPatchIntentId) => {
+      if (patchBusy || customRunLockRef.current) return;
+      setPatchBusy(true);
+      setPatchError(null);
+      try {
+        const resp = await api.previewAmwayFlowTopologyPatch(entityId, {
+          intent_id: intentId,
+          expected_version: topologyVersionRef.current,
+        });
+        if (typeof resp.base?.version === 'number') {
+          topologyVersionRef.current = resp.base.version;
+        }
+        const planned = Array.isArray(resp.plan?.planned_platforms)
+          ? resp.plan.planned_platforms.map(String)
+          : [];
+        setPatchPreview({
+          intentId,
+          summaryText: String(resp.summary?.text || '无实质变更'),
+          planSummary: String(resp.plan?.summary || ''),
+          plannedPlatforms: planned,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '预览失败';
+        setPatchPreview(null);
+        setPatchError(
+          message.includes('版本冲突')
+            ? '拓扑版本冲突：请刷新页面后再预览。'
+            : message,
+        );
+      } finally {
+        setPatchBusy(false);
+      }
+    },
+    [entityId, patchBusy],
+  );
+
+  const applyTopologyPatch = useCallback(async () => {
+    if (!patchPreview || patchBusy || customRunLockRef.current) return;
+    const version = topologyVersionRef.current;
+    if (version == null) {
+      setPatchError('缺少拓扑版本，请刷新页面后重试。');
+      return;
+    }
+    setPatchBusy(true);
+    setPatchError(null);
+    try {
+      const resp = await api.applyAmwayFlowTopologyPatch(entityId, {
+        intent_id: patchPreview.intentId,
+        expected_version: version,
+      });
+      const remote = parseFlowTopology(resp.topology);
+      topologyDirtyRef.current = false;
+      if (typeof resp.version === 'number') {
+        topologyVersionRef.current = resp.version;
+      }
+      setTopology(remote);
+      writeFlowTopology(entityId, remote);
+      setPatchPreview(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '应用失败';
+      setPatchError(
+        message.includes('版本冲突')
+          ? '拓扑版本冲突：请刷新页面后再应用。'
+          : message,
+      );
+    } finally {
+      setPatchBusy(false);
+    }
+  }, [entityId, patchBusy, patchPreview]);
+
   const refreshTopologyVersion = useCallback(async () => {
     try {
       const latest = await api.getAmwayFlowTopology(entityId);
@@ -1647,6 +1732,73 @@ export function AmwayFlowCanvas({
                   已自定义编排 · 断开的连线在下次运行时生效（断开平台即跳过该平台采集）
                 </p>
               ) : null}
+              {/* 3c-B: deterministic patch presets — no free-form chat yet */}
+              <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-medium text-[var(--text-tertiary)]">
+                    编排建议（试验）
+                    <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
+                      确定性意图 → 预览 → 确认写库 · 无自然语言
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TOPOLOGY_PATCH_PRESETS.map((preset) => (
+                      <button
+                        key={preset.intentId}
+                        type="button"
+                        title={preset.hint}
+                        disabled={patchBusy || Boolean(runningCustomNodeId)}
+                        onClick={() => {
+                          void previewTopologyPatch(preset.intentId);
+                        }}
+                        className="inline-flex h-8 items-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 text-xs font-medium text-[var(--text-secondary)] transition hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)] disabled:opacity-50"
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {patchPreview ? (
+                  <div className="mt-2 rounded-lg border border-[var(--brand-primary)]/25 bg-[var(--bg-primary)] px-3 py-2">
+                    <p className="text-xs leading-5 text-[var(--text-secondary)]">
+                      <span className="font-medium text-[var(--text-primary)]">变更摘要：</span>
+                      {patchPreview.summaryText}
+                    </p>
+                    {patchPreview.planSummary || patchPreview.plannedPlatforms.length ? (
+                      <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
+                        {patchPreview.planSummary
+                          || `计划平台：${patchPreview.plannedPlatforms.join(', ') || '无'}`}
+                      </p>
+                    ) : null}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={patchBusy}
+                        onClick={() => {
+                          void applyTopologyPatch();
+                        }}
+                        className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
+                      >
+                        {patchBusy ? '应用中…' : '确认应用'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={patchBusy}
+                        onClick={() => {
+                          setPatchPreview(null);
+                          setPatchError(null);
+                        }}
+                        className="inline-flex h-8 items-center rounded-lg border border-[var(--border-subtle)] px-3 text-xs font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] disabled:opacity-60"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {patchError ? (
+                  <p className="mt-2 text-xs leading-5 text-[var(--error)]">{patchError}</p>
+                ) : null}
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button

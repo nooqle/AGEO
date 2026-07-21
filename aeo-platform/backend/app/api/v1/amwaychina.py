@@ -787,6 +787,142 @@ async def put_flow_topology(
     }
 
 
+class FlowTopologyPatchRequest(BaseModel):
+    """3c-B: deterministic topology ops (intent_id XOR ops)."""
+
+    intent_id: str | None = None
+    ops: list[dict[str, Any]] | None = None
+    # Client's last seen row.version; preview also rejects mismatch (stale base).
+    expected_version: int | None = None
+
+
+def _load_topology_row(db_result_row: Any) -> tuple[dict[str, Any], int]:
+    """Return (topology_dict, version). Missing row → empty / version 0."""
+    if db_result_row is None:
+        return dict(_EMPTY_TOPOLOGY), 0
+    try:
+        topology = _normalize_topology(db_result_row.topology)
+    except ValueError:
+        topology = dict(_EMPTY_TOPOLOGY)
+    return topology, int(db_result_row.version or 1)
+
+
+def _build_patch_result(
+    *,
+    base_topology: dict[str, Any],
+    base_version: int,
+    body: FlowTopologyPatchRequest,
+) -> dict[str, Any]:
+    from app.workflow.node_contracts import FlowTopology
+    from app.workflow.topology_patch import resolve_ops_payload, apply_topology_ops
+    from app.workflow.topology_resolver import build_execution_plan_summary
+
+    try:
+        ops = resolve_ops_payload(
+            intent_id=body.intent_id,
+            ops=body.ops,
+            base=base_topology,
+        )
+        proposed_raw, summary = apply_topology_ops(base_topology, ops)
+        proposed = _normalize_topology(proposed_raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    plan = build_execution_plan_summary(FlowTopology.from_dict(proposed))
+    return {
+        "base": {"topology": base_topology, "version": base_version},
+        "proposed": {"topology": proposed},
+        "ops": ops,
+        "summary": summary,
+        "plan": plan,
+    }
+
+
+@router.post("/entities/{entity_id}/flow-topology/preview-patch")
+async def preview_flow_topology_patch(
+    entity_id: str,
+    body: FlowTopologyPatchRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """3c-B: dry-run topology ops; no write. Rejects stale expected_version."""
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    base_topology, base_version = _load_topology_row(row)
+    if body.expected_version is not None and int(body.expected_version) != base_version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"拓扑版本冲突：期望 version={body.expected_version}，"
+                f"当前 version={base_version}。请重新加载后再预览。"
+            ),
+        )
+    return _build_patch_result(
+        base_topology=base_topology, base_version=base_version, body=body
+    )
+
+
+@router.post("/entities/{entity_id}/flow-topology/apply-patch")
+async def apply_flow_topology_patch(
+    entity_id: str,
+    body: FlowTopologyPatchRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """3c-B: apply topology ops with optimistic lock, then persist."""
+    entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
+    if body.expected_version is None:
+        raise HTTPException(
+            status_code=400,
+            detail="apply-patch 必须提供 expected_version",
+        )
+    row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    base_topology, base_version = _load_topology_row(row)
+    if int(body.expected_version) != base_version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"拓扑版本冲突：期望 version={body.expected_version}，"
+                f"当前 version={base_version}。请重新加载后再应用。"
+            ),
+        )
+    result = _build_patch_result(
+        base_topology=base_topology, base_version=base_version, body=body
+    )
+    normalized = result["proposed"]["topology"]
+
+    if row is None:
+        try:
+            row = FlowTopologyRecord(entity_id=entity.id, topology=normalized)
+            db.add(row)
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="拓扑正在被其他请求创建，请重试。",
+            ) from exc
+    else:
+        row.topology = normalized
+        row.version = int(row.version or 1) + 1
+        await db.commit()
+    await db.refresh(row)
+    return {
+        **result,
+        "topology": normalized,
+        "version": int(row.version or 1),
+        "updated_at": _iso(row.updated_at),
+    }
+
+
 class FlowNodeRunRequest(BaseModel):
     """Optional config overrides for a single custom-node run (3b-1.5)."""
 

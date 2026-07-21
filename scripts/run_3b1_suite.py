@@ -23,6 +23,7 @@ SUITES = [
     "tests/test_amway_flow_custom_nodes.py",
     "tests/test_flow_topology_api.py",
     "tests/test_flow_plan_context.py",
+    "tests/test_topology_patch.py",  # 3c-B deterministic ops (shares topology freeze)
 ]
 
 

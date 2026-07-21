@@ -1776,6 +1776,61 @@ class ApiService {
     });
   }
 
+  /** 3c-B: dry-run deterministic topology ops (intent_id XOR ops). */
+  async previewAmwayFlowTopologyPatch(
+    entityId: string,
+    body: {
+      intent_id?: string | null;
+      ops?: Array<Record<string, unknown>> | null;
+      expected_version?: number | null;
+    },
+  ): Promise<{
+    base: { topology: AmwayFlowTopologyDoc; version: number };
+    proposed: { topology: AmwayFlowTopologyDoc };
+    ops: Array<Record<string, unknown>>;
+    summary: {
+      text: string;
+      nodes_added?: string[];
+      removed_edge_ids_added?: string[];
+      [key: string]: unknown;
+    };
+    plan: {
+      steps?: Array<Record<string, unknown>>;
+      planned_platforms?: string[];
+      summary?: string;
+      [key: string]: unknown;
+    };
+  }> {
+    return this.request(`/amwaychina/entities/${entityId}/flow-topology/preview-patch`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** 3c-B: apply topology ops with expected_version (required). */
+  async applyAmwayFlowTopologyPatch(
+    entityId: string,
+    body: {
+      intent_id?: string | null;
+      ops?: Array<Record<string, unknown>> | null;
+      expected_version: number;
+    },
+  ): Promise<{
+    topology: AmwayFlowTopologyDoc;
+    version: number;
+    updated_at: string | null;
+    base: { topology: AmwayFlowTopologyDoc; version: number };
+    proposed: { topology: AmwayFlowTopologyDoc };
+    ops: Array<Record<string, unknown>>;
+    summary: { text: string; [key: string]: unknown };
+    plan: { planned_platforms?: string[]; summary?: string; [key: string]: unknown };
+  }> {
+    return this.request(`/amwaychina/entities/${entityId}/flow-topology/apply-patch`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
   /** 3b-1.5: on-demand run of one analysis/content custom node. */
   async runAmwayFlowNode(
     entityId: string,
