@@ -473,6 +473,93 @@ async def run_content_node(
         }
 
 
+async def run_custom_branch(
+    *,
+    topology: Any,
+    from_node_id: str,
+    mode: str = "downstream",
+    projection: dict[str, Any] | None,
+    report: dict[str, Any] | None = None,
+    lexicon_entries: list[Any] | None = None,
+    center_term: str = "品牌",
+    use_llm: bool = True,
+) -> dict[str, Any]:
+    """Execute a partial branch of custom executors (blueprint 3b-1.6).
+
+    Returns::
+
+        {
+          "from_node_id": str,
+          "mode": str,
+          "ran_node_ids": [str, ...],
+          "results": {node_id: result_dict},
+          "config_patches": {node_id: {result, ...}},
+        }
+    """
+    from app.workflow.topology_resolver import branch_custom_executors
+
+    nodes = branch_custom_executors(topology, from_node_id, mode=mode)
+    results: dict[str, Any] = {}
+    config_patches: dict[str, dict[str, Any]] = {}
+    # Seed analysis results already on topology so content mid-branch can read
+    # siblings that were not re-run this call.
+    for node in getattr(topology, "custom_nodes", ()) or ():
+        if getattr(node, "type", None) != "analysis":
+            continue
+        stored = (getattr(node, "config", None) or {}).get("result")
+        if isinstance(stored, dict) and stored.get("cards"):
+            results[node.id] = stored
+
+    for node in nodes:
+        config = dict(getattr(node, "config", None) or {})
+        if node.type == "analysis":
+            result = await run_analysis_node(
+                projection=projection,
+                report=report,
+                config=config,
+                use_llm=use_llm,
+            )
+            results[node.id] = result
+            config_patches[node.id] = {
+                "result": result,
+                "dimensions": result.get("dimensions"),
+            }
+            continue
+
+        if node.type == "content":
+            from app.workflow.topology_resolver import custom_incoming_sources
+
+            sources = custom_incoming_sources(topology, node.id)
+            upstream = None
+            for source in sources:
+                if source in results and isinstance(results[source], dict):
+                    upstream = results[source]
+                    break
+            if upstream is None:
+                for value in results.values():
+                    if isinstance(value, dict) and value.get("cards"):
+                        upstream = value
+                        break
+            use_lexicon = "lexicon" in sources or not sources
+            result = await run_content_node(
+                center_term=center_term,
+                lexicon_entries=list(lexicon_entries or []) if use_lexicon else [],
+                analysis_result=upstream if isinstance(upstream, dict) else None,
+                config=config,
+                use_llm=use_llm,
+            )
+            results[node.id] = result
+            config_patches[node.id] = {"result": result}
+
+    return {
+        "from_node_id": str(from_node_id or ""),
+        "mode": str(mode or "downstream"),
+        "ran_node_ids": [node.id for node in nodes],
+        "results": {nid: results[nid] for nid in (n.id for n in nodes) if nid in results},
+        "config_patches": config_patches,
+    }
+
+
 async def persist_custom_node_results(
     entity_id: Any,
     results_by_node_id: dict[str, dict[str, Any]],

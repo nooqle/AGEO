@@ -159,6 +159,121 @@ def content_nodes_schedulable(topology: FlowTopology) -> tuple[TopologyNode, ...
     return tuple(ready)
 
 
+# Builtin canvas ids that can seed a partial branch run (3b-1.6).
+BRANCH_SEED_NODE_IDS: frozenset[str] = frozenset(
+    {"projection", "report", "lexicon", "extract", "fetch"}
+)
+CUSTOM_EXECUTOR_TYPES: frozenset[str] = frozenset({"analysis", "content"})
+
+
+def custom_outgoing_targets(topology: FlowTopology, node_id: str) -> frozenset[str]:
+    """Targets of custom edges leaving ``node_id``."""
+    source = str(node_id or "").strip()
+    return frozenset(
+        edge.target for edge in topology.custom_edges if edge.source == source
+    )
+
+
+def _custom_node_index(topology: FlowTopology) -> dict[str, TopologyNode]:
+    return {node.id: node for node in topology.custom_nodes}
+
+
+def branch_custom_executors(
+    topology: FlowTopology,
+    from_node_id: str,
+    *,
+    mode: str = "downstream",
+) -> tuple[TopologyNode, ...]:
+    """Resolve the ordered custom executors for a partial branch run (3b-1.6).
+
+    ``from_node_id`` may be:
+    - a custom analysis/content node id
+    - a builtin seed (``projection`` / ``report`` / ``lexicon`` / ...)
+
+    Modes:
+    - ``node_only``: only the start custom node (builtin seeds yield empty —
+      builtins themselves are not re-executed by this path)
+    - ``downstream``: start custom node (if any) plus all reachable custom
+      executors via custom edges, in topological order (analysis before content)
+    """
+    start = str(from_node_id or "").strip()
+    if not start:
+        return ()
+    by_id = _custom_node_index(topology)
+    normalized_mode = str(mode or "downstream").strip().lower()
+    if normalized_mode not in {"node_only", "downstream"}:
+        normalized_mode = "downstream"
+
+    start_custom = by_id.get(start)
+    if start_custom is not None and start_custom.type not in CUSTOM_EXECUTOR_TYPES:
+        return ()
+
+    if normalized_mode == "node_only":
+        if start_custom is not None and start_custom.type in CUSTOM_EXECUTOR_TYPES:
+            return (start_custom,)
+        return ()
+
+    # Seed set for BFS over custom edges.
+    frontier: list[str] = []
+    if start_custom is not None:
+        frontier.append(start)
+    elif start in BRANCH_SEED_NODE_IDS:
+        frontier.extend(sorted(custom_outgoing_targets(topology, start)))
+    else:
+        # Unknown id — no branch
+        return ()
+
+    reached: set[str] = set()
+    queue = list(frontier)
+    while queue:
+        current = queue.pop(0)
+        node = by_id.get(current)
+        if node is None or node.type not in CUSTOM_EXECUTOR_TYPES:
+            # Walk through non-executor hop if present (shouldn't happen often)
+            for target in custom_outgoing_targets(topology, current):
+                if target not in reached:
+                    queue.append(target)
+            continue
+        if current in reached:
+            continue
+        reached.add(current)
+        for target in custom_outgoing_targets(topology, current):
+            if target not in reached:
+                queue.append(target)
+
+    if not reached:
+        return ()
+
+    # Topological order on the reached subgraph (Kahn). Analysis naturally
+    # precedes content when edges connect them; otherwise analysis first.
+    indegree: dict[str, int] = {nid: 0 for nid in reached}
+    for edge in topology.custom_edges:
+        if edge.source in reached and edge.target in reached:
+            indegree[edge.target] = indegree.get(edge.target, 0) + 1
+    ready = sorted(
+        [nid for nid, deg in indegree.items() if deg == 0],
+        key=lambda nid: (0 if by_id[nid].type == "analysis" else 1, nid),
+    )
+    ordered: list[TopologyNode] = []
+    while ready:
+        nid = ready.pop(0)
+        ordered.append(by_id[nid])
+        for target in sorted(custom_outgoing_targets(topology, nid)):
+            if target not in indegree:
+                continue
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+                ready.sort(
+                    key=lambda x: (0 if by_id[x].type == "analysis" else 1, x)
+                )
+    # Cycles / leftovers: append remaining stably
+    remaining = [by_id[nid] for nid in sorted(reached) if nid not in {n.id for n in ordered}]
+    remaining.sort(key=lambda n: (0 if n.type == "analysis" else 1, n.id))
+    ordered.extend(remaining)
+    return tuple(ordered)
+
+
 def apply_platform_gate(
     topology: FlowTopology,
     platform_filter: list[str] | None,

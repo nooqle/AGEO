@@ -1751,16 +1751,39 @@ class ApiService {
       prompt?: string;
       promptTemplate?: string;
       use_llm?: boolean;
+      cascade?: boolean;
     },
   ): Promise<{
     node_id: string;
     node_type: string;
     result: Record<string, unknown>;
+    ran_node_ids?: string[];
     topology: AmwayFlowTopologyDoc;
   }> {
     return this.request(`/amwaychina/entities/${entityId}/flow-nodes/${nodeId}/run`, {
       method: 'POST',
       body: JSON.stringify(body || {}),
+    });
+  }
+
+  /** 3b-1.6: partial branch run from a custom node or builtin seed. */
+  async runAmwayFlowBranch(
+    entityId: string,
+    body: {
+      from_node_id: string;
+      mode?: 'node_only' | 'downstream';
+      use_llm?: boolean;
+    },
+  ): Promise<{
+    from_node_id: string;
+    mode: string;
+    ran_node_ids: string[];
+    results: Record<string, Record<string, unknown>>;
+    topology: AmwayFlowTopologyDoc;
+  }> {
+    return this.request(`/amwaychina/entities/${entityId}/flow-branch/run`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     });
   }
 

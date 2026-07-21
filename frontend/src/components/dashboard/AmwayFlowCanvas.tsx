@@ -1215,9 +1215,9 @@ export function AmwayFlowCanvas({
   const [runningCustomNodeId, setRunningCustomNodeId] = useState<string | null>(null);
   const [customNodeError, setCustomNodeError] = useState<string | null>(null);
 
-  // 3b-1.5: analysis/content 走后端真执行；失败时分析可降级本地确定性结果。
+  // 3b-1.5 / 3b-1.6: analysis/content 真执行；cascade 跑下游分支。
   const runCustomNode = useCallback(
-    async (nodeId: string) => {
+    async (nodeId: string, options?: { cascade?: boolean }) => {
       const customNode = topology.customNodes.find((node) => node.id === nodeId);
       if (!customNode || (customNode.type !== 'analysis' && customNode.type !== 'content')) return;
       setCustomNodeError(null);
@@ -1232,6 +1232,7 @@ export function AmwayFlowCanvas({
                       item === 'platform' || item === 'entities' || item === 'risk')
                   : DEFAULT_ANALYSIS_DIMENSIONS),
                 prompt: String(customNode.config.prompt || ''),
+                cascade: Boolean(options?.cascade),
               }
             : {
                 promptTemplate: String(
@@ -1244,7 +1245,7 @@ export function AmwayFlowCanvas({
         setTopology(remote);
         writeFlowTopology(entityId, remote);
       } catch (error) {
-        if (customNode.type === 'analysis' && projectionNodes.length > 0) {
+        if (customNode.type === 'analysis' && projectionNodes.length > 0 && !options?.cascade) {
           const dimensions = (Array.isArray(customNode.config.dimensions)
             ? (customNode.config.dimensions as string[]).filter((item): item is FlowAnalysisDimension =>
                 item === 'platform' || item === 'entities' || item === 'risk')
@@ -1269,9 +1270,40 @@ export function AmwayFlowCanvas({
     [entityId, projection, projectionNodes.length, topology, updateCustomNodeConfig],
   );
 
+  const runBranchFrom = useCallback(
+    async (fromNodeId: string, mode: 'node_only' | 'downstream' = 'downstream') => {
+      setCustomNodeError(null);
+      setRunningCustomNodeId(fromNodeId);
+      try {
+        await api.putAmwayFlowTopology(entityId, topology);
+        const resp = await api.runAmwayFlowBranch(entityId, {
+          from_node_id: fromNodeId,
+          mode,
+        });
+        const remote = parseFlowTopology(resp.topology);
+        topologyDirtyRef.current = true;
+        setTopology(remote);
+        writeFlowTopology(entityId, remote);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '分支运行失败';
+        setCustomNodeError(message);
+      } finally {
+        setRunningCustomNodeId(null);
+      }
+    },
+    [entityId, topology],
+  );
+
   const runAnalysis = useCallback(
     (nodeId: string) => {
       void runCustomNode(nodeId);
+    },
+    [runCustomNode],
+  );
+
+  const runAnalysisBranch = useCallback(
+    (nodeId: string) => {
+      void runCustomNode(nodeId, { cascade: true });
     },
     [runCustomNode],
   );
@@ -1648,6 +1680,7 @@ export function AmwayFlowCanvas({
                         onUpdateConfig={updateCustomNodeConfig}
                         onDelete={deleteCustomNode}
                         onRunAnalysis={runAnalysis}
+                        onRunAnalysisBranch={runAnalysisBranch}
                         onRunContent={runContent}
                         onOpenArtifact={(key) => setPanel({ kind: 'artifact', nodeId: selectedNode.id, artifact: key })}
                       />
@@ -1660,8 +1693,17 @@ export function AmwayFlowCanvas({
                       enabledPlatforms={enabledPlatforms}
                       questionSets={questionSets}
                       running={running}
+                      branchRunning={runningCustomNodeId === selectedNode.id}
+                      branchError={customNodeError}
                       onRetry={onQuickRun}
                       onOpenRunSettings={onOpenRunSettings}
+                      onRunDownstreamBranch={
+                        selectedNode.id === 'projection'
+                          || selectedNode.id === 'report'
+                          || selectedNode.id === 'lexicon'
+                          ? () => { void runBranchFrom(selectedNode.id, 'downstream'); }
+                          : undefined
+                      }
                       onOpenArtifact={(key) => {
                         if (key === 'circle') onOpenCircle();
                         else setPanel({ kind: 'artifact', nodeId: selectedNode.id, artifact: key });
@@ -1793,6 +1835,7 @@ function CustomNodeDetail({
   onUpdateConfig,
   onDelete,
   onRunAnalysis,
+  onRunAnalysisBranch,
   onRunContent,
   onOpenArtifact,
 }: {
@@ -1803,6 +1846,7 @@ function CustomNodeDetail({
   onUpdateConfig: (nodeId: string, patch: Record<string, unknown>) => void;
   onDelete: (nodeId: string) => void;
   onRunAnalysis: (nodeId: string) => void;
+  onRunAnalysisBranch: (nodeId: string) => void;
   onRunContent: (nodeId: string) => void;
   onOpenArtifact: (key: FlowArtifactKey) => void;
 }) {
@@ -1877,15 +1921,29 @@ function CustomNodeDetail({
             placeholder="例如：重点对比竞品与风险信号，给出三条可执行建议"
             className="mt-1.5 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 text-[13px] leading-5 text-[var(--text-primary)] outline-none transition focus:border-[var(--brand-primary)]"
           />
-          <button
-            type="button"
-            disabled={running}
-            onClick={() => onRunAnalysis(customNode.id)}
-            className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3.5 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
-          >
-            <Play size={13} fill="currentColor" aria-hidden />
-            {running ? '运行中…' : '运行分析'}
-          </button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={running}
+              onClick={() => onRunAnalysis(customNode.id)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3.5 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
+            >
+              <Play size={13} fill="currentColor" aria-hidden />
+              {running ? '运行中…' : '仅运行此节点'}
+            </button>
+            <button
+              type="button"
+              disabled={running}
+              onClick={() => onRunAnalysisBranch(customNode.id)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-primary)] px-3.5 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--bg-secondary)] disabled:opacity-60"
+            >
+              <Workflow size={13} aria-hidden />
+              运行此分支
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-[var(--text-tertiary)]">
+            「运行此分支」会连同下游已接线的内容创作节点一起执行。
+          </p>
           {analysisResult ? (
             <button
               type="button"
@@ -2021,20 +2079,26 @@ function FlowNodeDetail({
   enabledPlatforms,
   questionSets,
   running,
+  branchRunning = false,
+  branchError = null,
   onRetry,
   onOpenRunSettings,
   onOpenArtifact,
   onOpenCircle,
+  onRunDownstreamBranch,
 }: {
   node: AmwayFlowNode;
   activeRun?: BrandIntelligenceRun | null;
   enabledPlatforms: string[];
   questionSets: AmwayQuestionHistorySet[];
   running: boolean;
+  branchRunning?: boolean;
+  branchError?: string | null;
   onRetry: () => void;
   onOpenRunSettings: () => void;
   onOpenArtifact: (key: FlowArtifactKey) => void;
   onOpenCircle: () => void;
+  onRunDownstreamBranch?: () => void;
 }) {
   const inputScope = (activeRun?.input_scope || {}) as Record<string, unknown>;
   const boundSetId = typeof inputScope.uploaded_question_set_id === 'string' ? inputScope.uploaded_question_set_id : null;
@@ -2046,6 +2110,27 @@ function FlowNodeDetail({
   return (
     <div className="space-y-4">
       <p className="text-sm leading-6 text-[var(--text-secondary)]">{node.data.description}</p>
+
+      {onRunDownstreamBranch ? (
+        <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 py-3">
+          <div className="text-xs font-medium text-[var(--text-tertiary)]">局部运行</div>
+          <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+            不重跑采集，仅执行从此节点连出的数据分析 / 内容创作自定义分支。
+          </p>
+          <button
+            type="button"
+            disabled={branchRunning || running}
+            onClick={onRunDownstreamBranch}
+            className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3.5 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
+          >
+            <Workflow size={13} aria-hidden />
+            {branchRunning ? '分支运行中…' : '运行下游自定义节点'}
+          </button>
+          {branchError ? (
+            <p className="mt-2 text-xs leading-5 text-[var(--error)]">{branchError}</p>
+          ) : null}
+        </section>
+      ) : null}
 
       {node.id === 'question-set' ? (
         <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 py-3">

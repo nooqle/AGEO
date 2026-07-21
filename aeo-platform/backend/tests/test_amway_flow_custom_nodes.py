@@ -14,6 +14,7 @@ from app.workflow import nodes_amway
 from app.workflow.node_contracts import FlowTopology, get_contract, is_schedulable
 from app.workflow.topology_resolver import (
     analysis_nodes_schedulable,
+    branch_custom_executors,
     content_nodes_schedulable,
 )
 
@@ -223,6 +224,117 @@ async def test_amway_analysis_node_runs_and_chains_content(monkeypatch):
     update = command.update
     assert "a1" in (update.get("flow_analysis_results") or {})
     assert update["next_required_action"]["tool_name"] == "amway_content_draft"
+
+
+def test_branch_custom_executors_node_only():
+    topo = FlowTopology.from_dict(
+        {
+            "customNodes": [
+                {"id": "a1", "type": "analysis", "position": {}, "config": {}},
+                {"id": "c1", "type": "content", "position": {}, "config": {}},
+            ],
+            "customEdges": [
+                {"id": "e1", "source": "projection", "target": "a1"},
+                {"id": "e2", "source": "a1", "target": "c1"},
+            ],
+        }
+    )
+    only = branch_custom_executors(topo, "a1", mode="node_only")
+    assert [n.id for n in only] == ["a1"]
+
+
+def test_branch_custom_executors_downstream_from_analysis():
+    topo = FlowTopology.from_dict(
+        {
+            "customNodes": [
+                {"id": "a1", "type": "analysis", "position": {}, "config": {}},
+                {"id": "c1", "type": "content", "position": {}, "config": {}},
+                {"id": "c2", "type": "content", "position": {}, "config": {}},
+            ],
+            "customEdges": [
+                {"id": "e1", "source": "projection", "target": "a1"},
+                {"id": "e2", "source": "a1", "target": "c1"},
+                {"id": "e3", "source": "lexicon", "target": "c2"},
+            ],
+        }
+    )
+    # From a1: a1 then c1 (not c2 — not reachable)
+    branch = branch_custom_executors(topo, "a1", mode="downstream")
+    assert [n.id for n in branch] == ["a1", "c1"]
+
+
+def test_branch_custom_executors_from_projection_seed():
+    topo = FlowTopology.from_dict(
+        {
+            "customNodes": [
+                {"id": "a1", "type": "analysis", "position": {}, "config": {}},
+                {"id": "c1", "type": "content", "position": {}, "config": {}},
+            ],
+            "customEdges": [
+                {"id": "e1", "source": "projection", "target": "a1"},
+                {"id": "e2", "source": "a1", "target": "c1"},
+            ],
+        }
+    )
+    branch = branch_custom_executors(topo, "projection", mode="downstream")
+    assert [n.id for n in branch] == ["a1", "c1"]
+    # Builtin seed with node_only yields nothing (builtins not re-executed here)
+    assert branch_custom_executors(topo, "projection", mode="node_only") == ()
+
+
+@pytest.mark.asyncio
+async def test_run_custom_branch_orders_analysis_then_content(monkeypatch):
+    from app.services import amway_flow_custom_node_service as svc
+
+    calls: list[str] = []
+
+    async def _analysis(**kwargs):
+        calls.append("analysis")
+        return {
+            "generatedAt": "t",
+            "dimensions": ["entities"],
+            "cards": [{"title": "t", "lines": ["l"]}],
+            "mode": "deterministic",
+        }
+
+    async def _content(**kwargs):
+        calls.append("content")
+        assert kwargs.get("analysis_result") is not None
+        return {
+            "generatedAt": "t",
+            "mode": "template",
+            "draft": "draft",
+            "promptUsed": "p",
+        }
+
+    monkeypatch.setattr(svc, "run_analysis_node", _analysis)
+    monkeypatch.setattr(svc, "run_content_node", _content)
+
+    topo = FlowTopology.from_dict(
+        {
+            "customNodes": [
+                {"id": "a1", "type": "analysis", "position": {}, "config": {}},
+                {"id": "c1", "type": "content", "position": {}, "config": {}},
+            ],
+            "customEdges": [
+                {"id": "e1", "source": "projection", "target": "a1"},
+                {"id": "e2", "source": "a1", "target": "c1"},
+            ],
+        }
+    )
+    out = await svc.run_custom_branch(
+        topology=topo,
+        from_node_id="projection",
+        mode="downstream",
+        projection=_projection(),
+        lexicon_entries=[{"canonical_name": "纽崔莱"}],
+        center_term="安利",
+        use_llm=False,
+    )
+    assert calls == ["analysis", "content"]
+    assert out["ran_node_ids"] == ["a1", "c1"]
+    assert "a1" in out["config_patches"]
+    assert "c1" in out["config_patches"]
 
 
 @pytest.mark.asyncio

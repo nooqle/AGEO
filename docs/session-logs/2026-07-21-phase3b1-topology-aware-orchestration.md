@@ -14,8 +14,8 @@
 | 3b-1.2 节点输入输出显式化 | ✅ | extract/projection 从 `a4_fetch_node` 拆出为独立 LangGraph 节点（`app/workflow/nodes_amway.py`）；执行内核原样搬移，仅换编排外壳；AgentState 补 5 个 amway 字段 |
 | 3b-1.3 拓扑感知编排 | ✅ | `app/workflow/topology_resolver.py`：平台门 + 四条链门（questions→fetch / fetch→extract / extract→projection / projection→report）；画布断线真实影响运行 |
 | 3b-1.4 拓扑存储上后端 | ✅ | `flow_topologies` 表（alembic 038）+ GET/PUT API + 前端 localStorage/后端双写；E2E 全过 |
-| 3b-1.5 自定义节点真执行 | ✅ | 分析节点 LLM 二级解读 + 内容创作词库/分析产草稿；全链路链式调度 + 面板 on-demand API |
-| 3b-1.6 局部运行 | ⬜ 下一项 | 只跑拓扑某分支（on-demand API 已部分覆盖单节点运行） |
+| 3b-1.5 自定义节点真执行 | ✅ | 分析节点 LLM 二级解读 + 内容创作词库/分析产草稿；全链路链式调度 + 面板 on-demand API（commit f0af016） |
+| 3b-1.6 局部运行 | ✅ | `branch_custom_executors` + `POST flow-branch/run` + cascade；画布「仅运行此节点 / 运行此分支 / 运行下游自定义节点」 |
 
 ## 关键设计决策
 
@@ -44,9 +44,19 @@
 - API：`POST /amwaychina/entities/{id}/flow-nodes/{nodeId}/run` + 前端「运行分析 / 生成草稿」
 - 结果回写 `flow_topologies.customNodes[].config.result`
 - 测试：`tests/test_amway_flow_custom_nodes.py` + 契约测试更新
+- commit：`f0af016`
+
+## 3b-1.6 局部运行（同日）
+
+- `topology_resolver.branch_custom_executors`：从自定义节点或 builtin seed（projection/report/lexicon）解析可达执行子图并拓扑排序
+- `run_custom_branch`：按序执行 analysis→content，复用最新 cumulative projection + 词库
+- API：`POST /amwaychina/entities/{id}/flow-branch/run`；单节点 run 支持 `cascade`
+- 前端：分析节点「仅运行此节点 / 运行此分支」；projection/report/lexicon「运行下游自定义节点」
+- **边界**：不重跑 A4 采集 / extract / projection / A5 内核，只重跑自定义分析与内容分支
 
 ## 环境状态
 
 - 后端进程 be5o07udb（port 8000，无 --reload）已加载全部新代码，`flow-topology` 端点已注册
 - 待办：E2E 验证画布断线真实生效（需消耗一次真实采集，受 60 秒间隔约束，接线测试已证明门控值到达执行入口）
-- 待办：3b-1.5 E2E（真实 LLM）验证分析/内容节点产出与全链路串联
+- 待办：3b-1.5/1.6 E2E（真实 LLM）验证分析/内容节点产出与分支运行
+- 蓝皮书下一站：**3b-2 计划可视化**

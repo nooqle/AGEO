@@ -715,6 +715,16 @@ class FlowNodeRunRequest(BaseModel):
     prompt: str | None = None
     promptTemplate: str | None = None
     use_llm: bool = True
+    # 3b-1.6: after this node, also run reachable downstream custom executors
+    cascade: bool = False
+
+
+class FlowBranchRunRequest(BaseModel):
+    """Partial topology branch run (blueprint 3b-1.6)."""
+
+    from_node_id: str
+    mode: str = "downstream"  # node_only | downstream
+    use_llm: bool = True
 
 
 @router.post("/entities/{entity_id}/flow-nodes/{node_id}/run")
@@ -761,23 +771,21 @@ async def run_flow_custom_node(
 
     tracking = AmwayCircleTrackingService(db)
     projection_payload = await tracking.get_projection(entity.id, scope="cumulative")
-    projection = None
-    if isinstance(projection_payload, dict):
-        nested = projection_payload.get("association_circle_projection")
-        projection = nested if isinstance(nested, dict) and nested else None
+    projection = _load_projection_body(projection_payload)
 
     from app.services.amway_flow_custom_node_service import (
         persist_custom_node_results,
         run_analysis_node,
         run_content_node,
+        run_custom_branch,
     )
 
-    def _topology_with_result(result_payload: dict[str, Any]) -> dict[str, Any]:
+    def _topology_with_patches(patches: dict[str, dict[str, Any]]) -> dict[str, Any]:
         nodes_out = []
         for n in topology.custom_nodes:
             cfg = dict(n.config or {})
-            if n.id == node_id:
-                cfg.update(result_payload)
+            if n.id in patches:
+                cfg.update(patches[n.id])
             nodes_out.append(
                 {
                     "id": n.id,
@@ -797,6 +805,66 @@ async def run_flow_custom_node(
                 "removedEdgeIds": list(topology.removed_edge_ids),
             }
         )
+
+    if target.type == "analysis" and body.cascade:
+        if not projection:
+            raise HTTPException(
+                status_code=400,
+                detail="暂无可用圈层投影，请先完成至少一轮采集。",
+            )
+        # Apply config overrides onto the start node before branch run
+        from dataclasses import replace
+        from app.workflow.node_contracts import TopologyNode
+
+        overridden = []
+        for n in topology.custom_nodes:
+            if n.id == node_id:
+                overridden.append(
+                    TopologyNode(
+                        id=n.id,
+                        type=n.type,
+                        position=dict(n.position or {}),
+                        config=config,
+                    )
+                )
+            else:
+                overridden.append(n)
+        topology = replace(topology, custom_nodes=tuple(overridden))
+        lexicon_payload = await AmwayEntityLexiconService(db).payload_for_entity(
+            entity.id
+        )
+        center_terms = list((projection or {}).get("center_terms") or [])
+        center_term = str(
+            getattr(entity, "name", None)
+            or (center_terms[0] if center_terms else "")
+            or "品牌"
+        )
+        branch_result = await run_custom_branch(
+            topology=topology,
+            from_node_id=node_id,
+            mode="downstream",
+            projection=projection,
+            report=None,
+            lexicon_entries=list(lexicon_payload.get("entries") or []),
+            center_term=center_term,
+            use_llm=bool(body.use_llm),
+        )
+        patches = branch_result.get("config_patches") or {}
+        if patches:
+            await persist_custom_node_results(entity.id, patches)
+        if row is not None:
+            await db.refresh(row)
+            topology_out = _normalize_topology(row.topology)
+        else:
+            topology_out = _topology_with_patches(patches)
+        primary = (branch_result.get("results") or {}).get(node_id) or {}
+        return {
+            "node_id": node_id,
+            "node_type": "analysis",
+            "result": primary,
+            "ran_node_ids": branch_result.get("ran_node_ids") or [],
+            "topology": topology_out,
+        }
 
     if target.type == "analysis":
         if not projection:
@@ -819,7 +887,7 @@ async def run_flow_custom_node(
             await db.refresh(row)
             topology_out = _normalize_topology(row.topology)
         else:
-            topology_out = _topology_with_result(result_patch)
+            topology_out = _topology_with_patches({node_id: result_patch})
         return {
             "node_id": node_id,
             "node_type": "analysis",
@@ -860,10 +928,148 @@ async def run_flow_custom_node(
         await db.refresh(row)
         topology_out = _normalize_topology(row.topology)
     else:
-        topology_out = _topology_with_result(result_patch)
+        topology_out = _topology_with_patches({node_id: result_patch})
     return {
         "node_id": node_id,
         "node_type": "content",
         "result": result,
+        "topology": topology_out,
+    }
+
+
+def _load_projection_body(projection_payload: Any) -> dict[str, Any] | None:
+    if not isinstance(projection_payload, dict):
+        return None
+    nested = projection_payload.get("association_circle_projection")
+    if isinstance(nested, dict) and nested:
+        return nested
+    return None
+
+
+@router.post("/entities/{entity_id}/flow-branch/run")
+async def run_flow_branch(
+    entity_id: str,
+    body: FlowBranchRunRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run a partial branch of the canvas topology (3b-1.6).
+
+    ``from_node_id`` may be a custom analysis/content node or a builtin seed
+    (``projection`` / ``report`` / ``lexicon``). Builtin executors themselves
+    are not re-run — only reachable custom analysis/content nodes, using the
+    latest cumulative projection + lexicon as inputs.
+    """
+    entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
+    from_node_id = str(body.from_node_id or "").strip()
+    if not from_node_id:
+        raise HTTPException(status_code=400, detail="from_node_id 不能为空")
+    mode = str(body.mode or "downstream").strip().lower()
+    if mode not in {"node_only", "downstream"}:
+        raise HTTPException(status_code=400, detail="mode 必须是 node_only 或 downstream")
+
+    row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    topology_raw = (
+        row.topology if row is not None and isinstance(row.topology, dict) else {}
+    )
+    from app.workflow.node_contracts import FlowTopology
+    from app.workflow.topology_resolver import (
+        BRANCH_SEED_NODE_IDS,
+        branch_custom_executors,
+    )
+
+    topology = FlowTopology.from_dict(topology_raw)
+    custom_ids = {n.id for n in topology.custom_nodes}
+    if from_node_id not in custom_ids and from_node_id not in BRANCH_SEED_NODE_IDS:
+        raise HTTPException(
+            status_code=404,
+            detail="起点节点不存在（需为自定义节点或 projection/report/lexicon）",
+        )
+
+    planned = branch_custom_executors(topology, from_node_id, mode=mode)
+    if not planned:
+        raise HTTPException(
+            status_code=400,
+            detail="该起点没有可执行的自定义节点分支（请先连线并添加分析/内容节点）",
+        )
+
+    # Analysis branch needs projection data.
+    needs_projection = any(n.type == "analysis" for n in planned)
+    tracking = AmwayCircleTrackingService(db)
+    projection_payload = await tracking.get_projection(entity.id, scope="cumulative")
+    projection = _load_projection_body(projection_payload)
+    if needs_projection and not projection:
+        raise HTTPException(
+            status_code=400,
+            detail="暂无可用圈层投影，请先完成至少一轮采集。",
+        )
+
+    lexicon_payload = await AmwayEntityLexiconService(db).payload_for_entity(entity.id)
+    lexicon_entries = list(lexicon_payload.get("entries") or [])
+    center_terms = list((projection or {}).get("center_terms") or [])
+    center_term = str(
+        getattr(entity, "name", None)
+        or (center_terms[0] if center_terms else "")
+        or (projection or {}).get("center_term")
+        or "品牌"
+    )
+
+    from app.services.amway_flow_custom_node_service import (
+        persist_custom_node_results,
+        run_custom_branch,
+    )
+
+    branch_result = await run_custom_branch(
+        topology=topology,
+        from_node_id=from_node_id,
+        mode=mode,
+        projection=projection,
+        report=None,
+        lexicon_entries=lexicon_entries,
+        center_term=center_term,
+        use_llm=bool(body.use_llm),
+    )
+    patches = branch_result.get("config_patches") or {}
+    if patches:
+        await persist_custom_node_results(entity.id, patches)
+
+    if row is not None:
+        await db.refresh(row)
+        topology_out = _normalize_topology(row.topology)
+    else:
+        nodes_out = []
+        for n in topology.custom_nodes:
+            cfg = dict(n.config or {})
+            if n.id in patches:
+                cfg.update(patches[n.id])
+            nodes_out.append(
+                {
+                    "id": n.id,
+                    "type": n.type,
+                    "position": n.position,
+                    "config": cfg,
+                }
+            )
+        topology_out = _normalize_topology(
+            {
+                "version": topology.version,
+                "customNodes": nodes_out,
+                "customEdges": [
+                    {"id": e.id, "source": e.source, "target": e.target}
+                    for e in topology.custom_edges
+                ],
+                "removedEdgeIds": list(topology.removed_edge_ids),
+            }
+        )
+
+    return {
+        "from_node_id": from_node_id,
+        "mode": mode,
+        "ran_node_ids": branch_result.get("ran_node_ids") or [],
+        "results": branch_result.get("results") or {},
         "topology": topology_out,
     }
