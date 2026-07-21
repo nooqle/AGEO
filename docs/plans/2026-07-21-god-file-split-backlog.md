@@ -20,7 +20,7 @@
 | **`AmwayFlowCanvas.tsx`** | **~1547**（曾 ~2768→2590） | 生产线画布 | ✅ **P0 壳达标** |
 | `BrandOntologyHome.tsx` | ~2747 | 首页 | ⬜ 后续 |
 | `orchestrator_context_packets.py` | ~2164 | 上下文包 | ⬜ 与 cache harness 一并 |
-| `amwaychina.py` | ~1.2k+ | API 路由 | 🔄 逻辑已外置 topology_* |
+| `amwaychina.py` | **~552**（曾 ~1.2k） | 圈层/词库/问题集 + include | ✅ **P1 完成** |
 
 ---
 
@@ -53,13 +53,14 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 壳内保留：ReactFlow 状态、运行计划条、与 PatchBar/Panels 接线。  
 目录：`frontend/src/components/dashboard/amway-flow/`
 
-### P1 — `amwaychina.py` 路由分包
+### P1 — `amwaychina.py` 路由分包 — ✅ 已完成（2026-07-21）
 
-| 模块 | 职责 |
-|---|---|
-| `api/v1/amwaychina_flow_topology.py` | GET/PUT topology、preview/apply/compile-nl、flow-plan |
-| `api/v1/amwaychina_flow_run.py` | flow-nodes/run、flow-branch/run |
-| `amwaychina.py` | 实体词库等其它 console API + include_router |
+| 模块 | 约行 | 职责 |
+|---|---:|---|
+| `api/v1/amwaychina_common.py` | ~118 | 鉴权 / UUID / iso / projection body |
+| `api/v1/amwaychina_flow_topology.py` | ~373 | flow-plan、GET/PUT topology、preview/apply/compile-nl |
+| `api/v1/amwaychina_flow_run.py` | ~392 | flow-nodes/run、flow-branch/run |
+| `amwaychina.py` | ~552 | 圈层/词库/问题集 + `include_router`；测试仍可 `from amwaychina import _normalize_topology` |
 
 ### P2 — 巨石（单独里程碑，勿与 3c 混做）
 
