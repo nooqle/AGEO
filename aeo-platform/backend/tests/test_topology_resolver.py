@@ -106,6 +106,13 @@ def test_execution_plan_summary_empty_topology_all_platforms():
     by_id = {s["node_id"]: s for s in plan["steps"]}
     assert by_id["fetch"]["status"] == "pending"
     assert by_id["report"]["status"] == "pending"
+    # F2: lexicon step present and ordered before extract (canvas parity)
+    assert by_id["lexicon"]["status"] == "pending"
+    ids = [s["node_id"] for s in plan["steps"]]
+    assert ids.index("lexicon") < ids.index("extract")
+    # default path: question-set + fetch + 4 platforms + lexicon + extract + projection + report
+    planned = [s for s in plan["steps"] if s["status"] != "skipped"]
+    assert len(planned) == 10
 
 
 def test_execution_plan_summary_skips_disconnected_platform_and_report():

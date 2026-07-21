@@ -54,6 +54,35 @@ def test_add_projection_analysis_wires_custom_node():
     assert node["id"] in summary["nodes_added"]
 
 
+def test_add_projection_analysis_second_expand_is_deterministic():
+    """F1: same base → same collision id on every expand (preview == apply)."""
+    base = {
+        **_EMPTY_TOPOLOGY,
+        "customNodes": [
+            {
+                "id": "custom-analysis-3c-preset",
+                "type": "analysis",
+                "position": {"x": 1, "y": 1},
+                "config": {},
+            }
+        ],
+        "customEdges": [
+            {
+                "id": "e-custom-analysis-3c-preset",
+                "source": "projection",
+                "target": "custom-analysis-3c-preset",
+            }
+        ],
+    }
+    ops_a = expand_intent("add_projection_analysis", base)
+    ops_b = expand_intent("add_projection_analysis", base)
+    assert ops_a == ops_b
+    node_id = ops_a[0]["node"]["id"]
+    assert node_id == "custom-analysis-3c-preset-2"
+    proposed, _ = apply_topology_ops(base, ops_a)
+    assert any(n["id"] == node_id for n in proposed["customNodes"])
+
+
 def test_add_custom_node_idempotent_upsert():
     ops = [
         {

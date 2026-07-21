@@ -1069,6 +1069,15 @@ export function AmwayFlowCanvas({
   const nodeSubtitleMap = useMemo(() => {
     const fetching = running && stageCode.startsWith('A4');
     const analyzing = running && stageCode.startsWith('A5');
+    // F2: prefer locked/planned platform count over local switches (4/4 trap)
+    const plannedPlatformCount = executionPlan.steps.filter(
+      (step) => step.kind === 'platform' && step.status !== 'skipped',
+    ).length;
+    const platformDenom = ALL_PLATFORM_IDS.length;
+    const platformSubtitle =
+      plannedPlatformCount > 0 || executionPlan.steps.some((s) => s.kind === 'platform')
+        ? `${plannedPlatformCount}/${platformDenom} 个平台`
+        : `${enabledPlatforms.length}/${platformDenom} 个平台`;
     const subtitles = new Map<string, string>();
     subtitles.set('question-set', questionBank.length ? `${questionBank.length} 题` : '系统默认问题集');
     subtitles.set('lexicon', '品牌实体识别范围');
@@ -1078,7 +1087,7 @@ export function AmwayFlowCanvas({
         ? progressMessage || '正在采集'
         : answerCount
           ? `${answerCount} 条回答`
-          : `${enabledPlatforms.length}/${ALL_PLATFORM_IDS.length} 个平台`,
+          : platformSubtitle,
     );
     subtitles.set(
       'extract',
@@ -1094,6 +1103,7 @@ export function AmwayFlowCanvas({
   }, [
     answerCount,
     enabledPlatforms.length,
+    executionPlan.steps,
     hasReport,
     liveSignalCount,
     progressMessage,
@@ -1356,6 +1366,8 @@ export function AmwayFlowCanvas({
   const [patchNotice, setPatchNotice] = useState<string | null>(null);
   const [patchPreview, setPatchPreview] = useState<{
     intentId: TopologyPatchIntentId;
+    /** Frozen ops from preview — apply must use these (F1), not re-expand intent. */
+    ops: Array<Record<string, unknown>>;
     summaryText: string;
     planSummary: string;
     plannedPlatforms: string[];
@@ -1378,8 +1390,17 @@ export function AmwayFlowCanvas({
         const planned = Array.isArray(resp.plan?.planned_platforms)
           ? resp.plan.planned_platforms.map(String)
           : [];
+        const ops = Array.isArray(resp.ops)
+          ? (resp.ops as Array<Record<string, unknown>>)
+          : [];
+        if (!ops.length) {
+          setPatchPreview(null);
+          setPatchError('预览未返回可应用的操作列表。');
+          return;
+        }
         setPatchPreview({
           intentId,
+          ops,
           summaryText: String(resp.summary?.text || '无实质变更'),
           planSummary: String(resp.plan?.summary || ''),
           plannedPlatforms: planned,
@@ -1410,8 +1431,9 @@ export function AmwayFlowCanvas({
     setPatchError(null);
     setPatchNotice(null);
     try {
+      // F1: send frozen ops from preview — never re-expand intent_id on apply
       const resp = await api.applyAmwayFlowTopologyPatch(entityId, {
-        intent_id: patchPreview.intentId,
+        ops: patchPreview.ops,
         expected_version: version,
       });
       const remote = parseFlowTopology(resp.topology);
@@ -2188,11 +2210,15 @@ export function AmwayFlowCanvas({
                       />
                     );
                   }
+                  const plannedPlatformIds = executionPlan.steps
+                    .filter((step) => step.kind === 'platform' && step.status !== 'skipped')
+                    .map((step) => step.nodeId.replace(/^platform-/, ''));
                   return (
                     <FlowNodeDetail
                       node={selectedNode}
                       activeRun={activeRun}
                       enabledPlatforms={enabledPlatforms}
+                      plannedPlatformIds={plannedPlatformIds}
                       questionSets={questionSets}
                       running={running}
                       branchRunning={Boolean(runningCustomNodeId)}
@@ -2584,6 +2610,7 @@ function FlowNodeDetail({
   node,
   activeRun,
   enabledPlatforms,
+  plannedPlatformIds,
   questionSets,
   running,
   branchRunning = false,
@@ -2597,6 +2624,8 @@ function FlowNodeDetail({
   node: AmwayFlowNode;
   activeRun?: BrandIntelligenceRun | null;
   enabledPlatforms: string[];
+  /** From execution plan (topology/run lock); preferred over switches for run display (F2). */
+  plannedPlatformIds?: string[];
   questionSets: AmwayQuestionHistorySet[];
   running: boolean;
   branchRunning?: boolean;
@@ -2674,10 +2703,22 @@ function FlowNodeDetail({
           <div className="text-xs font-medium text-[var(--text-tertiary)]">采集配置</div>
           <div className="mt-1 text-sm font-semibold text-[var(--text-primary)]">{fetchModeLabel}</div>
           <div className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-            平台通道：{enabledPlatforms.length}/{ALL_PLATFORM_IDS.length} 启用
-            {enabledPlatforms.length < ALL_PLATFORM_IDS.length
-              ? `（已停用 ${ALL_PLATFORM_IDS.filter((id) => !enabledPlatforms.includes(id)).map((id) => PLATFORM_META.find((item) => item.id === id)?.label || id).join('、')}）`
-              : ''}
+            {(() => {
+              const planned = plannedPlatformIds && plannedPlatformIds.length >= 0
+                ? plannedPlatformIds
+                : null;
+              const activeIds = planned && planned.length
+                ? planned
+                : enabledPlatforms;
+              const skippedIds = ALL_PLATFORM_IDS.filter((id) => !activeIds.includes(id));
+              const label = planned
+                ? `计划平台：${activeIds.length}/${ALL_PLATFORM_IDS.length}`
+                : `平台通道：${activeIds.length}/${ALL_PLATFORM_IDS.length} 启用`;
+              const skipNote = skippedIds.length
+                ? `（${planned ? '计划跳过' : '已停用'} ${skippedIds.map((id) => PLATFORM_META.find((item) => item.id === id)?.label || id).join('、')}）`
+                : '';
+              return `${label}${skipNote}`;
+            })()}
           </div>
           <button
             type="button"

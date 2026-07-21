@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
-from uuid import uuid4
 
 from app.workflow.topology_resolver import (
     BUILTIN_EDGE_IDS,
@@ -54,10 +53,14 @@ def expand_intent(intent_id: str, base: dict[str, Any] | None = None) -> list[di
             for n in (base.get("customNodes") or [])
             if isinstance(n, dict) and n.get("id")
         }
-        # Prefer stable id for tests; bump if collision.
+        # Deterministic ids only (F1): preview and apply must expand to the same
+        # ops for the same base. Never use random UUID here.
         node_id = "custom-analysis-3c-preset"
         if node_id in existing_ids:
-            node_id = f"custom-analysis-3c-{uuid4().hex[:8]}"
+            n = 2
+            while f"custom-analysis-3c-preset-{n}" in existing_ids:
+                n += 1
+            node_id = f"custom-analysis-3c-preset-{n}"
         edge_id = f"e-{node_id}"
         return [
             {

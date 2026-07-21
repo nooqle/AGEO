@@ -461,6 +461,17 @@ def build_execution_plan_summary(
         )
 
     extract_planned = fetch_ok and extract_ok and bool(planned_platforms)
+    # Align with frontend buildAmwayFlowExecutionPlan: lexicon asset step sits
+    # before extract (F2 step-count parity).
+    content_needs_lexicon = any(n.type == "content" for n in topology.custom_nodes)
+    lexicon_planned = extract_planned or content_needs_lexicon
+    add(
+        "lexicon",
+        "实体词库",
+        skipped=not lexicon_planned,
+        reason=None if lexicon_planned else "本轮未使用词库下游",
+    )
+
     add(
         "extract",
         "实体抽取",
@@ -475,6 +486,8 @@ def build_execution_plan_summary(
     )
     if extract_planned:
         active_edge_ids.append(EDGE_FETCH_EXTRACT)
+        if is_edge_active(topology, EDGE_LEXICON_EXTRACT):
+            active_edge_ids.append(EDGE_LEXICON_EXTRACT)
 
     projection_planned = extract_planned and projection_ok
     add(
