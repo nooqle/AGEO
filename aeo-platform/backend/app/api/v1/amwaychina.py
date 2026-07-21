@@ -796,6 +796,13 @@ class FlowTopologyPatchRequest(BaseModel):
     expected_version: int | None = None
 
 
+class FlowTopologyCompileNlRequest(BaseModel):
+    """3c-C1: natural language → ops (rule compiler; no write)."""
+
+    text: str = Field(..., min_length=1, max_length=500)
+    expected_version: int | None = None
+
+
 def _load_topology_row(db_result_row: Any) -> tuple[dict[str, Any], int]:
     """Return (topology_dict, version). Missing row → empty / version 0."""
     if db_result_row is None:
@@ -864,6 +871,52 @@ async def preview_flow_topology_patch(
     return _build_patch_result(
         base_topology=base_topology, base_version=base_version, body=body
     )
+
+
+@router.post("/entities/{entity_id}/flow-topology/compile-nl")
+async def compile_flow_topology_nl(
+    entity_id: str,
+    body: FlowTopologyCompileNlRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """3c-C1: NL → ops → same preview shape (no write, no LLM)."""
+    from app.workflow.topology_nl_compiler import compile_nl_to_ops
+
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    base_topology, base_version = _load_topology_row(row)
+    if body.expected_version is not None and int(body.expected_version) != base_version:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"拓扑版本冲突：期望 version={body.expected_version}，"
+                f"当前 version={base_version}。请重新加载后再编译。"
+            ),
+        )
+    try:
+        compiled = compile_nl_to_ops(body.text, base_topology)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    result = _build_patch_result(
+        base_topology=base_topology,
+        base_version=base_version,
+        body=FlowTopologyPatchRequest(ops=list(compiled.ops)),
+    )
+    return {
+        **result,
+        "compile": {
+            "mode": compiled.mode,
+            "matched": compiled.matched,
+            "intent_id": compiled.intent_id,
+            "confidence": compiled.confidence,
+        },
+    }
 
 
 @router.post("/entities/{entity_id}/flow-topology/apply-patch")

@@ -1807,6 +1807,32 @@ class ApiService {
     });
   }
 
+  /** 3c-C1: natural language → ops preview (rule compiler, no write). */
+  async compileAmwayFlowTopologyNl(
+    entityId: string,
+    body: {
+      text: string;
+      expected_version?: number | null;
+    },
+  ): Promise<{
+    base: { topology: AmwayFlowTopologyDoc; version: number };
+    proposed: { topology: AmwayFlowTopologyDoc };
+    ops: Array<Record<string, unknown>>;
+    summary: { text: string; [key: string]: unknown };
+    plan: { planned_platforms?: string[]; summary?: string; [key: string]: unknown };
+    compile: {
+      mode: string;
+      matched: string;
+      intent_id?: string | null;
+      confidence?: number;
+    };
+  }> {
+    return this.request(`/amwaychina/entities/${entityId}/flow-topology/compile-nl`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
   /** 3c-B: apply topology ops with expected_version (required). */
   async applyAmwayFlowTopologyPatch(
     entityId: string,
