@@ -58,8 +58,14 @@ import {
   buildLiveAssociationProjection,
   mergeStageResults,
 } from './AmwayAssociationCircleDashboard';
+import {
+  buildAmwayFlowExecutionPlan,
+  plannedNodeIdSet,
+  skippedNodeIdSet,
+  type FlowExecutionPlan,
+} from '@/lib/amwayFlowExecutionPlan';
 
-type FlowNodeStatus = 'idle' | 'active' | 'done' | 'failed';
+type FlowNodeStatus = 'idle' | 'active' | 'done' | 'failed' | 'skipped';
 type FlowArtifactKey = 'questions' | 'answers' | 'entities' | 'circle' | 'report' | 'lexicon' | 'analysisResult' | 'contentDraft';
 
 type FlowNodeOutput = {
@@ -78,6 +84,8 @@ type AmwayFlowNodeData = {
   outputs: FlowNodeOutput[];
   description: string;
   enabled?: boolean;
+  /** 3b-2: node is on the planned path (even when still idle). */
+  planned?: boolean;
   onOutput?: (nodeId: string, key: FlowArtifactKey) => void;
   onToggle?: (nodeId: string) => void;
 };
@@ -166,6 +174,7 @@ const STATUS_TEXT: Record<FlowNodeStatus, string> = {
   active: '运行中',
   done: '已完成',
   failed: '失败',
+  skipped: '计划跳过',
 };
 
 const ALL_PLATFORM_IDS = PLATFORM_META.map((item) => item.id);
@@ -197,9 +206,8 @@ function writeEnabledFlowPlatforms(entityId: string, platforms: string[]): void 
 
 const GUIDE_STORAGE_KEY = 'amway-flow-guide-seen';
 
-// ===== Phase 3a 拓扑数据模型 =====
-// 视图层编排：自定义拓扑只影响画布展示与数据流组织，执行仍走内置固定流水线。
-// 与布局存储（amway-flow-layout，管位置）分离：拓扑管连接与自定义节点，互不污染。
+// ===== 拓扑数据模型（3a 编排 + 3b 真执行/计划投影）=====
+// 拓扑是执行约束与计划投影的唯一前端事实源；布局（amway-flow-layout）只管位置。
 type CustomFlowNodeType = 'analysis' | 'content';
 
 type FlowTopologyCustomNode = {
@@ -359,6 +367,8 @@ function statusDotClass(status: FlowNodeStatus): string {
       return 'bg-[var(--brand-primary)]';
     case 'failed':
       return 'bg-[var(--error)]';
+    case 'skipped':
+      return 'bg-[var(--text-tertiary)] opacity-50';
     default:
       return 'bg-[var(--border-strong)]';
   }
@@ -372,6 +382,8 @@ function statusBarClass(status: FlowNodeStatus): string {
       return 'bg-[var(--brand-primary)] opacity-60';
     case 'failed':
       return 'bg-[var(--error)]';
+    case 'skipped':
+      return 'bg-[var(--text-tertiary)] opacity-40';
     default:
       return 'bg-transparent';
   }
@@ -380,11 +392,17 @@ function statusBarClass(status: FlowNodeStatus): string {
 function AmwayFlowNodeCard({ id, data, selected }: NodeProps<AmwayFlowNode>) {
   const isPlatform = data.variant === 'platform';
   const disabled = data.enabled === false;
+  const skipped = data.status === 'skipped';
+  const plannedIdle = data.status === 'idle' && Boolean(data.planned);
   return (
     <div
       className={`group relative rounded-xl border bg-[var(--bg-primary)] text-left shadow-sm transition-all duration-150 hover:-translate-y-px hover:shadow-md ${
-        selected ? 'border-[var(--brand-primary)]' : 'border-[var(--border-subtle)] hover:border-[var(--border-strong)]'
-      } ${isPlatform ? 'w-[148px] px-3 py-2' : 'w-[208px] px-3.5 py-3'} ${disabled ? 'opacity-45' : ''}`}
+        selected
+          ? 'border-[var(--brand-primary)]'
+          : plannedIdle
+            ? 'border-[var(--brand-primary)]/45 hover:border-[var(--brand-primary)]'
+            : 'border-[var(--border-subtle)] hover:border-[var(--border-strong)]'
+      } ${isPlatform ? 'w-[148px] px-3 py-2' : 'w-[208px] px-3.5 py-3'} ${disabled || skipped ? 'opacity-45' : ''}`}
     >
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-[var(--border-strong)]" />
       <span
@@ -873,11 +891,45 @@ export function AmwayFlowCanvas({
     return counts;
   }, [combinedLiveStageResults, evidenceSamples, sourceAppendix]);
 
+  const running = Boolean(isRunActive || isRunSubmitting);
+  const progressMessage = String(activeTask?.progress_message || activeRun?.message || '').trim();
+
+  // 3b-2.1: topology → execution plan projection (design-time + run-time)
+  const executionPlan = useMemo<FlowExecutionPlan>(
+    () =>
+      buildAmwayFlowExecutionPlan({
+        topology,
+        enabledPlatforms,
+        allPlatformIds: ALL_PLATFORM_IDS,
+        stageCode,
+        isRunning: running,
+        runFailed,
+        hasProjectionData: projectionNodes.length > 0,
+        hasReportData: hasReport,
+        answerCount,
+      }),
+    [
+      answerCount,
+      enabledPlatforms,
+      hasReport,
+      projectionNodes.length,
+      runFailed,
+      running,
+      stageCode,
+      topology,
+    ],
+  );
+  const planPlannedNodes = useMemo(() => plannedNodeIdSet(executionPlan), [executionPlan]);
+  const planSkippedNodes = useMemo(() => skippedNodeIdSet(executionPlan), [executionPlan]);
+  const planActiveEdgeIds = useMemo(
+    () => new Set(executionPlan.activeEdgeIds),
+    [executionPlan.activeEdgeIds],
+  );
+
   const nodeStatusMap = useMemo(() => {
     const hasData = projectionNodes.length > 0 || answerCount > 0;
-    const running = Boolean(isRunActive || isRunSubmitting);
     const fetching = running && stageCode.startsWith('A4');
-    const analyzing = running && stageCode.startsWith('A5');
+    const analyzing = running && (stageCode.startsWith('A5') || stageCode.includes('SECONDARY') || stageCode.includes('CONTENT'));
     const status = new Map<string, FlowNodeStatus>();
     const failNodeId = (() => {
       if (!runFailed) return null;
@@ -887,44 +939,67 @@ export function AmwayFlowCanvas({
       return 'fetch';
     })();
 
-    status.set('question-set', running || hasData ? 'done' : 'idle');
-    status.set('lexicon', running || hasData ? 'done' : 'idle');
-    status.set(
+    // Prefer plan step status when available (skipped / active / done / pending→idle)
+    executionPlan.steps.forEach((step) => {
+      if (step.status === 'skipped') status.set(step.nodeId, 'skipped');
+      else if (step.status === 'active') status.set(step.nodeId, 'active');
+      else if (step.status === 'done') status.set(step.nodeId, 'done');
+    });
+
+    const setIfAbsent = (id: string, value: FlowNodeStatus) => {
+      if (!status.has(id)) status.set(id, value);
+    };
+
+    setIfAbsent('question-set', running || hasData ? 'done' : 'idle');
+    setIfAbsent('lexicon', running || hasData ? 'done' : 'idle');
+    setIfAbsent(
       'fetch',
       failNodeId === 'fetch' ? 'failed' : fetching ? 'active' : answerCount > 0 || liveSignalCount > 0 || hasData ? 'done' : 'idle',
     );
     PLATFORM_META.forEach((platform) => {
+      const nodeId = `platform-${platform.id}`;
+      if (status.get(nodeId) === 'skipped') return;
       const count = platformAnswerCounts.get(platform.id) || 0;
-      status.set(
-        `platform-${platform.id}`,
-        count > 0 ? 'done' : fetching ? 'active' : 'idle',
+      setIfAbsent(
+        nodeId,
+        count > 0 ? 'done' : fetching && planPlannedNodes.has(nodeId) ? 'active' : 'idle',
       );
     });
-    status.set(
+    setIfAbsent(
       'extract',
       failNodeId === 'extract' ? 'failed' : projectionNodes.length > 0 ? 'done' : running && liveSignalCount > 0 ? 'active' : 'idle',
     );
-    status.set(
+    setIfAbsent(
       'projection',
       projectionNodes.length > 0 && !running ? 'done' : analyzing || (running && projectionNodes.length > 0) ? 'active' : 'idle',
     );
-    status.set('report', hasReport && !running ? 'done' : analyzing ? 'active' : 'idle');
+    setIfAbsent('report', hasReport && !running ? 'done' : analyzing ? 'active' : 'idle');
+
+    // custom nodes: plan-aware
+    topology.customNodes.forEach((customNode) => {
+      if (status.has(customNode.id)) return;
+      const hasResult = Boolean(customNode.config.result);
+      if (planSkippedNodes.has(customNode.id)) status.set(customNode.id, 'skipped');
+      else if (hasResult) status.set(customNode.id, 'done');
+      else status.set(customNode.id, 'idle');
+    });
+
     return status;
   }, [
     answerCount,
     errorStage,
+    executionPlan.steps,
     hasReport,
-    isRunActive,
-    isRunSubmitting,
     liveSignalCount,
+    planPlannedNodes,
+    planSkippedNodes,
     platformAnswerCounts,
     projectionNodes.length,
     runFailed,
+    running,
     stageCode,
+    topology.customNodes,
   ]);
-
-  const running = Boolean(isRunActive || isRunSubmitting);
-  const progressMessage = String(activeTask?.progress_message || activeRun?.message || '').trim();
 
   const togglePlatform = useCallback(
     (nodeId: string) => {
@@ -1025,6 +1100,7 @@ export function AmwayFlowCanvas({
         variant: definition.variant,
         outputs: nodeOutputsMap.get(definition.id) || [],
         description: definition.description,
+        planned: planPlannedNodes.has(definition.id),
         onOutput: handleOutput,
       },
     }));
@@ -1046,15 +1122,17 @@ export function AmwayFlowCanvas({
           outputs: [],
           description: `${platform.label} 采集通道。关闭后下一轮运行不再采集该平台。`,
           enabled: enabledPlatforms.includes(platform.id),
+          planned: planPlannedNodes.has(nodeId),
           onOutput: handleOutput,
           onToggle: togglePlatform,
         },
       });
     });
-    // Phase 3a 自定义节点（数据分析/内容创作）
+    // 自定义节点（数据分析/内容创作）
     topology.customNodes.forEach((customNode) => {
       const meta = CUSTOM_NODE_META[customNode.type];
       const hasResult = Boolean(customNode.config.result);
+      const planStatus = nodeStatusMap.get(customNode.id);
       list.push({
         id: customNode.id,
         type: 'amway',
@@ -1063,22 +1141,27 @@ export function AmwayFlowCanvas({
         selected: panel?.kind === 'node' && panel.nodeId === customNode.id,
         data: {
           label: String(customNode.config.label || meta.label),
-          subtitle: hasResult
-            ? (customNode.type === 'content' ? '已生成草稿' : '已生成结论')
-            : '待运行',
+          subtitle: planStatus === 'skipped'
+            ? '计划跳过'
+            : hasResult
+              ? (customNode.type === 'content' ? '已生成草稿' : '已生成结论')
+              : planPlannedNodes.has(customNode.id)
+                ? '计划执行'
+                : '待连线',
           icon: meta.icon,
-          status: hasResult ? 'done' : 'idle',
+          status: planStatus || (hasResult ? 'done' : 'idle'),
           variant: customNode.type,
           outputs: customNode.type === 'analysis'
             ? [{ key: 'analysisResult' as FlowArtifactKey, label: '分析结论', disabled: !hasResult }]
             : [{ key: 'contentDraft' as FlowArtifactKey, label: '内容草稿', disabled: !hasResult }],
           description: meta.description,
+          planned: planPlannedNodes.has(customNode.id),
           onOutput: handleOutput,
         },
       });
     });
     return list;
-  }, [enabledPlatforms, handleOutput, measuredSizes, nodeOutputsMap, nodeStatusMap, nodeSubtitleMap, panel, positions, togglePlatform, topology.customNodes]);
+  }, [enabledPlatforms, handleOutput, measuredSizes, nodeOutputsMap, nodeStatusMap, nodeSubtitleMap, panel, planPlannedNodes, positions, togglePlatform, topology.customNodes]);
 
   const onNodesChange = useCallback((changes: NodeChange<AmwayFlowNode>[]) => {
     setPositions((current) => {
@@ -1323,9 +1406,10 @@ export function AmwayFlowCanvas({
       const isPlatformEdge = definition.target.startsWith('platform-');
       const platformDisabled = isPlatformEdge
         && !enabledPlatforms.includes(definition.target.replace(/^platform-/, ''));
+      const onPlanPath = planActiveEdgeIds.has(definition.id);
       const highlighted = hoveredEdgeId === definition.id
         || (hoveredNodeId != null && (definition.source === hoveredNodeId || definition.target === hoveredNodeId));
-      const emphasized = (flowing && !platformDisabled) || highlighted;
+      const emphasized = (flowing && !platformDisabled) || highlighted || (onPlanPath && !platformDisabled && !running);
       return {
         id: definition.id,
         source: definition.source,
@@ -1335,13 +1419,30 @@ export function AmwayFlowCanvas({
         style: {
           stroke: emphasized ? 'var(--brand-primary)' : 'var(--border-strong)',
           strokeWidth: emphasized ? 2.5 : isPlatformEdge ? 1 : 1.5,
-          strokeDasharray: isPlatformEdge ? '4 4' : undefined,
-          opacity: platformDisabled ? 0.18 : isPlatformEdge && !emphasized ? 0.55 : 1,
+          strokeDasharray: isPlatformEdge ? '4 4' : onPlanPath && !running ? '6 3' : undefined,
+          opacity: platformDisabled
+            ? 0.18
+            : onPlanPath
+              ? 1
+              : isPlatformEdge && !emphasized
+                ? 0.55
+                : planActiveEdgeIds.size && !onPlanPath
+                  ? 0.35
+                  : 1,
           transition: 'stroke 0.15s, stroke-width 0.15s, opacity 0.15s',
         },
       };
     });
-  }, [enabledPlatforms, hoveredEdgeId, hoveredNodeId, mergedEdgeDefs, nodeStatusMap, selectedEdgeIds]);
+  }, [
+    enabledPlatforms,
+    hoveredEdgeId,
+    hoveredNodeId,
+    mergedEdgeDefs,
+    nodeStatusMap,
+    planActiveEdgeIds,
+    running,
+    selectedEdgeIds,
+  ]);
 
   // 连线改接校验：类型匹配 + 平台通道不可改接（用开关管理）+ DAG 无环
   const isValidConnection = useCallback<IsValidConnection<Edge>>(
@@ -1483,6 +1584,56 @@ export function AmwayFlowCanvas({
                 </button>
               )}
             </div>
+          </div>
+
+          {/* 3b-2.1 执行计划投影：拓扑即计划 */}
+          <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Workflow size={14} className="text-[var(--brand-primary)]" aria-hidden />
+                <span className="text-xs font-semibold text-[var(--text-primary)]">
+                  {running ? '运行计划' : '本次执行计划'}
+                </span>
+              </div>
+              <span className="text-[11px] text-[var(--text-tertiary)]">{executionPlan.summary}</span>
+            </div>
+            <ol className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              {executionPlan.steps
+                .filter((step) => step.kind !== 'platform' || step.status !== 'skipped')
+                .map((step, index, list) => {
+                  const tone =
+                    step.status === 'active'
+                      ? 'border-[var(--brand-primary)] bg-[var(--brand-primary)] text-[var(--brand-contrast)]'
+                      : step.status === 'done'
+                        ? 'border-[var(--brand-primary)]/40 bg-[var(--bg-primary)] text-[var(--brand-primary)]'
+                        : step.status === 'skipped'
+                          ? 'border-[var(--border-subtle)] bg-transparent text-[var(--text-tertiary)] line-through'
+                          : 'border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-secondary)]';
+                  return (
+                    <li key={step.id} className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        title={step.skipReason || step.label}
+                        onClick={() => setPanel({ kind: 'node', nodeId: step.nodeId })}
+                        className={`inline-flex h-7 max-w-[9.5rem] items-center truncate rounded-full border px-2.5 text-[11px] font-medium transition hover:opacity-90 ${tone}`}
+                      >
+                        {step.status === 'active' ? '● ' : step.status === 'done' ? '✓ ' : ''}
+                        {step.label}
+                      </button>
+                      {index < list.length - 1 ? (
+                        <span className="text-[10px] text-[var(--text-tertiary)]" aria-hidden>
+                          →
+                        </span>
+                      ) : null}
+                    </li>
+                  );
+                })}
+            </ol>
+            {!running ? (
+              <p className="mt-2 text-[11px] leading-5 text-[var(--text-tertiary)]">
+                计划由当前画布拓扑实时推导：断开连线或关闭平台会立刻反映在路径上（拓扑即计划）。
+              </p>
+            ) : null}
           </div>
         </section>
       </div>

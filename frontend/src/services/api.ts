@@ -1732,6 +1732,32 @@ class ApiService {
     return this.request(`/amwaychina/entities/${entityId}/flow-topology`);
   }
 
+  /** 3b-2.1: server-side plan projection from topology (optional; canvas also computes locally). */
+  async getAmwayFlowPlan(
+    entityId: string,
+    platforms?: string[],
+  ): Promise<{
+    plan: {
+      steps: Array<{
+        node_id: string;
+        label: string;
+        status: string;
+        skip_reason?: string | null;
+      }>;
+      active_edge_ids: string[];
+      planned_platforms: string[];
+      summary: string;
+    };
+    topology: AmwayFlowTopologyDoc;
+  }> {
+    const query = new URLSearchParams();
+    if (platforms?.length) query.set('platforms', platforms.join(','));
+    const qs = query.toString();
+    return this.request(
+      `/amwaychina/entities/${entityId}/flow-plan${qs ? `?${qs}` : ''}`,
+    );
+  }
+
   async putAmwayFlowTopology(
     entityId: string,
     topology: AmwayFlowTopologyDoc,

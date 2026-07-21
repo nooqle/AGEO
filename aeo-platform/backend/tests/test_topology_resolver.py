@@ -9,6 +9,7 @@ from app.workflow.topology_resolver import (
     EDGE_PROJECTION_REPORT,
     EDGE_QUESTIONS_FETCH,
     apply_platform_gate,
+    build_execution_plan_summary,
     disabled_platform_ids,
     fetch_chain_enabled,
     is_edge_active,
@@ -97,3 +98,29 @@ async def test_load_flow_topology_degrades_to_empty():
     assert await load_flow_topology("00000000-0000-0000-0000-000000000000") == (
         FlowTopology()
     )
+
+
+def test_execution_plan_summary_skips_disconnected_platform_and_report():
+    topology = FlowTopology.from_dict(
+        {
+            "removedEdgeIds": ["e-fetch-doubao", "e-projection-report"],
+            "customNodes": [
+                {"id": "a1", "type": "analysis", "position": {}, "config": {}},
+                {"id": "c1", "type": "content", "position": {}, "config": {}},
+            ],
+            "customEdges": [
+                {"id": "e1", "source": "projection", "target": "a1"},
+                {"id": "e2", "source": "a1", "target": "c1"},
+            ],
+        }
+    )
+    plan = build_execution_plan_summary(topology)
+    by_id = {s["node_id"]: s for s in plan["steps"]}
+    assert by_id["platform-doubao"]["status"] == "skipped"
+    assert "doubao" not in plan["planned_platforms"]
+    assert by_id["report"]["status"] == "skipped"
+    # analysis still planned from projection when report edge is down
+    assert by_id["a1"]["status"] == "pending"
+    assert by_id["c1"]["status"] == "pending"
+    assert "e-fetch-doubao" not in plan["active_edge_ids"]
+    assert "e-projection-report" not in plan["active_edge_ids"]

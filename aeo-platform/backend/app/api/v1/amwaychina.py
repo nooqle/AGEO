@@ -661,6 +661,47 @@ def _normalize_topology(raw: Any) -> dict[str, Any]:
     }
 
 
+@router.get("/entities/{entity_id}/flow-plan")
+async def get_flow_plan(
+    entity_id: str,
+    platforms: str | None = Query(
+        None,
+        description="Comma-separated enabled platform ids; default = all canvas platforms",
+    ),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """3b-2.1: project the deterministic execution plan from current topology."""
+    entity = await _require_amway_entity(db, current_user, entity_id)
+    row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    from app.workflow.node_contracts import FlowTopology
+    from app.workflow.topology_resolver import (
+        CANVAS_PLATFORM_IDS,
+        build_execution_plan_summary,
+    )
+
+    topology = FlowTopology.from_dict(
+        row.topology if row is not None and isinstance(row.topology, dict) else None
+    )
+    enabled = None
+    if platforms:
+        wanted = {p.strip() for p in platforms.split(",") if p.strip()}
+        enabled = [p for p in CANVAS_PLATFORM_IDS if p in wanted] or list(
+            CANVAS_PLATFORM_IDS
+        )
+    plan = build_execution_plan_summary(topology, enabled_platforms=enabled)
+    return {
+        "plan": plan,
+        "topology": _normalize_topology(
+            row.topology if row is not None and isinstance(row.topology, dict) else {}
+        ),
+    }
+
+
 @router.get("/entities/{entity_id}/flow-topology")
 async def get_flow_topology(
     entity_id: str,

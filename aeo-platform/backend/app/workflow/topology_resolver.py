@@ -274,6 +274,166 @@ def branch_custom_executors(
     return tuple(ordered)
 
 
+def build_execution_plan_summary(
+    topology: FlowTopology,
+    *,
+    enabled_platforms: list[str] | None = None,
+) -> dict[str, Any]:
+    """Deterministic plan projection for canvas topology (blueprint 3b-2.1).
+
+    Mirrors frontend ``buildAmwayFlowExecutionPlan`` at the gate level:
+    which platforms and chain hops will run, plus scheduled custom nodes.
+    Does not assign runtime active/done status (that is UI-side).
+    """
+    platforms = list(enabled_platforms or list(CANVAS_PLATFORM_IDS))
+    steps: list[dict[str, Any]] = []
+    active_edge_ids: list[str] = []
+
+    fetch_ok = fetch_chain_enabled(topology)
+    extract_ok = extract_chain_enabled(topology)
+    projection_ok = projection_chain_enabled(topology)
+    report_ok = report_chain_enabled(topology)
+    disabled = disabled_platform_ids(topology)
+
+    def add(
+        node_id: str,
+        label: str,
+        *,
+        skipped: bool = False,
+        reason: str | None = None,
+    ) -> None:
+        steps.append(
+            {
+                "node_id": node_id,
+                "label": label,
+                "status": "skipped" if skipped else "pending",
+                "skip_reason": reason,
+            }
+        )
+
+    add(
+        "question-set",
+        "问题集",
+        skipped=not fetch_ok,
+        reason=None if fetch_ok else "已断开「问题集 → 采集」",
+    )
+    if fetch_ok:
+        active_edge_ids.append(EDGE_QUESTIONS_FETCH)
+    add("fetch", "答案采集", skipped=not fetch_ok, reason=None if fetch_ok else "采集链未启用")
+
+    planned_platforms: list[str] = []
+    for platform in CANVAS_PLATFORM_IDS:
+        edge_on = is_edge_active(topology, platform_edge_id(platform))
+        switch_on = platform in platforms
+        skipped = (not fetch_ok) or (not edge_on) or (not switch_on) or (platform in disabled)
+        reason = None
+        if not fetch_ok:
+            reason = "采集链未启用"
+        elif not edge_on or platform in disabled:
+            reason = "画布已断开该平台连线"
+        elif not switch_on:
+            reason = "平台开关已关闭"
+        else:
+            planned_platforms.append(platform)
+            active_edge_ids.append(platform_edge_id(platform))
+        add(
+            f"platform-{platform}",
+            platform,
+            skipped=skipped,
+            reason=reason,
+        )
+
+    extract_planned = fetch_ok and extract_ok and bool(planned_platforms)
+    add(
+        "extract",
+        "实体抽取",
+        skipped=not extract_planned,
+        reason=None
+        if extract_planned
+        else (
+            "已断开「采集 → 抽取」"
+            if not extract_ok
+            else "无可用采集平台"
+        ),
+    )
+    if extract_planned:
+        active_edge_ids.append(EDGE_FETCH_EXTRACT)
+
+    projection_planned = extract_planned and projection_ok
+    add(
+        "projection",
+        "图谱构建",
+        skipped=not projection_planned,
+        reason=None
+        if projection_planned
+        else ("已断开「抽取 → 图谱」" if not projection_ok else "上游抽取未计划"),
+    )
+    if projection_planned:
+        active_edge_ids.append(EDGE_EXTRACT_PROJECTION)
+
+    report_planned = projection_planned and report_ok
+    add(
+        "report",
+        "报告生成",
+        skipped=not report_planned,
+        reason=None
+        if report_planned
+        else ("已断开「图谱 → 报告」" if not report_ok else "上游图谱未计划"),
+    )
+    if report_planned:
+        active_edge_ids.append(EDGE_PROJECTION_REPORT)
+
+    for node in analysis_nodes_schedulable(topology):
+        # analysis_nodes_schedulable only checks wiring; also require upstream
+        sources = custom_incoming_sources(topology, node.id)
+        ok = ("projection" in sources and projection_planned) or (
+            "report" in sources and report_planned
+        )
+        add(
+            node.id,
+            str((node.config or {}).get("label") or "数据分析"),
+            skipped=not ok,
+            reason=None if ok else "上游图谱/报告未计划",
+        )
+        if ok:
+            for edge in topology.custom_edges:
+                if edge.target == node.id:
+                    active_edge_ids.append(edge.id)
+
+    planned_analysis = {
+        s["node_id"]
+        for s in steps
+        if s["status"] != "skipped"
+        and any(n.id == s["node_id"] and n.type == "analysis" for n in topology.custom_nodes)
+    }
+    for node in content_nodes_schedulable(topology):
+        sources = custom_incoming_sources(topology, node.id)
+        ok = ("lexicon" in sources and extract_planned) or bool(
+            sources & planned_analysis
+        )
+        add(
+            node.id,
+            str((node.config or {}).get("label") or "内容创作"),
+            skipped=not ok,
+            reason=None if ok else "上游未计划",
+        )
+        if ok:
+            for edge in topology.custom_edges:
+                if edge.target == node.id:
+                    active_edge_ids.append(edge.id)
+
+    planned = [s for s in steps if s["status"] != "skipped"]
+    return {
+        "steps": steps,
+        "active_edge_ids": list(dict.fromkeys(active_edge_ids)),
+        "planned_platforms": planned_platforms,
+        "summary": (
+            f"将执行 {len(planned)} 步"
+            + (f" · 平台：{','.join(planned_platforms)}" if planned_platforms else "")
+        ),
+    }
+
+
 def apply_platform_gate(
     topology: FlowTopology,
     platform_filter: list[str] | None,
