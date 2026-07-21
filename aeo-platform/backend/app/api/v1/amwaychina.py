@@ -639,26 +639,20 @@ _EMPTY_TOPOLOGY: dict[str, Any] = {
 
 class FlowTopologyPayload(BaseModel):
     topology: dict[str, Any] = Field(default_factory=dict)
+    # Optional optimistic-lock token: client's last seen row.version
+    expected_version: int | None = None
 
 
 def _normalize_topology(raw: Any) -> dict[str, Any]:
-    """Validate/normalize via the contract-layer FlowTopology parser and emit
-    the canonical wire shape. Unknown/garbage entries are dropped."""
-    from app.workflow.node_contracts import FlowTopology
+    """Validate/normalize topology for persistence (P0-1).
 
-    parsed = FlowTopology.from_dict(raw if isinstance(raw, dict) else None)
-    return {
-        "version": parsed.version,
-        "customNodes": [
-            {"id": n.id, "type": n.type, "position": n.position, "config": n.config}
-            for n in parsed.custom_nodes
-        ],
-        "customEdges": [
-            {"id": e.id, "source": e.source, "target": e.target}
-            for e in parsed.custom_edges
-        ],
-        "removedEdgeIds": list(parsed.removed_edge_ids),
-    }
+    Drops garbage via FlowTopology parser, then enforces endpoint existence,
+    no self-loops, DAG, and edge-count limits. Raises ValueError on invalid
+    documents (callers map to HTTP 400).
+    """
+    from app.workflow.topology_resolver import validate_topology_document
+
+    return validate_topology_document(raw if isinstance(raw, dict) else None)
 
 
 @router.get("/entities/{entity_id}/flow-plan")
@@ -715,10 +709,15 @@ async def get_flow_topology(
         )
     ).scalar_one_or_none()
     if row is None:
-        return {"topology": dict(_EMPTY_TOPOLOGY), "updated_at": None}
+        return {"topology": dict(_EMPTY_TOPOLOGY), "updated_at": None, "version": 0}
+    try:
+        topology = _normalize_topology(row.topology)
+    except ValueError:
+        topology = dict(_EMPTY_TOPOLOGY)
     return {
-        "topology": _normalize_topology(row.topology),
+        "topology": topology,
         "updated_at": _iso(row.updated_at),
+        "version": int(row.version or 1),
     }
 
 
@@ -730,23 +729,54 @@ async def put_flow_topology(
     db: AsyncSession = Depends(get_db),
 ):
     entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
-    normalized = _normalize_topology(body.topology)
-    if len(normalized["customNodes"]) > 20:
-        raise HTTPException(status_code=400, detail="自定义节点数量超出上限（20）")
+    try:
+        normalized = _normalize_topology(body.topology)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     row = (
         await db.execute(
             select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
         )
     ).scalar_one_or_none()
     if row is None:
-        row = FlowTopologyRecord(entity_id=entity.id, topology=normalized)
-        db.add(row)
+        if body.expected_version is not None and int(body.expected_version) != 0:
+            raise HTTPException(
+                status_code=409,
+                detail="拓扑版本冲突：记录不存在或已被删除，请重新加载。",
+            )
+        try:
+            row = FlowTopologyRecord(entity_id=entity.id, topology=normalized)
+            db.add(row)
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            # Unique index race on concurrent first write
+            logger = __import__("logging").getLogger(__name__)
+            logger.warning("[flow-topology] concurrent create race: %s", exc)
+            raise HTTPException(
+                status_code=409,
+                detail="拓扑正在被其他请求创建，请重试。",
+            ) from exc
     else:
+        if body.expected_version is not None and int(body.expected_version) != int(
+            row.version or 1
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"拓扑版本冲突：期望 version={body.expected_version}，"
+                    f"当前 version={row.version}。请重新加载后再保存。"
+                ),
+            )
         row.topology = normalized
         row.version = int(row.version or 1) + 1
-    await db.commit()
+        await db.commit()
     await db.refresh(row)
-    return {"topology": normalized, "updated_at": _iso(row.updated_at)}
+    return {
+        "topology": normalized,
+        "updated_at": _iso(row.updated_at),
+        "version": int(row.version or 1),
+    }
 
 
 class FlowNodeRunRequest(BaseModel):

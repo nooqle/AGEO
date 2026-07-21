@@ -652,6 +652,12 @@ export function AmwayAssociationCircleConsolePage({
               : {}),
           },
         });
+        // P1-7: confirmation CTA lives on the flow canvas — navigate there after plan is created
+        const params = new URLSearchParams(searchParams.toString());
+        params.set('view', 'flow');
+        const query = params.toString();
+        router.replace(query ? `?${query}` : '?', { scroll: false });
+        toast.info('请在生产线视图确认执行计划后再开始采集');
         void fetchActiveRun(selectedEntityId);
         void fetchWorld(selectedEntityId);
         void api.getDashboardHomeSummary(selectedEntityId, 'panorama', '30').then((nextHome) => {
@@ -668,6 +674,8 @@ export function AmwayAssociationCircleConsolePage({
       effectiveCenterTerm,
       fetchActiveRun,
       fetchWorld,
+      router,
+      searchParams,
       selectedEntityId,
     ],
   );

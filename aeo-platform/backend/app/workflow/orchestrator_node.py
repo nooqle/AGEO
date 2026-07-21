@@ -4972,19 +4972,39 @@ TOOL_TO_NODE: dict[str, str] = {
     "table_intake_skill": "table_intake",
     "analysis_report_skill": "a5_analytics",
     "data_analytics": "a5_analytics",
-    "knowledge_lookup": "knowledge_lookup",
-    "knowledge_aggregate": "knowledge_aggregate",
-    "knowledge_compare": "knowledge_compare",
-    "knowledge_export": "knowledge_export",
-    "confidence_analysis_skill": "confidence_analysis_executor",
-    "site_confidence_assessment_skill": "site_confidence_assessment_executor",
-    "post_analysis_skill": "post_analysis_executor",
-    "drill_down_analysis": "drill_down",
-    "compare_snapshots": "compare_snapshots",
-    # Monitoring tools (Cycle 4)
-    "manage_monitoring_schedule": "create_monitoring",
-    "create_monitoring_schedule": "create_monitoring",
 }
+
+# Remaining static tools (non-amway registry surface)
+TOOL_TO_NODE.update(
+    {
+        "knowledge_lookup": "knowledge_lookup",
+        "knowledge_aggregate": "knowledge_aggregate",
+        "knowledge_compare": "knowledge_compare",
+        "knowledge_export": "knowledge_export",
+        "confidence_analysis_skill": "confidence_analysis_executor",
+        "site_confidence_assessment_skill": "site_confidence_assessment_executor",
+        "post_analysis_skill": "post_analysis_executor",
+        "drill_down_analysis": "drill_down",
+        "compare_snapshots": "compare_snapshots",
+        # Monitoring tools (Cycle 4)
+        "manage_monitoring_schedule": "create_monitoring",
+        "create_monitoring_schedule": "create_monitoring",
+    }
+)
+
+# P1-8: overlay registry-driven tool→graph mappings (registry wins when present)
+try:
+    from app.workflow.node_contracts import (
+        CANVAS_TO_TOOL as _REGISTRY_CANVAS_TO_TOOL,
+        get_contract as _get_contract,
+    )
+
+    for _canvas_id, _tool in _REGISTRY_CANVAS_TO_TOOL.items():
+        _c = _get_contract(_canvas_id)
+        if _c and _c.graph_node and _tool:
+            TOOL_TO_NODE[_tool] = _c.graph_node
+except Exception:  # pragma: no cover - registry optional at import
+    pass
 
 TOOL_DISPLAY_NAMES: dict[str, str] = {
     "brand_analysis": "品牌竞品分析",

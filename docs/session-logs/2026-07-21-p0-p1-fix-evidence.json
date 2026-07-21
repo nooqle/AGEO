@@ -1,0 +1,38 @@
+{
+  "generated_at": "2026-07-21T11:17:30.322328+00:00",
+  "producer": "scripts/m1_exit_check.py",
+  "checks": [
+    {
+      "name": "plan_excludes_doubao",
+      "ok": true,
+      "planned_platforms": [
+        "deepseek",
+        "kimi",
+        "hunyuan"
+      ]
+    },
+    {
+      "name": "a4_build_request_excludes_doubao",
+      "ok": true,
+      "platform_filter": [
+        "deepseek",
+        "kimi",
+        "hunyuan"
+      ]
+    },
+    {
+      "name": "attach_flow_plan",
+      "ok": true,
+      "summary": "将执行 8 步 · 平台：deepseek,kimi,hunyuan"
+    },
+    {
+      "name": "branch_ghost_loop_safe",
+      "ok": true
+    },
+    {
+      "name": "validate_rejects_self_loop",
+      "ok": true
+    }
+  ],
+  "all_ok": true
+}

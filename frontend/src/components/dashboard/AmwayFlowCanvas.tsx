@@ -764,6 +764,8 @@ export function AmwayFlowCanvas({
   // 会双跑 updater 检测纯度，含 Math.random/副作用会产生 state 与后端各存一份的分叉。
   // id 生成等不纯逻辑在调用处完成；持久化副作用统一收敛到下方 useEffect。
   const topologyDirtyRef = useRef(false);
+  const topologyVersionRef = useRef<number | null>(null);
+  const [topologySaveError, setTopologySaveError] = useState<string | null>(null);
   const updateTopology = useCallback(
     (updater: (current: FlowTopology) => FlowTopology) => {
       topologyDirtyRef.current = true;
@@ -772,13 +774,28 @@ export function AmwayFlowCanvas({
     [],
   );
 
-  // 拓扑变化后统一持久化：localStorage 缓存 + 后端权威存储（fire-and-forget；
-  // 失败时 localStorage 仍保有最新拓扑，下次挂载后端拉取失败回退到本地）
+  // 拓扑变化后统一持久化：localStorage 缓存 + 后端权威存储。
+  // P1-7: PUT 失败必须提示用户，禁止静默丢编辑。
   useEffect(() => {
     if (!topologyDirtyRef.current) return;
     topologyDirtyRef.current = false;
     writeFlowTopology(entityId, topology);
-    void api.putAmwayFlowTopology(entityId, topology).catch(() => undefined);
+    void api
+      .putAmwayFlowTopology(entityId, topology, topologyVersionRef.current)
+      .then((resp) => {
+        if (typeof resp?.version === 'number') {
+          topologyVersionRef.current = resp.version;
+        }
+        setTopologySaveError(null);
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : '拓扑保存失败';
+        setTopologySaveError(
+          message.includes('版本冲突')
+            ? '拓扑已被其他操作更新，请刷新页面后再改，以免覆盖他人/运行结果。'
+            : `拓扑未能同步到服务器：${message}。本地仍保留本次编辑。`,
+        );
+      });
   }, [entityId, topology]);
 
   // 挂载后从后端拉取权威拓扑；与本地有差异时以后端为准并回写缓存
@@ -788,10 +805,14 @@ export function AmwayFlowCanvas({
       .then((resp) => {
         if (cancelled) return;
         const remote = parseFlowTopology(resp?.topology);
+        if (typeof (resp as { version?: number })?.version === 'number') {
+          topologyVersionRef.current = Number((resp as { version?: number }).version);
+        }
         setTopology((current) =>
           JSON.stringify(current) === JSON.stringify(remote) ? current : remote,
         );
         writeFlowTopology(entityId, remote);
+        setTopologySaveError(null);
       })
       .catch(() => undefined);
     return () => {
@@ -1022,19 +1043,23 @@ export function AmwayFlowCanvas({
 
   const togglePlatform = useCallback(
     (nodeId: string) => {
-      if (running) return;
+      if (running || isAwaitingPlanConfirm) return;
       const platformId = nodeId.replace(/^platform-/, '');
+      // StrictMode purity: compute next outside setState updater; persist after.
       setEnabledPlatforms((current) => {
         const next = current.includes(platformId)
           ? current.filter((id) => id !== platformId)
           : [...current, platformId];
-        if (!next.length) return current;
-        writeEnabledFlowPlatforms(entityId, next);
-        return next;
+        return next.length ? next : current;
       });
     },
-    [entityId, running],
+    [isAwaitingPlanConfirm, running],
   );
+
+  // Persist platform switches outside the setState updater (P1-6).
+  useEffect(() => {
+    writeEnabledFlowPlatforms(entityId, enabledPlatforms);
+  }, [entityId, enabledPlatforms]);
 
   const nodeSubtitleMap = useMemo(() => {
     const fetching = running && stageCode.startsWith('A4');
@@ -1683,6 +1708,11 @@ export function AmwayFlowCanvas({
                   ? '任务确认后按锁定计划执行；运行态会随 stage 推进高亮当前步骤。'
                   : '计划由当前画布拓扑实时推导。点击「开始运行」后进入确认闸，确认后才执行。'}
             </p>
+            {topologySaveError ? (
+              <p className="mt-2 rounded-lg border border-[rgba(220,38,38,0.25)] bg-[rgba(220,38,38,0.06)] px-3 py-2 text-[11px] leading-5 text-[var(--error)]">
+                {topologySaveError}
+              </p>
+            ) : null}
             {isAwaitingPlanConfirm ? (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button

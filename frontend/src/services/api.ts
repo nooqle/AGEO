@@ -1761,10 +1761,18 @@ class ApiService {
   async putAmwayFlowTopology(
     entityId: string,
     topology: AmwayFlowTopologyDoc,
-  ): Promise<{ topology: AmwayFlowTopologyDoc; updated_at: string | null }> {
+    expectedVersion?: number | null,
+  ): Promise<{
+    topology: AmwayFlowTopologyDoc;
+    updated_at: string | null;
+    version?: number;
+  }> {
     return this.request(`/amwaychina/entities/${entityId}/flow-topology`, {
       method: 'PUT',
-      body: JSON.stringify({ topology }),
+      body: JSON.stringify({
+        topology,
+        ...(expectedVersion != null ? { expected_version: expectedVersion } : {}),
+      }),
     });
   }
 

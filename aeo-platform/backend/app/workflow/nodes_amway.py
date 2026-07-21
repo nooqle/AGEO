@@ -33,6 +33,8 @@ from app.workflow.topology_resolver import (
     analysis_nodes_schedulable,
     content_nodes_schedulable,
     custom_incoming_sources,
+    extract_chain_enabled,
+    lexicon_chain_enabled,
     load_flow_topology,
     projection_chain_enabled,
     report_chain_enabled,
@@ -78,9 +80,22 @@ async def amway_extract_node(state: AgentState) -> Command:
         AmwayEntityExtractionService,
     )
 
+    # P1-1 / P1-5: self-check canvas edges even if LLM dispatched extract.
+    flow_topology = await load_flow_topology(state.get("entity_id"))
+    if not extract_chain_enabled(flow_topology):
+        return Command(
+            update={
+                "entity_extraction_result": None,
+                "next_required_action": None,
+                "progress_message": "画布已断开「采集 → 抽取」连线，实体抽取未执行。",
+                "execution_status": "completed",
+                "progress": 1.0,
+            }
+        )
+
     registry = None
     entity_uuid = _uuid_or_none(state.get("entity_id"))
-    if entity_uuid is not None:
+    if entity_uuid is not None and lexicon_chain_enabled(flow_topology):
         try:
             from app.core.database import AsyncSessionLocal
             from app.services.amway_entity_lexicon_service import (
@@ -95,6 +110,10 @@ async def amway_extract_node(state: AgentState) -> Command:
             logger.warning(
                 "[AmwayExtract] Failed to load Amway editable lexicon: %s", exc
             )
+    elif entity_uuid is not None and not lexicon_chain_enabled(flow_topology):
+        logger.info(
+            "[AmwayExtract] Lexicon edge disconnected; skipping editable lexicon load."
+        )
 
     extraction_service = AmwayEntityExtractionService(registry=registry)
     extraction_result = extraction_service.extract_from_fetch_results(fetch_results)
@@ -161,7 +180,6 @@ async def amway_extract_node(state: AgentState) -> Command:
                 data=stage_result_data,
             )
 
-    flow_topology = await load_flow_topology(state.get("entity_id"))
     update: dict[str, Any] = {
         "entity_extraction_result": extraction_result,
         "current_step": "EXTRACT",

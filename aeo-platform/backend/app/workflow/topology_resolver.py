@@ -56,12 +56,20 @@ BUILTIN_EDGE_IDS: tuple[str, ...] = (
 async def load_flow_topology(entity_id: Any) -> FlowTopology:
     """Load the authoritative topology for an entity.
 
-    Missing entity id, missing row, or any storage error degrades to the
-    empty topology (all builtin edges active) — orchestration never fails
-    because of topology persistence.
+    Missing entity id or missing row degrades to the empty topology (all
+    builtin edges active). Storage errors are logged with a distinct warning
+    and also degrade — callers must not treat empty topology as proof that
+    the user intentionally left all edges connected.
     """
     raw = str(entity_id or "").strip()
     if not raw:
+        return FlowTopology()
+    try:
+        from uuid import UUID
+
+        entity_uuid = UUID(raw)
+    except (TypeError, ValueError):
+        logger.warning("[topology] invalid entity_id (not UUID): %s", raw)
         return FlowTopology()
     try:
         from app.core.database import AsyncSessionLocal
@@ -72,12 +80,16 @@ async def load_flow_topology(entity_id: Any) -> FlowTopology:
             row = (
                 await db.execute(
                     select(FlowTopologyRecord.topology).where(
-                        FlowTopologyRecord.entity_id == raw
+                        FlowTopologyRecord.entity_id == entity_uuid
                     )
                 )
             ).scalar_one_or_none()
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("[topology] load failed for entity %s: %s", raw, exc)
+        logger.warning(
+            "[topology] load FAILED (gates degrade to fully-connected) entity=%s: %s",
+            raw,
+            exc,
+        )
         return FlowTopology()
     if not row:
         return FlowTopology()
@@ -223,22 +235,22 @@ def branch_custom_executors(
         # Unknown id — no branch
         return ()
 
+    # Single visited set for ALL dequeued ids (executors + ghosts). Without
+    # this, edges pointing at missing node ids never enter `reached` and a
+    # ghost self-loop starves the event loop (P0-1).
+    visited: set[str] = set()
     reached: set[str] = set()
     queue = list(frontier)
     while queue:
         current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
         node = by_id.get(current)
-        if node is None or node.type not in CUSTOM_EXECUTOR_TYPES:
-            # Walk through non-executor hop if present (shouldn't happen often)
-            for target in custom_outgoing_targets(topology, current):
-                if target not in reached:
-                    queue.append(target)
-            continue
-        if current in reached:
-            continue
-        reached.add(current)
+        if node is not None and node.type in CUSTOM_EXECUTOR_TYPES:
+            reached.add(current)
         for target in custom_outgoing_targets(topology, current):
-            if target not in reached:
+            if target not in visited:
                 queue.append(target)
 
     if not reached:
@@ -268,10 +280,104 @@ def branch_custom_executors(
                     key=lambda x: (0 if by_id[x].type == "analysis" else 1, x)
                 )
     # Cycles / leftovers: append remaining stably
-    remaining = [by_id[nid] for nid in sorted(reached) if nid not in {n.id for n in ordered}]
+    remaining = [
+        by_id[nid] for nid in sorted(reached) if nid not in {n.id for n in ordered}
+    ]
     remaining.sort(key=lambda n: (0 if n.type == "analysis" else 1, n.id))
     ordered.extend(remaining)
     return tuple(ordered)
+
+
+def lexicon_chain_enabled(topology: FlowTopology) -> bool:
+    """Whether extract may load lexicon asset (lexicon → extract edge active)."""
+    return is_edge_active(topology, EDGE_LEXICON_EXTRACT)
+
+
+def validate_topology_document(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize + validate a topology document for persistence (P0-1).
+
+    Raises ValueError with a user-facing Chinese message on invalid graphs.
+    """
+    from app.workflow.node_contracts import FlowTopology
+
+    parsed = FlowTopology.from_dict(raw if isinstance(raw, dict) else None)
+    if len(parsed.custom_nodes) > 20:
+        raise ValueError("自定义节点数量超出上限（20）")
+    if len(parsed.custom_edges) > 60:
+        raise ValueError("自定义连线数量超出上限（60）")
+
+    node_ids = {n.id for n in parsed.custom_nodes}
+    # Builtin canvas endpoints custom edges may legally target/source
+    builtin_ids = {
+        "question-set",
+        "lexicon",
+        "fetch",
+        "extract",
+        "projection",
+        "report",
+        *(f"platform-{p}" for p in CANVAS_PLATFORM_IDS),
+    }
+    allowed = node_ids | builtin_ids
+
+    seen_edge_keys: set[tuple[str, str]] = set()
+    for edge in parsed.custom_edges:
+        if edge.source == edge.target:
+            raise ValueError(f"自定义连线禁止自环：{edge.source}")
+        if edge.source not in allowed or edge.target not in allowed:
+            raise ValueError(
+                f"自定义连线端点不存在：{edge.source} → {edge.target}"
+            )
+        key = (edge.source, edge.target)
+        if key in seen_edge_keys:
+            raise ValueError(f"重复自定义连线：{edge.source} → {edge.target}")
+        seen_edge_keys.add(key)
+
+    # Cycle detection on custom-edge subgraph (nodes that appear in custom edges)
+    adj: dict[str, list[str]] = {}
+    for edge in parsed.custom_edges:
+        adj.setdefault(edge.source, []).append(edge.target)
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = {n: WHITE for n in adj}
+    for edge in parsed.custom_edges:
+        color.setdefault(edge.target, WHITE)
+
+    def dfs(u: str) -> bool:
+        color[u] = GRAY
+        for v in adj.get(u, []):
+            c = color.get(v, WHITE)
+            if c == GRAY:
+                return True
+            if c == WHITE and dfs(v):
+                return True
+        color[u] = BLACK
+        return False
+
+    for n in list(color.keys()):
+        if color[n] == WHITE and dfs(n):
+            raise ValueError("自定义连线存在环，拓扑必须是 DAG")
+
+    # Drop removed edge ids that are unknown (keep only known builtins)
+    removed = tuple(
+        rid for rid in parsed.removed_edge_ids if rid in BUILTIN_EDGE_IDS
+    )
+
+    return {
+        "version": parsed.version,
+        "customNodes": [
+            {
+                "id": n.id,
+                "type": n.type,
+                "position": n.position,
+                "config": n.config,
+            }
+            for n in parsed.custom_nodes
+        ],
+        "customEdges": [
+            {"id": e.id, "source": e.source, "target": e.target}
+            for e in parsed.custom_edges
+        ],
+        "removedEdgeIds": list(removed),
+    }
 
 
 def build_execution_plan_summary(
@@ -408,8 +514,12 @@ def build_execution_plan_summary(
     }
     for node in content_nodes_schedulable(topology):
         sources = custom_incoming_sources(topology, node.id)
-        ok = ("lexicon" in sources and extract_planned) or bool(
-            sources & planned_analysis
+        # Align with frontend: lexicon edge alone is enough when extract/plan
+        # has data path; analysis edge requires a planned upstream analysis.
+        from_lexicon = "lexicon" in sources
+        from_analysis = bool(sources & planned_analysis)
+        ok = from_analysis or (
+            from_lexicon and (extract_planned or bool(planned_analysis))
         )
         add(
             node.id,

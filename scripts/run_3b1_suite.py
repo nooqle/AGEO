@@ -17,6 +17,7 @@ BACKEND = ROOT / "aeo-platform" / "backend"
 SUITES = [
     "tests/test_topology_resolver.py",
     "tests/test_topology_gate_wiring.py",
+    "tests/test_topology_p0_p1_fixes.py",
     "tests/test_node_contracts.py",
     "tests/test_nodes_amway.py",
     "tests/test_amway_flow_custom_nodes.py",

@@ -383,16 +383,12 @@ export function buildAmwayFlowExecutionPlan(input: {
       .filter((e) => e.target === node.id)
       .map((e) => e.source);
     const fromLexicon = sources.includes('lexicon');
-    const fromAnalysis = sources.some((s) => plannedAnalysisIds.has(s) || analysisIds.has(s));
-    // Auto full-run only schedules wired content; local branch can still run
-    // analysis-sourced content when analysis is planned.
-    const wired =
-      fromLexicon
-      || sources.some((s) => plannedAnalysisIds.has(s))
-      || (fromAnalysis && plannedAnalysisIds.size > 0);
+    const fromAnalysis = sources.some((s) => plannedAnalysisIds.has(s));
+    // Keep in sync with backend build_execution_plan_summary (P1-4).
     const planned =
-      (fromLexicon && (extractPlanned || plannedAnalysisIds.size > 0 || hasProjectionData))
-      || sources.some((s) => plannedAnalysisIds.has(s));
+      fromAnalysis
+      || (fromLexicon && (extractPlanned || plannedAnalysisIds.size > 0 || hasProjectionData));
+    const wired = fromLexicon || sources.some((s) => analysisIds.has(s));
     if (planned) {
       for (const edge of topology.customEdges) {
         if (edge.target === node.id) activeEdgeIds.push(edge.id);

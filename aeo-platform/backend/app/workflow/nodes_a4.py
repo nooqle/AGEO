@@ -2477,7 +2477,27 @@ async def a4_fetch_node(state: AgentState) -> Command:
     )
     # 3b-1.3 拓扑平台门：画布上断开 fetch→platform-X 连线的平台本轮不抓取。
     # 无拓扑记录时 apply_platform_gate 原样透传，行为与硬编码时代一致。
+    # P1-1: defense-in-depth — even if LLM dispatches A4 while the canvas
+    # questions→fetch edge is removed, refuse to fetch.
+    from app.workflow.topology_resolver import fetch_chain_enabled
+
     flow_topology = await load_flow_topology(state.get("entity_id"))
+    if not fetch_chain_enabled(flow_topology):
+        logger.info(
+            "[A4] Topology fetch-chain gate closed; refusing answer_fetch dispatch."
+        )
+        return Command(
+            update={
+                "fetch_results": [],
+                "current_step": "A4",
+                "progress": 1.0,
+                "progress_message": "画布已断开「问题集 → 采集」连线，跳过答案抓取。",
+                "execution_status": "completed",
+                "next_required_action": None,
+                "awaiting_user": False,
+                "orchestrator_reply": "画布已断开「问题集 → 采集」连线，跳过答案抓取。",
+            },
+        )
     gated_platform_filter, topology_disabled_platforms = apply_platform_gate(
         flow_topology, _normalize_platform_filter(base_platform_filter)
     )
@@ -2489,8 +2509,12 @@ async def a4_fetch_node(state: AgentState) -> Command:
             update={
                 "fetch_results": [],
                 "current_step": "A4",
-                "progress": 0.6,
+                "progress": 1.0,
                 "progress_message": "画布上所有采集平台连线均已断开，本次运行跳过答案抓取。",
+                "execution_status": "completed",
+                "next_required_action": None,
+                "awaiting_user": False,
+                "orchestrator_reply": "画布上所有采集平台连线均已断开，本次运行跳过答案抓取。",
             },
         )
     if topology_disabled_platforms:
