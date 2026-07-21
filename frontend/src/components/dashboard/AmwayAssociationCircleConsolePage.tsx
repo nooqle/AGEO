@@ -625,8 +625,8 @@ export function AmwayAssociationCircleConsolePage({
           analysis_mode: ASSOCIATION_ANALYSIS_MODE,
           origin_surface: 'amwaychina_console',
           origin_event_id: `amwaychina-start:${selectedEntityId}:${createHandoffId()}`,
-          // M3: create plan snapshot and wait for canvas confirmation before dispatch
-          auto_dispatch: false,
+          // 配方产品定案：点「开始运行」即确认并开跑（不再停 M3 二次确认闸）
+          auto_dispatch: true,
           input_scope: {
             dashboard_variant: ASSOCIATION_DASHBOARD_VARIANT,
             analysis_mode: ASSOCIATION_ANALYSIS_MODE,
@@ -652,12 +652,12 @@ export function AmwayAssociationCircleConsolePage({
               : {}),
           },
         });
-        // P1-7: confirmation CTA lives on the flow canvas — navigate there after plan is created
+        // 运行即确认：跳转生产线查看计划进度，不再要求二次确认
         const params = new URLSearchParams(searchParams.toString());
         params.set('view', 'flow');
         const query = params.toString();
         router.replace(query ? `?${query}` : '?', { scroll: false });
-        toast.info('请在生产线视图确认执行计划后再开始采集');
+        toast.success('已按当前生产线开始执行');
         void fetchActiveRun(selectedEntityId);
         void fetchWorld(selectedEntityId);
         void api.getDashboardHomeSummary(selectedEntityId, 'panorama', '30').then((nextHome) => {

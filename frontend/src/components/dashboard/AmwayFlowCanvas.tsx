@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/services/api';
 import { AmwayFlowTopologyPatchBar } from '@/components/dashboard/AmwayFlowTopologyPatchBar';
+import { AmwayFlowRecipeBar } from '@/components/dashboard/AmwayFlowRecipeBar';
 import { useTheme } from '@/hooks/useTheme';
 import type { DashboardHomeData } from '@/types/dashboard';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
@@ -1070,6 +1071,20 @@ export function AmwayFlowCanvas({
                   已自定义编排 · 断开的连线在下次运行时生效（断开平台即跳过该平台采集）
                 </p>
               ) : null}
+              <AmwayFlowRecipeBar
+                entityId={entityId}
+                getExpectedVersion={() => topologyVersionRef.current}
+                setExpectedVersion={(version) => {
+                  topologyVersionRef.current = version;
+                }}
+                disabled={Boolean(runningCustomNodeId)}
+                onTopologyApplied={(remote) => {
+                  topologyDirtyRef.current = false;
+                  const next = parseFlowTopology(remote);
+                  setTopology(next);
+                  writeFlowTopology(entityId, next);
+                }}
+              />
               <AmwayFlowTopologyPatchBar
                 entityId={entityId}
                 getExpectedVersion={() => topologyVersionRef.current}

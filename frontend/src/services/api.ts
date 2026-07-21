@@ -1807,6 +1807,77 @@ class ApiService {
     });
   }
 
+  /** Flow recipes (org / brand scoped production-line presets). */
+  async listAmwayFlowRecipes(
+    entityId: string,
+  ): Promise<{
+    recipes: Array<{
+      id: string;
+      organization_id: string;
+      entity_id: string | null;
+      scope: 'organization' | 'entity' | string;
+      name: string;
+      description?: string | null;
+      topology: AmwayFlowTopologyDoc;
+      version: number;
+    }>;
+  }> {
+    const qs = new URLSearchParams({ entity_id: entityId });
+    return this.request(`/amwaychina/flow-recipes?${qs.toString()}`);
+  }
+
+  async createAmwayFlowRecipe(body: {
+    name: string;
+    description?: string | null;
+    scope?: 'organization' | 'entity';
+    entity_id?: string;
+    from_current?: boolean;
+    topology?: AmwayFlowTopologyDoc;
+  }): Promise<{
+    id: string;
+    name: string;
+    scope: string;
+    entity_id: string | null;
+    topology: AmwayFlowTopologyDoc;
+    version: number;
+  }> {
+    return this.request(`/amwaychina/flow-recipes`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteAmwayFlowRecipe(
+    recipeId: string,
+    entityId: string,
+  ): Promise<{ ok: boolean }> {
+    const qs = new URLSearchParams({ entity_id: entityId });
+    return this.request(`/amwaychina/flow-recipes/${recipeId}?${qs.toString()}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async applyAmwayFlowRecipe(
+    entityId: string,
+    recipeId: string,
+    expectedVersion?: number | null,
+  ): Promise<{
+    topology: AmwayFlowTopologyDoc;
+    version: number;
+    recipe_id: string;
+    recipe_name: string;
+  }> {
+    return this.request(
+      `/amwaychina/entities/${entityId}/flow-recipes/${recipeId}/apply`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(expectedVersion != null ? { expected_version: expectedVersion } : {}),
+        }),
+      },
+    );
+  }
+
   /** 3c-C1: natural language → ops preview (rule compiler, no write). */
   async compileAmwayFlowTopologyNl(
     entityId: string,

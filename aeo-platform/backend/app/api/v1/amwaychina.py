@@ -21,6 +21,7 @@ from app.api.v1.amwaychina_common import (
     parse_uuid as _parse_uuid,
     require_amway_entity as _require_amway_entity,
 )
+from app.api.v1.amwaychina_flow_recipes import router as flow_recipes_router
 from app.api.v1.amwaychina_flow_run import router as flow_run_router
 from app.api.v1.amwaychina_flow_topology import (
     EMPTY_TOPOLOGY as _EMPTY_TOPOLOGY,
@@ -38,6 +39,7 @@ from app.services.monitoring_plan_service import MonitoringPlanService
 router = APIRouter(prefix="/amwaychina", tags=["amwaychina"])
 router.include_router(flow_topology_router)
 router.include_router(flow_run_router)
+router.include_router(flow_recipes_router)
 
 # Backward-compatible re-exports for tests
 __all__ = [
