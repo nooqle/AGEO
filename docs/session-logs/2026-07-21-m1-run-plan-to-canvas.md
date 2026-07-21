@@ -36,6 +36,30 @@
 - `_attach_flow_execution_plan` smoke：ok  
 - `tsc --noEmit`：通过  
 
+## Validation Closure（M1 出口检查 · 2026-07-21）
+
+证据：`docs/session-logs/2026-07-21-m1-exit-check-evidence.json`  
+脚本：`scripts/m1_exit_check.py` + frontend `tsx` 纯函数检查
+
+| 检查项 | 结果 |
+|---|---|
+| 拓扑预览断 doubao | ✅ 计划平台无 doubao |
+| Run 写入 flow_plan | ✅ source=topology_constraint |
+| Runtime 叠加 stage | ✅ A4→fetch active；skipped 不可被 runtime 打开 |
+| 运行中锁快照 | ✅ 设计：有 activeRun 时优先 flow_plan |
+| 单测回归 | ✅ 32 passed |
+| 前端 parse/merge | ✅ tsx 合约通过 |
+| 真机点「开始运行」看徽章 | ⏭ 环境 8000/3000 未起 |
+
+**结论**：`PASS_WITH_RESIDUAL` — **允许进入 M3**。残留仅为 live UI 点穿，不阻塞主线。
+
+## 代码质量（M1）
+
+- **改动面**：run service 附加 plan；canvas 消费快照；纯函数库扩展  
+- **风险**：低（不改 A4 采集内核；plan 失败只 warning）  
+- **一致性**：与 topology_resolver 门控同源  
+- **债**：live UI 未点穿；chat Orch plan_update 未接  
+
 ## 下一主线项
 
 **M3：轻量图确认闸**（确认后再执行）— 未开始。

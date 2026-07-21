@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-07-21T09:52:30+00:00",
+  "scope": "M1 exit check (lightweight)",
+  "environment": {
+    "branch": "codex/amwaychina-mainline",
+    "head": "3e722bc",
+    "backend_8000": "down",
+    "frontend_3000": "down",
+    "note": "No live UI click-through; contract + unit + frontend pure-function checks only."
+  },
+  "checklist": {
+    "1_topology_preview_disconnect_doubao": {
+      "status": "pass",
+      "evidence": "planned_platforms=[deepseek,kimi,hunyuan]; platform-doubao skipped"
+    },
+    "2_run_start_writes_flow_plan": {
+      "status": "pass",
+      "evidence": "_attach_flow_execution_plan writes source=topology_constraint, steps>0, summary set"
+    },
+    "3_runtime_stage_overlay": {
+      "status": "pass_contract",
+      "evidence": "merge: fetch=active under A4; doubao remains skipped (cannot be un-skipped by runtime)"
+    },
+    "4_midrun_topology_edit_lock": {
+      "status": "pass_by_design",
+      "evidence": "canvas prefers activeRun.input_scope.flow_plan snapshot over live topology while run present"
+    },
+    "5_unit_regression": {
+      "status": "pass",
+      "evidence": "32 passed (topology_resolver/gate_wiring/flow_topology_api/amway_flow_custom_nodes)"
+    },
+    "6_frontend_pure_functions": {
+      "status": "pass",
+      "evidence": "tsx: preview_source=local_topology, merged_source=run_flow_plan, doubao=skipped, fetch=active"
+    },
+    "7_live_ui_click_start_run": {
+      "status": "skipped_env",
+      "evidence": "127.0.0.1:8000/3000 not running"
+    }
+  },
+  "checks_detail": {
+    "local_topology_plan": true,
+    "attach_flow_plan_to_run_scope": true,
+    "parse_merge_contract": true,
+    "source_wiring": true,
+    "frontend_tsx_contract": {
+      "preview_source": "local_topology",
+      "doubao": "skipped",
+      "merged_source": "run_flow_plan",
+      "merged_fetch": "active",
+      "merged_doubao": "skipped"
+    },
+    "pytest": "32 passed"
+  },
+  "verdict": {
+    "m1_exit": "PASS_WITH_RESIDUAL",
+    "may_enter_m3": true,
+    "residual": "Live UI badge click-through (拓扑预览→任务计划) not executed because local services were down."
+  }
+}
