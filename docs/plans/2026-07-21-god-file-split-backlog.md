@@ -17,7 +17,7 @@
 | `app/workflow/a5/canonical.py` | ~4453 | 分析内核 | ⬜ 不碰 |
 | `app/workflow/nodes_a4.py` | ~4354 | 采集节点 | ⬜ 不碰（门控已外置） |
 | `websocket_langgraph.py` | ~3160 | 通信层 | ⬜ 后续 |
-| **`AmwayFlowCanvas.tsx`** | **~2590**（曾 ~2768） | 生产线画布 | 🔄 **部分完成** |
+| **`AmwayFlowCanvas.tsx`** | **~1547**（曾 ~2768→2590） | 生产线画布 | ✅ **P0 壳达标** |
 | `BrandOntologyHome.tsx` | ~2747 | 首页 | ⬜ 后续 |
 | `orchestrator_context_packets.py` | ~2164 | 上下文包 | ⬜ 与 cache harness 一并 |
 | `amwaychina.py` | ~1.2k+ | API 路由 | 🔄 逻辑已外置 topology_* |
@@ -35,23 +35,23 @@
 | 执行计划投影（FE） | `lib/amwayFlowExecutionPlan.ts` | 早期 | 前后端对齐 |
 | 预设列表 | `lib/amwayFlowTopologyPatch.ts` | Canvas | |
 | **编排条 UI** | **`AmwayFlowTopologyPatchBar.tsx`** | **Canvas** | 预设 + NL + 预览确认 |
+| types / constants | `amway-flow/types.ts`, `constants.ts` | Canvas | |
+| 拓扑 IO | `amway-flow/topologyDoc.ts` | Canvas | parse/read/write + 平台开关 |
+| 本地分析 | `amway-flow/analysis.ts` | Canvas | `runFlowAnalysis` |
+| 端口/环校验 | `amway-flow/graphUtils.ts` | Canvas | |
+| 节点卡片 | `amway-flow/AmwayFlowNodeCard.tsx` | Canvas | |
+| 侧栏详情 | `amway-flow/AmwayFlowCanvasPanels.tsx` | Canvas | Detail + artifacts |
 
-Canvas 行数：约 **2768 → 2590**（编排条移出后）。
+Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已 **< 1800**。
 
 ---
 
 ## 3. 建议下一拆（优先级）
 
-### P0 — 继续拆 `AmwayFlowCanvas.tsx`（仍偏大）
+### P0 — `AmwayFlowCanvas.tsx` — ✅ 已完成（2026-07-21）
 
-| 块 | 建议目标文件 | 内容 |
-|---|---|---|
-| 节点卡片 / 样式 | `amway-flow/AmwayFlowNodeCard.tsx` | `AmwayFlowNodeCard` + status class helpers |
-| 侧栏详情 | `amway-flow/AmwayFlowCanvasPanels.tsx` | `CustomNodeDetail` / `FlowNodeDetail` / artifacts |
-| 拓扑 IO | `lib/amwayFlowTopologyDoc.ts` | parse/read/write/empty topology |
-| 分析本地 fallback | `lib/amwayFlowAnalysis.ts` | `runFlowAnalysis`（已有部分逻辑） |
-
-验收：Canvas 壳 **< 1800 行**，只保留 ReactFlow 图状态与连线。
+壳内保留：ReactFlow 状态、运行计划条、与 PatchBar/Panels 接线。  
+目录：`frontend/src/components/dashboard/amway-flow/`
 
 ### P1 — `amwaychina.py` 路由分包
 
@@ -85,8 +85,8 @@ Canvas 行数：约 **2768 → 2590**（编排条移出后）。
 - [x] 扫描并登记超大文件  
 - [x] 3c 编排条从 Canvas 拆出  
 - [x] NL 规则 / LLM 编译独立模块 + 稳定 prompt  
-- [ ] Canvas panels / node card 再拆（P0）  
+- [x] Canvas P0：types/constants/topologyDoc/analysis/graphUtils/NodeCard/Panels  
 - [ ] amwaychina 路由分包（P1）  
 - [ ] orchestrator_node 拆分设计稿（P2）  
 
-**下次继续**：从 Canvas P0 三表（NodeCard / Panels / topologyDoc）开刀。  
+**下次继续**：**P1** `amwaychina.py` 路由分包（topology / flow-run），或 **P2** Orch 巨石设计稿。
