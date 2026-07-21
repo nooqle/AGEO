@@ -536,6 +536,17 @@ type FlowAnalysisResult = {
   generatedAt: string;
   dimensions: FlowAnalysisDimension[];
   cards: FlowAnalysisCard[];
+  mode?: 'llm' | 'deterministic' | string;
+  summary?: string;
+  fallback_reason?: string;
+};
+
+type FlowContentResult = {
+  generatedAt: string;
+  mode?: 'llm' | 'template' | string;
+  draft?: string;
+  promptUsed?: string;
+  fallback_reason?: string;
 };
 
 type ProjectionNodeLike = Record<string, unknown>;
@@ -625,7 +636,7 @@ const CUSTOM_NODE_META: Record<CustomFlowNodeType, {
   content: {
     label: '内容创作',
     icon: 'pen',
-    description: '基于实体词库与分析结论起草内容文案（执行能力规划中）。',
+    description: '基于实体词库与分析结论起草内容文案。',
     libraryHint: '基于词库/分析起草文案',
   },
 };
@@ -1052,17 +1063,15 @@ export function AmwayFlowCanvas({
         selected: panel?.kind === 'node' && panel.nodeId === customNode.id,
         data: {
           label: String(customNode.config.label || meta.label),
-          subtitle: customNode.type === 'content'
-            ? '规划中'
-            : hasResult
-              ? '已生成结论'
-              : '待配置',
+          subtitle: hasResult
+            ? (customNode.type === 'content' ? '已生成草稿' : '已生成结论')
+            : '待运行',
           icon: meta.icon,
-          status: customNode.type === 'analysis' && hasResult ? 'done' : 'idle',
+          status: hasResult ? 'done' : 'idle',
           variant: customNode.type,
           outputs: customNode.type === 'analysis'
             ? [{ key: 'analysisResult' as FlowArtifactKey, label: '分析结论', disabled: !hasResult }]
-            : [{ key: 'contentDraft' as FlowArtifactKey, label: '模板预览' }],
+            : [{ key: 'contentDraft' as FlowArtifactKey, label: '内容草稿', disabled: !hasResult }],
           description: meta.description,
           onOutput: handleOutput,
         },
@@ -1203,22 +1212,75 @@ export function AmwayFlowCanvas({
     [updateTopology],
   );
 
-  // 数据分析节点真执行：对当前 projection 做确定性分析，结论写回节点 config
+  const [runningCustomNodeId, setRunningCustomNodeId] = useState<string | null>(null);
+  const [customNodeError, setCustomNodeError] = useState<string | null>(null);
+
+  // 3b-1.5: analysis/content 走后端真执行；失败时分析可降级本地确定性结果。
+  const runCustomNode = useCallback(
+    async (nodeId: string) => {
+      const customNode = topology.customNodes.find((node) => node.id === nodeId);
+      if (!customNode || (customNode.type !== 'analysis' && customNode.type !== 'content')) return;
+      setCustomNodeError(null);
+      setRunningCustomNodeId(nodeId);
+      try {
+        await api.putAmwayFlowTopology(entityId, topology);
+        const body =
+          customNode.type === 'analysis'
+            ? {
+                dimensions: (Array.isArray(customNode.config.dimensions)
+                  ? (customNode.config.dimensions as string[]).filter((item): item is FlowAnalysisDimension =>
+                      item === 'platform' || item === 'entities' || item === 'risk')
+                  : DEFAULT_ANALYSIS_DIMENSIONS),
+                prompt: String(customNode.config.prompt || ''),
+              }
+            : {
+                promptTemplate: String(
+                  customNode.config.promptTemplate || DEFAULT_CONTENT_PROMPT_TEMPLATE,
+                ),
+              };
+        const resp = await api.runAmwayFlowNode(entityId, nodeId, body);
+        const remote = parseFlowTopology(resp.topology);
+        topologyDirtyRef.current = true;
+        setTopology(remote);
+        writeFlowTopology(entityId, remote);
+      } catch (error) {
+        if (customNode.type === 'analysis' && projectionNodes.length > 0) {
+          const dimensions = (Array.isArray(customNode.config.dimensions)
+            ? (customNode.config.dimensions as string[]).filter((item): item is FlowAnalysisDimension =>
+                item === 'platform' || item === 'entities' || item === 'risk')
+            : DEFAULT_ANALYSIS_DIMENSIONS);
+          const result = runFlowAnalysis(
+            dimensions.length ? dimensions : DEFAULT_ANALYSIS_DIMENSIONS,
+            projection,
+          );
+          updateCustomNodeConfig(nodeId, {
+            result: { ...result, mode: 'deterministic', fallback_reason: 'api_unavailable' },
+            dimensions: result.dimensions,
+          });
+          setCustomNodeError('后端运行失败，已使用本地确定性分析。');
+        } else {
+          const message = error instanceof Error ? error.message : '节点运行失败';
+          setCustomNodeError(message);
+        }
+      } finally {
+        setRunningCustomNodeId(null);
+      }
+    },
+    [entityId, projection, projectionNodes.length, topology, updateCustomNodeConfig],
+  );
+
   const runAnalysis = useCallback(
     (nodeId: string) => {
-      const customNode = topology.customNodes.find((node) => node.id === nodeId);
-      if (!customNode || customNode.type !== 'analysis') return;
-      const dimensions = (Array.isArray(customNode.config.dimensions)
-        ? (customNode.config.dimensions as string[]).filter((item): item is FlowAnalysisDimension =>
-            item === 'platform' || item === 'entities' || item === 'risk')
-        : DEFAULT_ANALYSIS_DIMENSIONS);
-      const result = runFlowAnalysis(
-        dimensions.length ? dimensions : DEFAULT_ANALYSIS_DIMENSIONS,
-        projection,
-      );
-      updateCustomNodeConfig(nodeId, { result, dimensions: result.dimensions });
+      void runCustomNode(nodeId);
     },
-    [projection, topology.customNodes, updateCustomNodeConfig],
+    [runCustomNode],
+  );
+
+  const runContent = useCallback(
+    (nodeId: string) => {
+      void runCustomNode(nodeId);
+    },
+    [runCustomNode],
   );
 
   const edges = useMemo<Edge[]>(() => {
@@ -1581,9 +1643,12 @@ export function AmwayFlowCanvas({
                       <CustomNodeDetail
                         node={selectedNode}
                         customNode={customNode}
+                        running={runningCustomNodeId === customNode.id}
+                        error={customNodeError}
                         onUpdateConfig={updateCustomNodeConfig}
                         onDelete={deleteCustomNode}
                         onRunAnalysis={runAnalysis}
+                        onRunContent={runContent}
                         onOpenArtifact={(key) => setPanel({ kind: 'artifact', nodeId: selectedNode.id, artifact: key })}
                       />
                     );
@@ -1652,10 +1717,14 @@ export function AmwayFlowCanvas({
               {panel.kind === 'artifact' && panel.artifact === 'contentDraft' ? (
                 (() => {
                   const customNode = topology.customNodes.find((item) => item.id === panel.nodeId);
-                  return (
+                  const result = customNode?.config.result as FlowContentResult | undefined;
+                  return result?.draft ? (
                     <ContentDraftArtifact
+                      result={result}
                       template={String(customNode?.config.promptTemplate || DEFAULT_CONTENT_PROMPT_TEMPLATE)}
                     />
+                  ) : (
+                    <ArtifactEmpty text="还没有内容草稿。在节点配置中点击「生成草稿」运行。" />
                   );
                 })()
               ) : null}
@@ -1706,7 +1775,7 @@ function artifactTitle(artifact: FlowArtifactKey): string {
     case 'analysisResult':
       return '分析结论';
     case 'contentDraft':
-      return '内容模板预览';
+      return '内容草稿';
     default:
       return '';
   }
@@ -1719,20 +1788,28 @@ function questionTextOf(record: Record<string, unknown>): string {
 function CustomNodeDetail({
   node,
   customNode,
+  running = false,
+  error = null,
   onUpdateConfig,
   onDelete,
   onRunAnalysis,
+  onRunContent,
   onOpenArtifact,
 }: {
   node: AmwayFlowNode;
   customNode: FlowTopologyCustomNode;
+  running?: boolean;
+  error?: string | null;
   onUpdateConfig: (nodeId: string, patch: Record<string, unknown>) => void;
   onDelete: (nodeId: string) => void;
   onRunAnalysis: (nodeId: string) => void;
+  onRunContent: (nodeId: string) => void;
   onOpenArtifact: (key: FlowArtifactKey) => void;
 }) {
   const isAnalysis = customNode.type === 'analysis';
-  const result = customNode.config.result as FlowAnalysisResult | undefined;
+  const result = customNode.config.result as FlowAnalysisResult | FlowContentResult | undefined;
+  const analysisResult = isAnalysis ? (result as FlowAnalysisResult | undefined) : undefined;
+  const contentResult = !isAnalysis ? (result as FlowContentResult | undefined) : undefined;
   const dimensions = (Array.isArray(customNode.config.dimensions)
     ? (customNode.config.dimensions as string[]).filter((item): item is FlowAnalysisDimension =>
         item === 'platform' || item === 'entities' || item === 'risk')
@@ -1789,21 +1866,34 @@ function CustomNodeDetail({
               );
             })}
           </div>
+          <label className="mt-3 block text-xs font-medium text-[var(--text-tertiary)]" htmlFor="analysis-prompt">
+            二级解读 Prompt（可选）
+          </label>
+          <textarea
+            id="analysis-prompt"
+            value={String(customNode.config.prompt || '')}
+            onChange={(event) => onUpdateConfig(customNode.id, { prompt: event.target.value })}
+            rows={3}
+            placeholder="例如：重点对比竞品与风险信号，给出三条可执行建议"
+            className="mt-1.5 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2 text-[13px] leading-5 text-[var(--text-primary)] outline-none transition focus:border-[var(--brand-primary)]"
+          />
           <button
             type="button"
+            disabled={running}
             onClick={() => onRunAnalysis(customNode.id)}
-            className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3.5 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)]"
+            className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3.5 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
           >
             <Play size={13} fill="currentColor" aria-hidden />
-            运行分析
+            {running ? '运行中…' : '运行分析'}
           </button>
-          {result ? (
+          {analysisResult ? (
             <button
               type="button"
               onClick={() => onOpenArtifact('analysisResult')}
               className="mt-2 block text-xs font-medium text-[var(--brand-primary)] hover:underline"
             >
-              查看分析结论（{new Date(result.generatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}）
+              查看分析结论（{new Date(analysisResult.generatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              {analysisResult.mode ? ` · ${analysisResult.mode === 'llm' ? 'LLM' : '确定性'}` : ''}）
             </button>
           ) : null}
         </div>
@@ -1821,18 +1911,34 @@ function CustomNodeDetail({
           />
           <p className="mt-1.5 text-xs leading-5 text-[var(--text-tertiary)]">
             可用变量：{'{{centerTerm}}'}（品牌）、{'{{entities}}'}（实体词库）、{'{{analysis}}'}（分析结论）。
-            内容创作执行能力规划中，当前可编辑模板并预览。
           </p>
           <button
             type="button"
-            onClick={() => onOpenArtifact('contentDraft')}
-            className="mt-2 inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3.5 text-sm font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)]"
+            disabled={running}
+            onClick={() => onRunContent(customNode.id)}
+            className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3.5 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
           >
-            <FileText size={13} aria-hidden />
-            预览模板
+            <Play size={13} fill="currentColor" aria-hidden />
+            {running ? '生成中…' : '生成草稿'}
           </button>
+          {contentResult?.draft ? (
+            <button
+              type="button"
+              onClick={() => onOpenArtifact('contentDraft')}
+              className="mt-2 block text-xs font-medium text-[var(--brand-primary)] hover:underline"
+            >
+              查看内容草稿（{new Date(contentResult.generatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              {contentResult.mode ? ` · ${contentResult.mode === 'llm' ? 'LLM' : '模板'}` : ''}）
+            </button>
+          ) : null}
         </div>
       )}
+
+      {error ? (
+        <p className="rounded-lg border border-[rgba(220,38,38,0.25)] bg-[rgba(220,38,38,0.06)] px-3 py-2 text-xs leading-5 text-[var(--error)]">
+          {error}
+        </p>
+      ) : null}
 
       <div className="border-t border-[var(--border-subtle)] pt-4">
         <button
@@ -1850,12 +1956,19 @@ function CustomNodeDetail({
 }
 
 function AnalysisResultArtifact({ result }: { result: FlowAnalysisResult }) {
+  const modeLabel = result.mode === 'llm' ? 'LLM 二级解读' : '确定性分析';
   return (
     <div className="space-y-4">
       <p className="text-xs text-[var(--text-tertiary)]">
         生成于 {new Date(result.generatedAt).toLocaleString('zh-CN')}
-        ，基于当前圈层投影数据的确定性分析。
+        ，模式：{modeLabel}
+        {result.fallback_reason ? `（降级：${result.fallback_reason}）` : ''}
       </p>
+      {result.summary ? (
+        <p className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 text-[13px] leading-6 text-[var(--text-primary)]">
+          {result.summary}
+        </p>
+      ) : null}
       {result.cards.map((card) => (
         <section key={card.title} className="rounded-xl border border-[var(--border-subtle)] px-4 py-3">
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">{card.title}</h3>
@@ -1872,15 +1985,32 @@ function AnalysisResultArtifact({ result }: { result: FlowAnalysisResult }) {
   );
 }
 
-function ContentDraftArtifact({ template }: { template: string }) {
+function ContentDraftArtifact({
+  result,
+  template,
+}: {
+  result?: FlowContentResult;
+  template: string;
+}) {
+  const draft = String(result?.draft || '').trim();
+  const modeLabel = result?.mode === 'llm' ? 'LLM 生成' : '模板回填';
   return (
     <div className="space-y-4">
-      <p className="rounded-lg border border-[rgba(249,115,22,0.3)] bg-[rgba(249,115,22,0.08)] px-3 py-2 text-xs leading-5 text-[var(--text-secondary)]">
-        内容创作执行能力规划中。以下是当前节点的 Prompt 模板，执行时会用真实数据替换变量。
+      <p className="text-xs text-[var(--text-tertiary)]">
+        {result?.generatedAt
+          ? `生成于 ${new Date(result.generatedAt).toLocaleString('zh-CN')}，模式：${modeLabel}`
+          : '尚未生成草稿'}
+        {result?.fallback_reason ? `（降级：${result.fallback_reason}）` : ''}
       </p>
       <pre className="whitespace-pre-wrap rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 text-[13px] leading-6 text-[var(--text-primary)]">
-        {template}
+        {draft || '（空草稿）'}
       </pre>
+      {result?.mode === 'template' || !draft ? (
+        <details className="rounded-lg border border-[var(--border-subtle)] px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">查看 Prompt 模板</summary>
+          <pre className="mt-2 whitespace-pre-wrap text-[12px] leading-5 text-[var(--text-tertiary)]">{template}</pre>
+        </details>
+      ) : null}
     </div>
   );
 }

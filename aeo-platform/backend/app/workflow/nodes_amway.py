@@ -30,6 +30,9 @@ from app.workflow.nodes_a4 import (
 from app.workflow.runtime_policy_executor import build_next_required_action
 from app.workflow.state import AgentState
 from app.workflow.topology_resolver import (
+    analysis_nodes_schedulable,
+    content_nodes_schedulable,
+    custom_incoming_sources,
     load_flow_topology,
     projection_chain_enabled,
     report_chain_enabled,
@@ -325,9 +328,245 @@ async def amway_projection_node(state: AgentState) -> Command:
             metadata={"headless_mode": bool(state.get("headless_mode"))},
         )
         update["progress_message"] = "圈层图谱构建完成，正在生成分析报告。"
+    elif analysis_nodes_schedulable(flow_topology):
+        # 3b-1.5: report edge removed but analysis nodes are wired from projection
+        update["next_required_action"] = build_next_required_action(
+            tool_name="amway_secondary_analysis",
+            authority="authoritative_resume",
+            reason="报告链路已断开，继续执行画布上的数据分析节点。",
+            source_step="amway_projection",
+        )
+        update["progress_message"] = "圈层图谱构建完成，正在运行数据分析节点。"
     else:
         update["next_required_action"] = None
         update["progress_message"] = (
             "画布已断开「图谱构建 → 报告」连线，本次运行止于图谱构建。"
         )
     return Command(update=update)
+
+
+def _center_term_from_state(state: AgentState) -> str:
+    for key in ("center_term", "brand_name", "entity_name"):
+        value = str(state.get(key) or "").strip()
+        if value:
+            return value
+    projection = state.get("association_circle_projection")
+    if isinstance(projection, dict):
+        terms = projection.get("center_terms")
+        if isinstance(terms, list) and terms:
+            return str(terms[0] or "").strip()
+        center = projection.get("center_term")
+        if center:
+            return str(center).strip()
+    return "品牌"
+
+
+async def amway_analysis_node(state: AgentState) -> Command:
+    """Run all wired analysis custom nodes (blueprint 3b-1.5).
+
+    Input:  state.association_circle_projection, state.report (optional)
+    Output: state.flow_analysis_results; results also written to topology config
+    Chains: → amway_content when content nodes are wired
+    """
+    session_id = str(state.get("session_id") or "")
+    flow_topology = await load_flow_topology(state.get("entity_id"))
+    nodes = analysis_nodes_schedulable(flow_topology)
+    projection = state.get("association_circle_projection")
+    report = state.get("report")
+    if not isinstance(projection, dict):
+        projection = None
+    if not isinstance(report, dict):
+        report = None
+
+    if not nodes:
+        logger.info("[AmwayAnalysis] No wired analysis nodes; skip")
+        update: dict[str, Any] = {
+            "flow_analysis_results": state.get("flow_analysis_results") or {},
+            "next_required_action": None,
+            "progress_message": "画布上无已接线的数据分析节点，跳过二级解读。",
+            "current_step": "SECONDARY_ANALYSIS",
+            "progress": 0.92,
+        }
+        if content_nodes_schedulable(flow_topology):
+            update["next_required_action"] = build_next_required_action(
+                tool_name="amway_content_draft",
+                authority="authoritative_resume",
+                reason="继续执行画布上的内容创作节点。",
+                source_step="amway_analysis",
+            )
+            update["progress_message"] = "正在运行内容创作节点。"
+        return Command(update=update)
+
+    await send_progress_event(
+        session_id=session_id,
+        step="SECONDARY_ANALYSIS",
+        step_name="数据分析节点",
+        progress=0.9,
+        message=f"开始运行 {len(nodes)} 个数据分析节点",
+    )
+
+    from app.services.amway_flow_custom_node_service import (
+        persist_custom_node_results,
+        run_analysis_node,
+    )
+
+    results: dict[str, Any] = dict(state.get("flow_analysis_results") or {})
+    persist_patch: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        sources = custom_incoming_sources(flow_topology, node.id)
+        node_report = report if "report" in sources else None
+        # projection is always preferred when available; report-only still runs
+        # if projection missing (API/on-demand paths may only have report).
+        result = await run_analysis_node(
+            projection=projection,
+            report=node_report if node_report is not None else report,
+            config=dict(node.config or {}),
+            use_llm=True,
+        )
+        results[node.id] = result
+        persist_patch[node.id] = {
+            "result": result,
+            "dimensions": result.get("dimensions"),
+        }
+
+    await persist_custom_node_results(state.get("entity_id"), persist_patch)
+    await send_stage_result(
+        session_id=session_id,
+        stage="SecondaryAnalysis",
+        stage_name="数据分析节点",
+        result_type="flow_analysis_results",
+        data={"node_ids": list(results.keys()), "count": len(nodes)},
+    )
+
+    update = {
+        "flow_analysis_results": results,
+        "current_step": "SECONDARY_ANALYSIS",
+        "progress": 0.94,
+    }
+    if content_nodes_schedulable(flow_topology):
+        update["next_required_action"] = build_next_required_action(
+            tool_name="amway_content_draft",
+            authority="authoritative_resume",
+            reason="二级解读完成，继续执行画布上的内容创作节点。",
+            source_step="amway_analysis",
+            metadata={"analysis_node_count": len(nodes)},
+        )
+        update["progress_message"] = (
+            f"已完成 {len(nodes)} 个数据分析节点，正在生成内容草稿。"
+        )
+    else:
+        update["next_required_action"] = None
+        update["progress_message"] = f"已完成 {len(nodes)} 个数据分析节点。"
+        update["execution_status"] = "completed"
+        update["progress"] = 1.0
+    return Command(update=update)
+
+
+async def amway_content_node(state: AgentState) -> Command:
+    """Run all wired content custom nodes (blueprint 3b-1.5).
+
+    Input:  lexicon (entity registry) + flow_analysis_results / upstream analysis
+    Output: state.flow_content_drafts; results written to topology config
+    """
+    session_id = str(state.get("session_id") or "")
+    flow_topology = await load_flow_topology(state.get("entity_id"))
+    nodes = content_nodes_schedulable(flow_topology)
+    analysis_results = (
+        state.get("flow_analysis_results")
+        if isinstance(state.get("flow_analysis_results"), dict)
+        else {}
+    )
+
+    if not nodes:
+        logger.info("[AmwayContent] No wired content nodes; skip")
+        return Command(
+            update={
+                "flow_content_drafts": state.get("flow_content_drafts") or {},
+                "next_required_action": None,
+                "progress_message": "画布上无已接线的内容创作节点。",
+                "execution_status": "completed",
+                "current_step": "CONTENT_DRAFT",
+                "progress": 1.0,
+            }
+        )
+
+    await send_progress_event(
+        session_id=session_id,
+        step="CONTENT_DRAFT",
+        step_name="内容创作节点",
+        progress=0.96,
+        message=f"开始运行 {len(nodes)} 个内容创作节点",
+    )
+
+    from app.services.amway_flow_custom_node_service import (
+        persist_custom_node_results,
+        run_content_node,
+    )
+
+    lexicon_entries: list[Any] = []
+    entity_uuid = _uuid_or_none(state.get("entity_id"))
+    if entity_uuid is not None:
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.services.amway_entity_lexicon_service import (
+                AmwayEntityLexiconService,
+            )
+
+            async with AsyncSessionLocal() as db:
+                payload = await AmwayEntityLexiconService(db).payload_for_entity(
+                    entity_uuid
+                )
+                lexicon_entries = list(payload.get("entries") or [])
+        except Exception as exc:
+            logger.warning("[AmwayContent] lexicon load failed: %s", exc)
+
+    center_term = _center_term_from_state(state)
+    drafts: dict[str, Any] = dict(state.get("flow_content_drafts") or {})
+    persist_patch: dict[str, dict[str, Any]] = {}
+    analysis_ids = {n.id for n in flow_topology.custom_nodes if n.type == "analysis"}
+
+    for node in nodes:
+        sources = custom_incoming_sources(flow_topology, node.id)
+        upstream_analysis = None
+        for source in sources:
+            if source in analysis_results:
+                upstream_analysis = analysis_results.get(source)
+                break
+            if source in analysis_ids and source in analysis_results:
+                upstream_analysis = analysis_results.get(source)
+                break
+        if upstream_analysis is None and analysis_results:
+            # Fall back to first available analysis result when edges point to
+            # analysis nodes whose results were just produced this run.
+            upstream_analysis = next(iter(analysis_results.values()), None)
+
+        use_lexicon = "lexicon" in sources or not sources
+        result = await run_content_node(
+            center_term=center_term,
+            lexicon_entries=lexicon_entries if use_lexicon else [],
+            analysis_result=upstream_analysis if isinstance(upstream_analysis, dict) else None,
+            config=dict(node.config or {}),
+            use_llm=True,
+        )
+        drafts[node.id] = result
+        persist_patch[node.id] = {"result": result}
+
+    await persist_custom_node_results(state.get("entity_id"), persist_patch)
+    await send_stage_result(
+        session_id=session_id,
+        stage="ContentDraft",
+        stage_name="内容创作节点",
+        result_type="flow_content_drafts",
+        data={"node_ids": list(drafts.keys()), "count": len(nodes)},
+    )
+
+    return Command(
+        update={
+            "flow_content_drafts": drafts,
+            "next_required_action": None,
+            "progress_message": f"已完成 {len(nodes)} 个内容创作节点。",
+            "execution_status": "completed",
+            "current_step": "CONTENT_DRAFT",
+            "progress": 1.0,
+        }
+    )

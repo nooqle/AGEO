@@ -1196,6 +1196,59 @@ async def a5_analytics_node(state: AgentState) -> Command:
             update_dict["baseline_report"] = report_artifact_data
             update_dict["baseline_fetch_results"] = fetch_results
 
+        # 3b-1.5: association-circle runs may still have canvas custom nodes
+        # (secondary analysis / content draft) after the report completes.
+        custom_next_action = None
+        try:
+            from app.workflow.nodes_a4 import _is_association_circle_context
+            from app.workflow.runtime_policy_executor import build_next_required_action
+            from app.workflow.topology_resolver import (
+                analysis_nodes_schedulable,
+                content_nodes_schedulable,
+                load_flow_topology,
+            )
+
+            if _is_association_circle_context(state):
+                flow_topology = await load_flow_topology(state.get("entity_id"))
+                if analysis_nodes_schedulable(flow_topology):
+                    custom_next_action = build_next_required_action(
+                        tool_name="amway_secondary_analysis",
+                        authority="authoritative_resume",
+                        reason="分析报告完成，继续执行画布上的数据分析节点。",
+                        source_step="a5_analytics",
+                    )
+                elif content_nodes_schedulable(flow_topology):
+                    custom_next_action = build_next_required_action(
+                        tool_name="amway_content_draft",
+                        authority="authoritative_resume",
+                        reason="分析报告完成，继续执行画布上的内容创作节点。",
+                        source_step="a5_analytics",
+                    )
+        except Exception as chain_exc:  # pragma: no cover - defensive
+            logger.warning("[A5] custom-node chain probe failed: %s", chain_exc)
+
+        if custom_next_action is not None:
+            await send_progress_event(
+                session_id=session_id,
+                step="data_analytics",
+                step_name="数据分析报告",
+                progress=0.88,
+                message="报告完成，继续运行画布自定义节点",
+                status="running",
+            )
+            return Command(
+                update={
+                    **update_dict,
+                    "progress": 0.88,
+                    "next_required_action": custom_next_action,
+                    "progress_message": custom_next_action.get("reason")
+                    or "报告完成，继续运行画布自定义节点。",
+                    "awaiting_user": False,
+                    "pending_confirmation": None,
+                    "orchestrator_reply": summary,
+                },
+            )
+
         await send_progress_event(
             session_id=session_id,
             step="data_analytics",

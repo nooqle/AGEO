@@ -207,7 +207,10 @@ AMWAY_NODE_CONTRACTS: dict[str, NodeContract] = {
             ConfigField("dimensions", "string[]", None, "analysis dimension ids"),
             ConfigField("prompt", "string", "", "custom interpretation prompt"),
         ),
-        # executor wired in 3b-1.5 (LLM second-pass interpretation)
+        # 3b-1.5: batch executor for all wired analysis custom nodes
+        graph_node="amway_analysis",
+        tool_name="amway_secondary_analysis",
+        stage_code="secondary_analysis",
         description="对圈层/报告做二级解读，产出分析结论卡片。",
     ),
     "content": NodeContract(
@@ -222,7 +225,10 @@ AMWAY_NODE_CONTRACTS: dict[str, NodeContract] = {
             ConfigField("label", "string", "", "display name"),
             ConfigField("promptTemplate", "string", "", "content prompt template"),
         ),
-        # executor wired in 3b-1.5
+        # 3b-1.5: batch executor for all wired content custom nodes
+        graph_node="amway_content",
+        tool_name="amway_content_draft",
+        stage_code="content_draft",
         description="基于词库与分析结论起草内容文案。",
     ),
 }

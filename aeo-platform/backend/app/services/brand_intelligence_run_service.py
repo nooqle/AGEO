@@ -63,6 +63,11 @@ TASK_STAGE_TO_RUN_STATUS: dict[str, str] = {
     "A5": BrandIntelligenceRunStatus.ANALYZING_METRICS.value,
     "analysis_report": BrandIntelligenceRunStatus.ANALYZING_METRICS.value,
     "analysis_report_skill": BrandIntelligenceRunStatus.ANALYZING_METRICS.value,
+    # 3b-1.5 canvas custom nodes (still under the analyzing phase of a run)
+    "SECONDARY_ANALYSIS": BrandIntelligenceRunStatus.ANALYZING_METRICS.value,
+    "amway_secondary_analysis": BrandIntelligenceRunStatus.ANALYZING_METRICS.value,
+    "CONTENT_DRAFT": BrandIntelligenceRunStatus.ANALYZING_METRICS.value,
+    "amway_content_draft": BrandIntelligenceRunStatus.ANALYZING_METRICS.value,
 }
 
 

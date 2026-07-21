@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.workflow.node_contracts import FlowTopology
+from app.workflow.node_contracts import FlowTopology, TopologyNode
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,47 @@ def projection_chain_enabled(topology: FlowTopology) -> bool:
 def report_chain_enabled(topology: FlowTopology) -> bool:
     """Whether projection/A4 may chain into the report (projection → report)."""
     return is_edge_active(topology, EDGE_PROJECTION_REPORT)
+
+
+def custom_nodes_of_type(
+    topology: FlowTopology, node_type: str
+) -> tuple[TopologyNode, ...]:
+    """Custom canvas nodes of a given contract type (analysis / content / ...)."""
+    wanted = str(node_type or "").strip()
+    return tuple(node for node in topology.custom_nodes if node.type == wanted)
+
+
+def custom_incoming_sources(topology: FlowTopology, node_id: str) -> frozenset[str]:
+    """Sources of custom edges targeting ``node_id``."""
+    target = str(node_id or "").strip()
+    return frozenset(
+        edge.source for edge in topology.custom_edges if edge.target == target
+    )
+
+
+def analysis_nodes_schedulable(topology: FlowTopology) -> tuple[TopologyNode, ...]:
+    """Analysis custom nodes wired from projection and/or report.
+
+    Auto-run only when the user explicitly connected an input edge — a node
+    dropped on the canvas with no edges stays manual-only (panel button / API).
+    """
+    ready: list[TopologyNode] = []
+    for node in custom_nodes_of_type(topology, "analysis"):
+        sources = custom_incoming_sources(topology, node.id)
+        if sources & {"projection", "report"}:
+            ready.append(node)
+    return tuple(ready)
+
+
+def content_nodes_schedulable(topology: FlowTopology) -> tuple[TopologyNode, ...]:
+    """Content custom nodes wired from lexicon and/or analysis nodes."""
+    analysis_ids = {node.id for node in custom_nodes_of_type(topology, "analysis")}
+    ready: list[TopologyNode] = []
+    for node in custom_nodes_of_type(topology, "content"):
+        sources = custom_incoming_sources(topology, node.id)
+        if "lexicon" in sources or (sources & analysis_ids):
+            ready.append(node)
+    return tuple(ready)
 
 
 def apply_platform_gate(

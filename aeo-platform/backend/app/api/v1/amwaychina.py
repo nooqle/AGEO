@@ -706,3 +706,164 @@ async def put_flow_topology(
     await db.commit()
     await db.refresh(row)
     return {"topology": normalized, "updated_at": _iso(row.updated_at)}
+
+
+class FlowNodeRunRequest(BaseModel):
+    """Optional config overrides for a single custom-node run (3b-1.5)."""
+
+    dimensions: list[str] | None = None
+    prompt: str | None = None
+    promptTemplate: str | None = None
+    use_llm: bool = True
+
+
+@router.post("/entities/{entity_id}/flow-nodes/{node_id}/run")
+async def run_flow_custom_node(
+    entity_id: str,
+    node_id: str,
+    body: FlowNodeRunRequest | None = None,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """On-demand execution of one analysis/content custom node.
+
+    Loads latest cumulative projection + lexicon + any upstream analysis
+    results already stored on the topology. Writes ``config.result`` back to
+    the topology document (dual-write with the frontend response).
+    """
+    entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
+    body = body or FlowNodeRunRequest()
+
+    row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    topology_raw = (
+        row.topology if row is not None and isinstance(row.topology, dict) else {}
+    )
+    from app.workflow.node_contracts import FlowTopology
+
+    topology = FlowTopology.from_dict(topology_raw)
+    target = next((n for n in topology.custom_nodes if n.id == node_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="自定义节点不存在")
+    if target.type not in {"analysis", "content"}:
+        raise HTTPException(status_code=400, detail="该节点类型不支持独立运行")
+
+    config = dict(target.config or {})
+    if body.dimensions is not None:
+        config["dimensions"] = body.dimensions
+    if body.prompt is not None:
+        config["prompt"] = body.prompt
+    if body.promptTemplate is not None:
+        config["promptTemplate"] = body.promptTemplate
+
+    tracking = AmwayCircleTrackingService(db)
+    projection_payload = await tracking.get_projection(entity.id, scope="cumulative")
+    projection = None
+    if isinstance(projection_payload, dict):
+        nested = projection_payload.get("association_circle_projection")
+        projection = nested if isinstance(nested, dict) and nested else None
+
+    from app.services.amway_flow_custom_node_service import (
+        persist_custom_node_results,
+        run_analysis_node,
+        run_content_node,
+    )
+
+    def _topology_with_result(result_payload: dict[str, Any]) -> dict[str, Any]:
+        nodes_out = []
+        for n in topology.custom_nodes:
+            cfg = dict(n.config or {})
+            if n.id == node_id:
+                cfg.update(result_payload)
+            nodes_out.append(
+                {
+                    "id": n.id,
+                    "type": n.type,
+                    "position": n.position,
+                    "config": cfg,
+                }
+            )
+        return _normalize_topology(
+            {
+                "version": topology.version,
+                "customNodes": nodes_out,
+                "customEdges": [
+                    {"id": e.id, "source": e.source, "target": e.target}
+                    for e in topology.custom_edges
+                ],
+                "removedEdgeIds": list(topology.removed_edge_ids),
+            }
+        )
+
+    if target.type == "analysis":
+        if not projection:
+            raise HTTPException(
+                status_code=400,
+                detail="暂无可用圈层投影，请先完成至少一轮采集。",
+            )
+        result = await run_analysis_node(
+            projection=projection,
+            report=None,
+            config=config,
+            use_llm=bool(body.use_llm),
+        )
+        result_patch = {
+            "result": result,
+            "dimensions": result.get("dimensions"),
+        }
+        await persist_custom_node_results(entity.id, {node_id: result_patch})
+        if row is not None:
+            await db.refresh(row)
+            topology_out = _normalize_topology(row.topology)
+        else:
+            topology_out = _topology_with_result(result_patch)
+        return {
+            "node_id": node_id,
+            "node_type": "analysis",
+            "result": result,
+            "topology": topology_out,
+        }
+
+    # content
+    lexicon_payload = await AmwayEntityLexiconService(db).payload_for_entity(entity.id)
+    lexicon_entries = list(lexicon_payload.get("entries") or [])
+    analysis_result = None
+    for node in topology.custom_nodes:
+        if node.type != "analysis":
+            continue
+        stored = (node.config or {}).get("result")
+        if isinstance(stored, dict) and stored.get("cards"):
+            analysis_result = stored
+            break
+    center_terms = []
+    if isinstance(projection, dict):
+        center_terms = list(projection.get("center_terms") or [])
+    center_term = str(
+        getattr(entity, "name", None)
+        or (center_terms[0] if center_terms else "")
+        or (projection or {}).get("center_term")
+        or "品牌"
+    )
+    result = await run_content_node(
+        center_term=center_term,
+        lexicon_entries=lexicon_entries,
+        analysis_result=analysis_result,
+        config=config,
+        use_llm=bool(body.use_llm),
+    )
+    result_patch = {"result": result}
+    await persist_custom_node_results(entity.id, {node_id: result_patch})
+    if row is not None:
+        await db.refresh(row)
+        topology_out = _normalize_topology(row.topology)
+    else:
+        topology_out = _topology_with_result(result_patch)
+    return {
+        "node_id": node_id,
+        "node_type": "content",
+        "result": result,
+        "topology": topology_out,
+    }

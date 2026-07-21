@@ -49,12 +49,13 @@ def test_port_types_match_frontend_canvas():
 
 
 def test_schedulability_reflects_embedding():
-    """3b-1.2 起 extract/projection 已拆为独立节点，全部可独立调度。"""
+    """3b-1.2 extract/projection + 3b-1.5 analysis/content 均可独立调度。"""
     assert is_schedulable("fetch") is True
     assert is_schedulable("report") is True
     assert is_schedulable("extract") is True
     assert is_schedulable("projection") is True
-    assert is_schedulable("analysis") is False  # executor wired in 3b-1.5
+    assert is_schedulable("analysis") is True  # 3b-1.5
+    assert is_schedulable("content") is True  # 3b-1.5
     assert is_schedulable("unknown-node") is False
 
 
@@ -64,11 +65,15 @@ def test_tool_mapping_is_bijective():
         "extract": "amway_entity_extract",
         "projection": "amway_circle_projection",
         "report": "analysis_report_skill",
+        "analysis": "amway_secondary_analysis",
+        "content": "amway_content_draft",
     }
     assert TOOL_TO_CANVAS["answer_fetch"] == "fetch"
     assert TOOL_TO_CANVAS["amway_entity_extract"] == "extract"
     assert TOOL_TO_CANVAS["amway_circle_projection"] == "projection"
     assert TOOL_TO_CANVAS["analysis_report_skill"] == "report"
+    assert TOOL_TO_CANVAS["amway_secondary_analysis"] == "analysis"
+    assert TOOL_TO_CANVAS["amway_content_draft"] == "content"
 
 
 def test_platform_ids_match_frontend_meta():

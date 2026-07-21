@@ -217,6 +217,12 @@ class AgentState(TypedDict):
     brand_association_report_input: dict | None
     # 校准结果中供 A5 报告技能消费的输入快照。
 
+    flow_analysis_results: dict | None
+    # 3b-1.5: {custom_node_id: analysis result dict} from amway_analysis node.
+
+    flow_content_drafts: dict | None
+    # 3b-1.5: {custom_node_id: content draft dict} from amway_content node.
+
     # =========================================================================
     # A5 Output: Analytics & Report
     # =========================================================================

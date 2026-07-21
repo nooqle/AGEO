@@ -1742,6 +1742,28 @@ class ApiService {
     });
   }
 
+  /** 3b-1.5: on-demand run of one analysis/content custom node. */
+  async runAmwayFlowNode(
+    entityId: string,
+    nodeId: string,
+    body?: {
+      dimensions?: string[];
+      prompt?: string;
+      promptTemplate?: string;
+      use_llm?: boolean;
+    },
+  ): Promise<{
+    node_id: string;
+    node_type: string;
+    result: Record<string, unknown>;
+    topology: AmwayFlowTopologyDoc;
+  }> {
+    return this.request(`/amwaychina/entities/${entityId}/flow-nodes/${nodeId}/run`, {
+      method: 'POST',
+      body: JSON.stringify(body || {}),
+    });
+  }
+
   async listMonitoringPlans(params?: {
     entityId?: string;
     monitorMode?: 'panorama' | 'scenario';
