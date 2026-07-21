@@ -100,6 +100,14 @@ async def test_load_flow_topology_degrades_to_empty():
     )
 
 
+def test_execution_plan_summary_empty_topology_all_platforms():
+    plan = build_execution_plan_summary(FlowTopology())
+    assert set(plan["planned_platforms"]) == set(CANVAS_PLATFORM_IDS)
+    by_id = {s["node_id"]: s for s in plan["steps"]}
+    assert by_id["fetch"]["status"] == "pending"
+    assert by_id["report"]["status"] == "pending"
+
+
 def test_execution_plan_summary_skips_disconnected_platform_and_report():
     topology = FlowTopology.from_dict(
         {

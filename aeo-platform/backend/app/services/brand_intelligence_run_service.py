@@ -41,6 +41,57 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_RUN_GOAL = "分析当前品牌在 AI 平台里的表现"
+
+
+async def _attach_flow_execution_plan(
+    db: AsyncSession,
+    *,
+    entity_id: UUID,
+    input_scope: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Snapshot topology-constrained execution plan onto the run input_scope (M1).
+
+    Source of truth for amwaychina constraint-mode runs: current flow_topologies
+    row + platforms from the run request. Stored under ``flow_plan`` so the
+    canvas can render the task plan without re-deriving mid-flight.
+    """
+    scope = dict(input_scope or {})
+    try:
+        from app.models.flow_topology import FlowTopologyRecord
+        from app.workflow.node_contracts import FlowTopology
+        from app.workflow.topology_resolver import (
+            CANVAS_PLATFORM_IDS,
+            build_execution_plan_summary,
+        )
+
+        platforms = _string_list(scope.get("platforms")) or list(CANVAS_PLATFORM_IDS)
+        row = (
+            await db.execute(
+                select(FlowTopologyRecord).where(
+                    FlowTopologyRecord.entity_id == entity_id
+                )
+            )
+        ).scalar_one_or_none()
+        topology = FlowTopology.from_dict(
+            row.topology if row is not None and isinstance(row.topology, dict) else None
+        )
+        plan = build_execution_plan_summary(topology, enabled_platforms=platforms)
+        scope["flow_plan"] = {
+            "version": 1,
+            "source": "topology_constraint",
+            "generated_at": _now().isoformat(),
+            "summary": plan.get("summary") or "",
+            "planned_platforms": list(plan.get("planned_platforms") or []),
+            "active_edge_ids": list(plan.get("active_edge_ids") or []),
+            "steps": list(plan.get("steps") or []),
+        }
+    except Exception as exc:  # pragma: no cover - plan is non-blocking
+        logger.warning(
+            "[BrandIntelligenceRun] flow_plan attach failed entity=%s: %s",
+            entity_id,
+            exc,
+        )
+    return scope
 RUN_STAGE_PROGRESS: dict[str, float] = {
     BrandIntelligenceRunStatus.NOT_STARTED.value: 0.0,
     BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value: 0.12,
@@ -422,6 +473,17 @@ class BrandIntelligenceRunService:
             if association_context
             else input_scope
         )
+        # M1: attach topology-constrained execution plan for association runs
+        if association_context or str(
+            (normalized_input_scope or {}).get("analysis_mode") or ""
+        ).startswith("brand_association"):
+            normalized_input_scope = await _attach_flow_execution_plan(
+                self.db,
+                entity_id=entity.id,
+                input_scope=normalized_input_scope
+                if isinstance(normalized_input_scope, dict)
+                else {},
+            )
         normalized_analysis_mode = (
             BRAND_ASSOCIATION_CIRCLE_ANALYSIS_MODE
             if association_context
@@ -470,6 +532,14 @@ class BrandIntelligenceRunService:
             else BrandIntelligenceRunStatus.NOT_STARTED.value
         )
         initial_stage = "planning_questions" if start_immediately else "not_started"
+        plan_summary = ""
+        if isinstance(normalized_input_scope, dict):
+            flow_plan = normalized_input_scope.get("flow_plan")
+            if isinstance(flow_plan, dict):
+                plan_summary = str(flow_plan.get("summary") or "").strip()
+        start_message = "正在生成问题和样本范围"
+        if start_immediately and plan_summary:
+            start_message = f"按拓扑计划执行：{plan_summary}"
         run = BrandIntelligenceRun(
             entity_id=entity.id,
             created_by_user_id=current_user.id,
@@ -479,7 +549,7 @@ class BrandIntelligenceRunService:
             status=initial_status,
             stage=initial_stage,
             progress=RUN_STAGE_PROGRESS[initial_status],
-            message=("正在生成问题和样本范围" if start_immediately else "等待开始分析"),
+            message=(start_message if start_immediately else "等待开始分析"),
             run_goal=(run_goal or DEFAULT_RUN_GOAL).strip() or DEFAULT_RUN_GOAL,
             analysis_mode=normalized_analysis_mode,
             input_scope=normalized_input_scope or {},

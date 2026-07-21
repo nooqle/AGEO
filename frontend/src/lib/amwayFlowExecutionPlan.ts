@@ -26,7 +26,102 @@ export type FlowExecutionPlan = {
   summary: string;
   /** Index of the first non-skipped step matching current stage (or -1). */
   activeStepIndex: number;
+  /** Where the plan structure came from (M1). */
+  source?: 'local_topology' | 'run_flow_plan';
+  generatedAt?: string;
 };
+
+/** Server snapshot attached to BrandIntelligenceRun.input_scope.flow_plan */
+export type ServerFlowPlanSnapshot = {
+  version?: number;
+  source?: string;
+  generated_at?: string;
+  summary?: string;
+  planned_platforms?: string[];
+  active_edge_ids?: string[];
+  steps?: Array<{
+    node_id?: string;
+    label?: string;
+    status?: string;
+    skip_reason?: string | null;
+  }>;
+};
+
+function kindOfNodeId(nodeId: string): FlowPlanStep['kind'] {
+  if (nodeId.startsWith('platform-')) return 'platform';
+  if (nodeId === 'question-set' || nodeId === 'lexicon') return 'asset';
+  if (nodeId === 'fetch' || nodeId === 'extract' || nodeId === 'projection' || nodeId === 'report') {
+    return 'executor';
+  }
+  return 'custom';
+}
+
+/**
+ * Convert a run-scoped server flow_plan into the canvas FlowExecutionPlan shape.
+ * Runtime active/done is applied separately via mergeRuntimeOntoPlan.
+ */
+export function parseServerFlowPlan(raw: unknown): FlowExecutionPlan | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const doc = raw as ServerFlowPlanSnapshot;
+  const stepsRaw = Array.isArray(doc.steps) ? doc.steps : [];
+  if (!stepsRaw.length && !doc.summary) return null;
+  const steps: FlowPlanStep[] = stepsRaw
+    .filter((s) => s && typeof s === 'object' && s.node_id)
+    .map((s, index) => {
+      const nodeId = String(s.node_id);
+      const statusRaw = String(s.status || 'pending');
+      const status: FlowPlanStepStatus =
+        statusRaw === 'skipped'
+          ? 'skipped'
+          : statusRaw === 'active' || statusRaw === 'running'
+            ? 'active'
+            : statusRaw === 'done' || statusRaw === 'completed'
+              ? 'done'
+              : 'pending';
+      return {
+        id: `server-step-${index}-${nodeId}`,
+        nodeId,
+        label: String(s.label || nodeId),
+        kind: kindOfNodeId(nodeId),
+        status,
+        skipReason: s.skip_reason ? String(s.skip_reason) : undefined,
+      };
+    });
+  return {
+    steps,
+    activeEdgeIds: Array.isArray(doc.active_edge_ids)
+      ? doc.active_edge_ids.map(String)
+      : [],
+    summary: String(doc.summary || ''),
+    activeStepIndex: steps.findIndex((s) => s.status === 'active'),
+    source: 'run_flow_plan',
+    generatedAt: doc.generated_at ? String(doc.generated_at) : undefined,
+  };
+}
+
+/**
+ * Overlay runtime stage statuses from a locally derived plan onto a base plan
+ * (typically the authoritative run snapshot). Skip reasons stay from base.
+ */
+export function mergeRuntimeOntoPlan(
+  base: FlowExecutionPlan,
+  runtime: FlowExecutionPlan,
+): FlowExecutionPlan {
+  const runtimeByNode = new Map(runtime.steps.map((s) => [s.nodeId, s]));
+  const steps = base.steps.map((step) => {
+    if (step.status === 'skipped') return step;
+    const rt = runtimeByNode.get(step.nodeId);
+    if (!rt || rt.status === 'skipped') return { ...step, status: 'pending' as const };
+    return { ...step, status: rt.status };
+  });
+  return {
+    ...base,
+    steps,
+    activeStepIndex: steps.findIndex((s) => s.status === 'active'),
+    // keep base edges as the committed plan path
+    activeEdgeIds: base.activeEdgeIds.length ? base.activeEdgeIds : runtime.activeEdgeIds,
+  };
+}
 
 export type FlowTopologyLike = {
   customNodes: Array<{ id: string; type: string; config?: Record<string, unknown> }>;
@@ -466,6 +561,7 @@ export function buildAmwayFlowExecutionPlan(input: {
     activeEdgeIds: Array.from(new Set(activeEdgeIds)),
     summary: summaryParts.join(' · '),
     activeStepIndex,
+    source: 'local_topology',
   };
 }
 

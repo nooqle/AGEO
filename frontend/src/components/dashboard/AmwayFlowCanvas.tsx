@@ -60,6 +60,8 @@ import {
 } from './AmwayAssociationCircleDashboard';
 import {
   buildAmwayFlowExecutionPlan,
+  mergeRuntimeOntoPlan,
+  parseServerFlowPlan,
   plannedNodeIdSet,
   skippedNodeIdSet,
   type FlowExecutionPlan,
@@ -894,31 +896,39 @@ export function AmwayFlowCanvas({
   const running = Boolean(isRunActive || isRunSubmitting);
   const progressMessage = String(activeTask?.progress_message || activeRun?.message || '').trim();
 
-  // 3b-2.1: topology → execution plan projection (design-time + run-time)
-  const executionPlan = useMemo<FlowExecutionPlan>(
-    () =>
-      buildAmwayFlowExecutionPlan({
-        topology,
-        enabledPlatforms,
-        allPlatformIds: ALL_PLATFORM_IDS,
-        stageCode,
-        isRunning: running,
-        runFailed,
-        hasProjectionData: projectionNodes.length > 0,
-        hasReportData: hasReport,
-        answerCount,
-      }),
-    [
-      answerCount,
-      enabledPlatforms,
-      hasReport,
-      projectionNodes.length,
-      runFailed,
-      running,
-      stageCode,
+  // M1: local topology preview + authoritative run.flow_plan when a task is active
+  const executionPlan = useMemo<FlowExecutionPlan>(() => {
+    const local = buildAmwayFlowExecutionPlan({
       topology,
-    ],
-  );
+      enabledPlatforms,
+      allPlatformIds: ALL_PLATFORM_IDS,
+      stageCode,
+      isRunning: running,
+      runFailed,
+      hasProjectionData: projectionNodes.length > 0,
+      hasReportData: hasReport,
+      answerCount,
+    });
+    const serverRaw = (activeRun?.input_scope || {}) as Record<string, unknown>;
+    const serverPlan = parseServerFlowPlan(serverRaw.flow_plan);
+    // Prefer run snapshot whenever the run is active/submitting/recently completed
+    // so the canvas shows the plan that was committed at task start (not live edits).
+    if (serverPlan && (running || isRunActive || Boolean(activeRun))) {
+      return mergeRuntimeOntoPlan(serverPlan, local);
+    }
+    return local;
+  }, [
+    activeRun,
+    answerCount,
+    enabledPlatforms,
+    hasReport,
+    isRunActive,
+    projectionNodes.length,
+    runFailed,
+    running,
+    stageCode,
+    topology,
+  ]);
   const planPlannedNodes = useMemo(() => plannedNodeIdSet(executionPlan), [executionPlan]);
   const planSkippedNodes = useMemo(() => skippedNodeIdSet(executionPlan), [executionPlan]);
   const planActiveEdgeIds = useMemo(
@@ -1594,6 +1604,15 @@ export function AmwayFlowCanvas({
                 <span className="text-xs font-semibold text-[var(--text-primary)]">
                   {running ? '运行计划' : '本次执行计划'}
                 </span>
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                    executionPlan.source === 'run_flow_plan'
+                      ? 'border-[var(--brand-primary)]/40 text-[var(--brand-primary)]'
+                      : 'border-[var(--border-subtle)] text-[var(--text-tertiary)]'
+                  }`}
+                >
+                  {executionPlan.source === 'run_flow_plan' ? '任务计划' : '拓扑预览'}
+                </span>
               </div>
               <span className="text-[11px] text-[var(--text-tertiary)]">{executionPlan.summary}</span>
             </div>
@@ -1629,11 +1648,11 @@ export function AmwayFlowCanvas({
                   );
                 })}
             </ol>
-            {!running ? (
-              <p className="mt-2 text-[11px] leading-5 text-[var(--text-tertiary)]">
-                计划由当前画布拓扑实时推导：断开连线或关闭平台会立刻反映在路径上（拓扑即计划）。
-              </p>
-            ) : null}
+            <p className="mt-2 text-[11px] leading-5 text-[var(--text-tertiary)]">
+              {executionPlan.source === 'run_flow_plan'
+                ? '任务启动时按当时拓扑锁定的执行计划；运行态会随 stage 推进高亮当前步骤。'
+                : '计划由当前画布拓扑实时推导：断开连线或关闭平台会立刻反映在路径上。开始运行后将锁定为任务计划。'}
+            </p>
           </div>
         </section>
       </div>
