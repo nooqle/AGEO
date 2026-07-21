@@ -23,7 +23,11 @@ import {
 } from '@/lib/brandEntityHygiene';
 import { buildDashboardChatUrlWithHandoff } from '@/lib/dashboardChatHandoff';
 import type { DashboardHomeData, DashboardLatestReport } from '@/types/dashboard';
-import { isActiveBrandIntelligenceRun } from '@/types/intelligenceRun';
+import {
+  isActiveBrandIntelligenceRun,
+  isAwaitingFlowPlanConfirmation,
+  isExecutingBrandIntelligenceRun,
+} from '@/types/intelligenceRun';
 import type { Entity } from '@/types/entity';
 import type { AnalysisTask } from '@/types/task';
 import type { StageResult } from '@/types/snapshot';
@@ -206,6 +210,8 @@ export function AmwayAssociationCircleConsolePage({
     errorByEntity,
     fetchActiveRun,
     createRun,
+    confirmRun,
+    cancelRun,
   } = useIntelligenceRunStore();
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [selectedCenterTerm, setSelectedCenterTerm] = useState<string | null>(DEFAULT_CENTER_TERMS[0]);
@@ -329,6 +335,8 @@ export function AmwayAssociationCircleConsolePage({
     : null;
   const selectedRun = selectedEntityId ? runsByEntity[selectedEntityId] : null;
   const isSelectedRunActive = isActiveBrandIntelligenceRun(selectedRun);
+  const isAwaitingPlanConfirm = isAwaitingFlowPlanConfirmation(selectedRun);
+  const isSelectedRunExecuting = isExecutingBrandIntelligenceRun(selectedRun);
   const isWorldLoading = selectedEntityId ? Boolean(loadingByEntity[selectedEntityId]) : false;
   const hasHomeLoadedForSelectedEntity = Boolean(
     selectedEntityId && homeLoadedEntityId === selectedEntityId,
@@ -617,7 +625,8 @@ export function AmwayAssociationCircleConsolePage({
           analysis_mode: ASSOCIATION_ANALYSIS_MODE,
           origin_surface: 'amwaychina_console',
           origin_event_id: `amwaychina-start:${selectedEntityId}:${createHandoffId()}`,
-          auto_dispatch: true,
+          // M3: create plan snapshot and wait for canvas confirmation before dispatch
+          auto_dispatch: false,
           input_scope: {
             dashboard_variant: ASSOCIATION_DASHBOARD_VARIANT,
             analysis_mode: ASSOCIATION_ANALYSIS_MODE,
@@ -759,14 +768,18 @@ export function AmwayAssociationCircleConsolePage({
     () => buildAssociationProjection(selectedWorld, home),
     [home, selectedWorld],
   );
-  const headerIsRunning = isSelectedRunActive || Boolean(selectedEntity && submittingByEntity[selectedEntity.id]);
-  const headerStatusLabel = headerIsRunning
-    ? '正在运行'
-    : isProjectionLoading
-      ? '正在读取'
-      : consoleProjection.nodes.length > 0
-        ? '圈层已生成'
-        : '待运行';
+  const headerIsRunning =
+    isSelectedRunExecuting
+    || Boolean(selectedEntity && submittingByEntity[selectedEntity.id]);
+  const headerStatusLabel = isAwaitingPlanConfirm
+    ? '待确认计划'
+    : headerIsRunning
+      ? '正在运行'
+      : isProjectionLoading
+        ? '正在读取'
+        : consoleProjection.nodes.length > 0
+          ? '圈层已生成'
+          : '待运行';
   const headerHasPeriodReport = Boolean(
     periodView?.report_id && hasReportContent(periodView.projection),
   );
@@ -782,6 +795,49 @@ export function AmwayAssociationCircleConsolePage({
   const handleQuickRun = useCallback(() => {
     void handleStart();
   }, [handleStart]);
+
+  const handleConfirmFlowPlan = useCallback(async () => {
+    if (!selectedEntityId || !selectedRun?.id) return;
+    try {
+      await confirmRun(selectedEntityId, selectedRun.id, {
+        user_action_type: 'confirm_flow_plan',
+        provided_inputs: {
+          platforms: readEnabledFlowPlatforms(selectedEntityId),
+        },
+      });
+      void fetchActiveRun(selectedEntityId);
+      toast.success('计划已确认，开始执行');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '确认计划失败');
+    }
+  }, [confirmRun, fetchActiveRun, selectedEntityId, selectedRun?.id]);
+
+  const handleRefreshFlowPlan = useCallback(async () => {
+    if (!selectedEntityId || !selectedRun?.id) return;
+    try {
+      await confirmRun(selectedEntityId, selectedRun.id, {
+        user_action_type: 'refresh_flow_plan',
+        provided_inputs: {
+          platforms: readEnabledFlowPlatforms(selectedEntityId),
+        },
+      });
+      void fetchActiveRun(selectedEntityId);
+      toast.success('已按当前拓扑刷新计划');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '刷新计划失败');
+    }
+  }, [confirmRun, fetchActiveRun, selectedEntityId, selectedRun?.id]);
+
+  const handleCancelFlowPlan = useCallback(async () => {
+    if (!selectedEntityId || !selectedRun?.id) return;
+    try {
+      await cancelRun(selectedEntityId, selectedRun.id);
+      void fetchActiveRun(selectedEntityId);
+      toast.info('已取消本次运行');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '取消失败');
+    }
+  }, [cancelRun, fetchActiveRun, selectedEntityId, selectedRun?.id]);
 
   if (entitiesLoading && !consoleEntities.length) {
     return (
@@ -876,7 +932,7 @@ export function AmwayAssociationCircleConsolePage({
             world={selectedWorld}
             activeRun={selectedRun}
             activeTask={activeTask}
-            isRunActive={isSelectedRunActive}
+            isRunActive={isSelectedRunExecuting}
             isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
             isProjectionLoading={isProjectionLoading}
             runError={errorByEntity[selectedEntity.id]}
@@ -912,10 +968,14 @@ export function AmwayAssociationCircleConsolePage({
             periodView={periodView}
             activeRun={selectedRun}
             activeTask={activeTask}
-            isRunActive={isSelectedRunActive}
+            isRunActive={isSelectedRunExecuting}
             isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
+            isAwaitingPlanConfirm={isAwaitingPlanConfirm}
             liveStageResults={streamedStageResults}
             onQuickRun={handleQuickRun}
+            onConfirmFlowPlan={handleConfirmFlowPlan}
+            onRefreshFlowPlan={handleRefreshFlowPlan}
+            onCancelFlowPlan={handleCancelFlowPlan}
             onOpenRunSettings={handleOpenRunSettings}
             onOpenCircle={() => handleSelectView('circle')}
           />

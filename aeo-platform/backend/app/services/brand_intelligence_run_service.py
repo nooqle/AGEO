@@ -92,9 +92,12 @@ async def _attach_flow_execution_plan(
             exc,
         )
     return scope
+
+
 RUN_STAGE_PROGRESS: dict[str, float] = {
     BrandIntelligenceRunStatus.NOT_STARTED.value: 0.0,
     BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value: 0.12,
+    BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value: 0.08,
     BrandIntelligenceRunStatus.FETCHING_ANSWERS.value: 0.45,
     BrandIntelligenceRunStatus.WAITING_TAKEOVER.value: 0.5,
     BrandIntelligenceRunStatus.ANALYZING_METRICS.value: 0.72,
@@ -105,6 +108,10 @@ RUN_STAGE_PROGRESS: dict[str, float] = {
     BrandIntelligenceRunStatus.FAILED.value: 0.0,
     BrandIntelligenceRunStatus.CANCELLED.value: 0.0,
 }
+
+FLOW_PLAN_CONFIRM_ACTION = "flow_plan_confirmation"
+FLOW_PLAN_REFRESH_ACTION = "refresh_flow_plan"
+FLOW_PLAN_CONFIRM_EXECUTE = "confirm_flow_plan"
 
 TASK_STAGE_TO_RUN_STATUS: dict[str, str] = {
     "A3": BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value,
@@ -502,6 +509,13 @@ class BrandIntelligenceRunService:
             entity_id=entity.id,
             current_user=current_user,
         )
+        wants_plan_confirm = (not start_immediately) and bool(
+            association_context
+            or str((normalized_input_scope or {}).get("analysis_mode") or "").startswith(
+                "brand_association"
+            )
+        )
+
         if active is not None:
             active.input_scope = _merge_json(active.input_scope, normalized_input_scope)
             active.analysis_mode = normalized_analysis_mode
@@ -509,7 +523,11 @@ class BrandIntelligenceRunService:
             active.updated_at = active.last_activity_at
             if (
                 start_immediately
-                and active.status == BrandIntelligenceRunStatus.NOT_STARTED.value
+                and active.status
+                in {
+                    BrandIntelligenceRunStatus.NOT_STARTED.value,
+                    BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value,
+                }
             ):
                 active.status = BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value
                 active.stage = "planning_questions"
@@ -517,7 +535,45 @@ class BrandIntelligenceRunService:
                     BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value
                 ]
                 active.message = "正在生成问题和样本范围"
+                active.requires_user_action = False
+                active.user_action_type = None
+                active.blocking_reason = None
                 active.started_at = active.started_at or active.last_activity_at
+            elif (
+                wants_plan_confirm
+                and active.status
+                in {
+                    BrandIntelligenceRunStatus.NOT_STARTED.value,
+                    BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value,
+                }
+            ):
+                # Stay/enter plan confirmation; refresh plan snapshot
+                active.input_scope = await _attach_flow_execution_plan(
+                    self.db,
+                    entity_id=entity.id,
+                    input_scope=active.input_scope
+                    if isinstance(active.input_scope, dict)
+                    else {},
+                )
+                plan_summary = ""
+                fp = (active.input_scope or {}).get("flow_plan")
+                if isinstance(fp, dict):
+                    plan_summary = str(fp.get("summary") or "").strip()
+                active.status = (
+                    BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value
+                )
+                active.stage = "waiting_scope_confirmation"
+                active.progress = RUN_STAGE_PROGRESS[
+                    BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value
+                ]
+                active.message = (
+                    f"请确认执行计划后再开始：{plan_summary}"
+                    if plan_summary
+                    else "请确认画布执行计划后再开始"
+                )
+                active.requires_user_action = True
+                active.user_action_type = FLOW_PLAN_CONFIRM_ACTION
+                active.blocking_reason = "flow_plan_confirmation_required"
             if commit:
                 await self.db.commit()
                 await self.db.refresh(active)
@@ -526,20 +582,44 @@ class BrandIntelligenceRunService:
             return active
 
         now = _now()
-        initial_status = (
-            BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value
-            if start_immediately
-            else BrandIntelligenceRunStatus.NOT_STARTED.value
-        )
-        initial_stage = "planning_questions" if start_immediately else "not_started"
         plan_summary = ""
         if isinstance(normalized_input_scope, dict):
             flow_plan = normalized_input_scope.get("flow_plan")
             if isinstance(flow_plan, dict):
                 plan_summary = str(flow_plan.get("summary") or "").strip()
-        start_message = "正在生成问题和样本范围"
-        if start_immediately and plan_summary:
-            start_message = f"按拓扑计划执行：{plan_summary}"
+
+        if start_immediately:
+            initial_status = BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value
+            initial_stage = "planning_questions"
+            start_message = (
+                f"按拓扑计划执行：{plan_summary}"
+                if plan_summary
+                else "正在生成问题和样本范围"
+            )
+            requires_user = False
+            user_action = None
+            blocking = None
+        elif wants_plan_confirm:
+            initial_status = (
+                BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value
+            )
+            initial_stage = "waiting_scope_confirmation"
+            start_message = (
+                f"请确认执行计划后再开始：{plan_summary}"
+                if plan_summary
+                else "请确认画布执行计划后再开始"
+            )
+            requires_user = True
+            user_action = FLOW_PLAN_CONFIRM_ACTION
+            blocking = "flow_plan_confirmation_required"
+        else:
+            initial_status = BrandIntelligenceRunStatus.NOT_STARTED.value
+            initial_stage = "not_started"
+            start_message = "等待开始分析"
+            requires_user = False
+            user_action = None
+            blocking = None
+
         run = BrandIntelligenceRun(
             entity_id=entity.id,
             created_by_user_id=current_user.id,
@@ -548,12 +628,15 @@ class BrandIntelligenceRunService:
             origin_event_id=normalized_event_id,
             status=initial_status,
             stage=initial_stage,
-            progress=RUN_STAGE_PROGRESS[initial_status],
-            message=(start_message if start_immediately else "等待开始分析"),
+            progress=RUN_STAGE_PROGRESS.get(initial_status, 0.0),
+            message=start_message,
             run_goal=(run_goal or DEFAULT_RUN_GOAL).strip() or DEFAULT_RUN_GOAL,
             analysis_mode=normalized_analysis_mode,
             input_scope=normalized_input_scope or {},
             output_refs={},
+            requires_user_action=requires_user,
+            user_action_type=user_action,
+            blocking_reason=blocking,
             started_at=now if start_immediately else None,
             last_activity_at=now,
             created_at=now,
@@ -693,18 +776,98 @@ class BrandIntelligenceRunService:
         run = await self.get_run(run_id=run_id, current_user=current_user)
         if run is None:
             return None
+        action = str(user_action_type or "").strip() or "confirm"
+        provided = provided_inputs if isinstance(provided_inputs, dict) else {}
+
+        # M3: refresh plan snapshot only (stay in confirmation gate)
+        if action == FLOW_PLAN_REFRESH_ACTION:
+            scope = dict(run.input_scope or {})
+            if provided.get("platforms") is not None:
+                scope["platforms"] = _string_list(provided.get("platforms"))
+            scope = await _attach_flow_execution_plan(
+                self.db, entity_id=run.entity_id, input_scope=scope
+            )
+            run.input_scope = scope
+            plan_summary = ""
+            fp = scope.get("flow_plan")
+            if isinstance(fp, dict):
+                plan_summary = str(fp.get("summary") or "").strip()
+            run.message = (
+                f"计划已按当前拓扑刷新：{plan_summary}"
+                if plan_summary
+                else "计划已按当前拓扑刷新，请确认后执行"
+            )
+            run.status = BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value
+            run.stage = "waiting_scope_confirmation"
+            run.progress = RUN_STAGE_PROGRESS[
+                BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value
+            ]
+            run.requires_user_action = True
+            run.user_action_type = FLOW_PLAN_CONFIRM_ACTION
+            run.blocking_reason = "flow_plan_confirmation_required"
+            run.last_activity_at = _now()
+            run.updated_at = run.last_activity_at
+            await self.db.commit()
+            await self.db.refresh(run)
+            return run
+
         output_refs = dict(run.output_refs or {})
         confirmations = list(output_refs.get("confirmations") or [])
         confirmations.append(
             {
-                "user_action_type": user_action_type,
+                "user_action_type": action,
                 "feedback_text": feedback_text,
-                "provided_inputs": provided_inputs or {},
+                "provided_inputs": provided,
                 "origin_event_id": origin_event_id,
                 "confirmed_at": _now().isoformat(),
             }
         )
         run.output_refs = {**output_refs, "confirmations": confirmations}
+
+        # M3: lock latest topology plan at confirm time, then enter execution
+        if (
+            action in {FLOW_PLAN_CONFIRM_EXECUTE, FLOW_PLAN_CONFIRM_ACTION, "confirm"}
+            or run.status
+            == BrandIntelligenceRunStatus.WAITING_SCOPE_CONFIRMATION.value
+        ):
+            scope = dict(run.input_scope or {})
+            if provided.get("platforms") is not None:
+                scope["platforms"] = _string_list(provided.get("platforms"))
+            scope = await _attach_flow_execution_plan(
+                self.db, entity_id=run.entity_id, input_scope=scope
+            )
+            # Mark plan as confirmed for canvas
+            fp = scope.get("flow_plan")
+            if isinstance(fp, dict):
+                fp = dict(fp)
+                fp["confirmed_at"] = _now().isoformat()
+                fp["confirmation_action"] = action
+                scope["flow_plan"] = fp
+            run.input_scope = scope
+            plan_summary = ""
+            if isinstance(fp, dict):
+                plan_summary = str(fp.get("summary") or "").strip()
+            return await self.transition(
+                run,
+                status=BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value,
+                stage="planning_questions",
+                progress=max(
+                    run.progress,
+                    RUN_STAGE_PROGRESS[
+                        BrandIntelligenceRunStatus.PLANNING_QUESTIONS.value
+                    ],
+                ),
+                message=(
+                    f"已确认计划，开始执行：{plan_summary}"
+                    if plan_summary
+                    else "已确认计划，开始执行"
+                ),
+                requires_user_action=False,
+                user_action_type=None,
+                blocking_reason=None,
+                clear_error=True,
+            )
+
         return await self.transition(
             run,
             status=BrandIntelligenceRunStatus.FETCHING_ANSWERS.value,

@@ -83,3 +83,25 @@ export function isActiveBrandIntelligenceRun(
 ): boolean {
   return Boolean(run && ACTIVE_BRAND_INTELLIGENCE_RUN_STATUSES.includes(run.status));
 }
+
+/** M3: run is parked at the flow-plan confirmation gate (not yet executing). */
+export function isAwaitingFlowPlanConfirmation(
+  run?: BrandIntelligenceRun | null,
+): boolean {
+  if (!run) return false;
+  if (run.status !== 'waiting_scope_confirmation') return false;
+  const action = String(run.user_action_type || '');
+  return (
+    run.requires_user_action
+    || action === 'flow_plan_confirmation'
+    || action === 'confirm_flow_plan'
+    || String(run.blocking_reason || '') === 'flow_plan_confirmation_required'
+  );
+}
+
+/** True when the pipeline is actually executing (excludes plan confirmation). */
+export function isExecutingBrandIntelligenceRun(
+  run?: BrandIntelligenceRun | null,
+): boolean {
+  return isActiveBrandIntelligenceRun(run) && !isAwaitingFlowPlanConfirmation(run) && run?.status !== 'not_started';
+}

@@ -171,6 +171,9 @@ async def confirm_intelligence_run(
         )
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
+        # M3: refresh_flow_plan stays in waiting_scope_confirmation — do not dispatch
+        if run.status == "waiting_scope_confirmation" or run.requires_user_action:
+            return _envelope(service, run)
         run = await service.ensure_runtime_submitted(
             run=run,
             current_user=current_user,

@@ -718,8 +718,12 @@ export function AmwayFlowCanvas({
   activeTask,
   isRunActive,
   isRunSubmitting,
+  isAwaitingPlanConfirm = false,
   liveStageResults = [],
   onQuickRun,
+  onConfirmFlowPlan,
+  onRefreshFlowPlan,
+  onCancelFlowPlan,
   onOpenRunSettings,
   onOpenCircle,
 }: {
@@ -732,8 +736,13 @@ export function AmwayFlowCanvas({
   activeTask?: AnalysisTask | null;
   isRunActive?: boolean;
   isRunSubmitting?: boolean;
+  /** M3: parked at plan confirmation gate */
+  isAwaitingPlanConfirm?: boolean;
   liveStageResults?: StageResult[];
   onQuickRun: () => void;
+  onConfirmFlowPlan?: () => void;
+  onRefreshFlowPlan?: () => void;
+  onCancelFlowPlan?: () => void;
   onOpenRunSettings: () => void;
   onOpenCircle: () => void;
 }) {
@@ -1578,7 +1587,11 @@ export function AmwayFlowCanvas({
                 <Settings2 size={14} aria-hidden />
                 运行设置
               </button>
-              {running ? (
+              {isAwaitingPlanConfirm ? (
+                <div className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--brand-primary)]/40 bg-[var(--bg-secondary)] px-3.5 text-sm font-medium text-[var(--brand-primary)]">
+                  待确认计划
+                </div>
+              ) : running ? (
                 <div className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 text-sm font-medium text-[var(--text-secondary)]">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--brand-primary)]" />
                   {progressMessage || '正在运行'}
@@ -1587,31 +1600,46 @@ export function AmwayFlowCanvas({
                 <button
                   type="button"
                   onClick={onQuickRun}
-                  className="amway-cta-glow inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)]"
+                  disabled={Boolean(isRunSubmitting)}
+                  className="amway-cta-glow inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
                 >
                   <Play size={14} fill="currentColor" aria-hidden />
-                  开始运行
+                  {isRunSubmitting ? '准备计划…' : '开始运行'}
                 </button>
               )}
             </div>
           </div>
 
-          {/* 3b-2.1 执行计划投影：拓扑即计划 */}
-          <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 py-3">
+          {/* 3b-2.1 / M3 执行计划投影 + 确认闸 */}
+          <div
+            className={`mt-3 rounded-xl border px-3.5 py-3 ${
+              isAwaitingPlanConfirm
+                ? 'border-[var(--brand-primary)]/50 bg-[rgba(31,122,107,0.06)]'
+                : 'border-[var(--border-subtle)] bg-[var(--bg-secondary)]'
+            }`}
+          >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Workflow size={14} className="text-[var(--brand-primary)]" aria-hidden />
                 <span className="text-xs font-semibold text-[var(--text-primary)]">
-                  {running ? '运行计划' : '本次执行计划'}
+                  {isAwaitingPlanConfirm
+                    ? '请确认执行计划'
+                    : running
+                      ? '运行计划'
+                      : '本次执行计划'}
                 </span>
                 <span
                   className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                    executionPlan.source === 'run_flow_plan'
+                    isAwaitingPlanConfirm || executionPlan.source === 'run_flow_plan'
                       ? 'border-[var(--brand-primary)]/40 text-[var(--brand-primary)]'
                       : 'border-[var(--border-subtle)] text-[var(--text-tertiary)]'
                   }`}
                 >
-                  {executionPlan.source === 'run_flow_plan' ? '任务计划' : '拓扑预览'}
+                  {isAwaitingPlanConfirm
+                    ? '待确认'
+                    : executionPlan.source === 'run_flow_plan'
+                      ? '任务计划'
+                      : '拓扑预览'}
                 </span>
               </div>
               <span className="text-[11px] text-[var(--text-tertiary)]">{executionPlan.summary}</span>
@@ -1649,10 +1677,43 @@ export function AmwayFlowCanvas({
                 })}
             </ol>
             <p className="mt-2 text-[11px] leading-5 text-[var(--text-tertiary)]">
-              {executionPlan.source === 'run_flow_plan'
-                ? '任务启动时按当时拓扑锁定的执行计划；运行态会随 stage 推进高亮当前步骤。'
-                : '计划由当前画布拓扑实时推导：断开连线或关闭平台会立刻反映在路径上。开始运行后将锁定为任务计划。'}
+              {isAwaitingPlanConfirm
+                ? '确认后才会真正开始采集与分析。可先改连线/平台，再点「刷新计划」更新路径。'
+                : executionPlan.source === 'run_flow_plan'
+                  ? '任务确认后按锁定计划执行；运行态会随 stage 推进高亮当前步骤。'
+                  : '计划由当前画布拓扑实时推导。点击「开始运行」后进入确认闸，确认后才执行。'}
             </p>
+            {isAwaitingPlanConfirm ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onConfirmFlowPlan?.()}
+                  disabled={Boolean(isRunSubmitting)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3.5 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
+                >
+                  <Play size={13} fill="currentColor" aria-hidden />
+                  确认并执行
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRefreshFlowPlan?.()}
+                  disabled={Boolean(isRunSubmitting)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-primary)] px-3.5 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--bg-secondary)] disabled:opacity-60"
+                >
+                  <RotateCcw size={13} aria-hidden />
+                  刷新计划
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCancelFlowPlan?.()}
+                  disabled={Boolean(isRunSubmitting)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3.5 text-sm font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] disabled:opacity-60"
+                >
+                  <X size={13} aria-hidden />
+                  取消
+                </button>
+              </div>
+            ) : null}
           </div>
         </section>
       </div>
