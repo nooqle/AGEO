@@ -1350,8 +1350,10 @@ export function AmwayFlowCanvas({
   const [customNodeError, setCustomNodeError] = useState<string | null>(null);
 
   // 3c-B: deterministic topology patch preview / confirm (no NL)
+  // 3c-B+: after apply, if parked at M3 gate, refresh_flow_plan (no dispatch)
   const [patchBusy, setPatchBusy] = useState(false);
   const [patchError, setPatchError] = useState<string | null>(null);
+  const [patchNotice, setPatchNotice] = useState<string | null>(null);
   const [patchPreview, setPatchPreview] = useState<{
     intentId: TopologyPatchIntentId;
     summaryText: string;
@@ -1364,6 +1366,7 @@ export function AmwayFlowCanvas({
       if (patchBusy || customRunLockRef.current) return;
       setPatchBusy(true);
       setPatchError(null);
+      setPatchNotice(null);
       try {
         const resp = await api.previewAmwayFlowTopologyPatch(entityId, {
           intent_id: intentId,
@@ -1405,6 +1408,7 @@ export function AmwayFlowCanvas({
     }
     setPatchBusy(true);
     setPatchError(null);
+    setPatchNotice(null);
     try {
       const resp = await api.applyAmwayFlowTopologyPatch(entityId, {
         intent_id: patchPreview.intentId,
@@ -1418,6 +1422,22 @@ export function AmwayFlowCanvas({
       setTopology(remote);
       writeFlowTopology(entityId, remote);
       setPatchPreview(null);
+
+      // B+: re-snapshot run.flow_plan from new topology; stay in confirmation gate
+      if (isAwaitingPlanConfirm && onRefreshFlowPlan) {
+        try {
+          await Promise.resolve(onRefreshFlowPlan());
+          setPatchNotice(
+            '拓扑已应用，并已按新拓扑刷新待确认计划（未自动开跑）。',
+          );
+        } catch {
+          setPatchNotice(
+            '拓扑已应用，但刷新运行计划失败；请点「刷新计划」或重新发起。',
+          );
+        }
+      } else {
+        setPatchNotice('拓扑已应用；下次发起运行时将使用新编排计划。');
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '应用失败';
       setPatchError(
@@ -1428,7 +1448,13 @@ export function AmwayFlowCanvas({
     } finally {
       setPatchBusy(false);
     }
-  }, [entityId, patchBusy, patchPreview]);
+  }, [
+    entityId,
+    isAwaitingPlanConfirm,
+    onRefreshFlowPlan,
+    patchBusy,
+    patchPreview,
+  ]);
 
   const refreshTopologyVersion = useCallback(async () => {
     try {
@@ -1787,6 +1813,7 @@ export function AmwayFlowCanvas({
                         onClick={() => {
                           setPatchPreview(null);
                           setPatchError(null);
+                          setPatchNotice(null);
                         }}
                         className="inline-flex h-8 items-center rounded-lg border border-[var(--border-subtle)] px-3 text-xs font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] disabled:opacity-60"
                       >
@@ -1795,8 +1822,16 @@ export function AmwayFlowCanvas({
                     </div>
                   </div>
                 ) : null}
+                {patchNotice ? (
+                  <p className="mt-2 text-xs leading-5 text-[var(--brand-primary)]">{patchNotice}</p>
+                ) : null}
                 {patchError ? (
                   <p className="mt-2 text-xs leading-5 text-[var(--error)]">{patchError}</p>
+                ) : null}
+                {isAwaitingPlanConfirm ? (
+                  <p className="mt-1.5 text-[11px] leading-4 text-[var(--text-tertiary)]">
+                    当前在待确认计划闸：应用编排后会自动刷新计划快照，不会直接开始采集。
+                  </p>
                 ) : null}
               </div>
             </div>

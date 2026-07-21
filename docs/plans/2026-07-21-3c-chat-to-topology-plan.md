@@ -160,7 +160,7 @@ Request 同 preview，且 **必须** `expected_version`（= 当前 version，乐
 | 阶段 | 行为 |
 |---|---|
 | B（本切片） | 只改拓扑；用户仍用现有「开始采集 / 待确认计划」跑约束模式 |
-| B+（可选快跟） | apply 成功后可选「用新拓扑刷新 flow_plan」——调现有 `refresh_flow_plan` / attach plan，**不自动 dispatch** |
+| B+（已落地） | apply 成功且 run 在待确认闸 → 调 `onRefreshFlowPlan` → `user_action_type=refresh_flow_plan`；**不 dispatch** |
 | C | NL → ops → preview 画在画布（高亮 diff）→ 确认 apply → 若用户要跑，进 M3 `waiting_scope_confirmation` |
 
 **禁止**：apply-patch 内部直接 `create_run` 并跳过确认。
@@ -176,6 +176,8 @@ Request 同 preview，且 **必须** `expected_version`（= 当前 version，乐
 | **B2** | preview-patch / apply-patch API | ✅ | `amwaychina.py` 两 POST |
 | **B3** | 前端 API + 试验条 preview/confirm | ✅ | `api.ts` + 画布「编排建议（试验）」 |
 | **B4** | 套件入口 / session-log 证据 | ✅ | `run_3b1_suite` 纳入 patch 测试 |
+| **B-live** | Live 手点清单 | ✅ 清单 | `docs/session-logs/2026-07-21-3c-b-live-checklist.md`（结果待人填） |
+| **B+** | apply 后 M3 `refresh_flow_plan`，不 dispatch | ✅ | 画布 apply 成功且 `isAwaitingPlanConfirm` → `onRefreshFlowPlan` |
 | **C0** | NL→ops（另开 Plan） | ⏭ | 不在 B |
 
 ---
