@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-07-21T05:59:05.408536+00:00",
+  "scope": "P0 closure for blueprint 3b-1 (gate + real LLM custom nodes)",
+  "checks": [
+    {
+      "name": "platform_gate_a4_entry",
+      "ok": true,
+      "platform_filter": [
+        "deepseek",
+        "kimi",
+        "hunyuan"
+      ],
+      "disabled_expected": [
+        "doubao"
+      ],
+      "progress_message": null
+    },
+    {
+      "name": "branch_plan_projection_seed",
+      "ok": true,
+      "ran_node_ids": [
+        "a1",
+        "c1"
+      ]
+    },
+    {
+      "name": "real_llm_analysis",
+      "ok": true,
+      "mode": "llm",
+      "card_count": 1,
+      "card_titles": [
+        "平台覆盖与实体洞察"
+      ],
+      "summary_preview": "纽崔莱在已产出平台核心声量稳固，但 Doubao 平台覆盖缺失且存在监管风险关联，需针对性补齐监测。",
+      "fallback_reason": null
+    },
+    {
+      "name": "real_llm_content",
+      "ok": true,
+      "mode": "llm",
+      "draft_len": 59,
+      "draft_preview": "坚持打卡纽崔莱，大品牌从种植到生产全程严控，品质让人放心。日常补充营养，选对很重要，状态自然在线。#纽崔莱 #健康生活",
+      "fallback_reason": null
+    }
+  ],
+  "all_ok": true
+}

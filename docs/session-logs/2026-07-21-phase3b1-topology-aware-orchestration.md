@@ -54,9 +54,30 @@
 - 前端：分析节点「仅运行此节点 / 运行此分支」；projection/report/lexicon「运行下游自定义节点」
 - **边界**：不重跑 A4 采集 / extract / projection / A5 内核，只重跑自定义分析与内容分支
 
+## Validation Closure（P0 · 2026-07-21）
+
+**目标**：闭合 Review 建议的 P0——断平台门控可证伪 + 自定义节点真 LLM 产出 + 写回证据。
+
+| 检查项 | 结果 | 证据 |
+|---|---|---|
+| A4 平台门（断 doubao） | ✅ | `platform_filter=["deepseek","kimi","hunyuan"]`，不含 doubao；经真实 `a4_fetch_node` 入口（`build_request` 捕获） |
+| 分支规划 projection→a1→c1 | ✅ | `branch_custom_executors` → `["a1","c1"]` |
+| 真 LLM 二级解读 | ✅ | `mode=llm`，1 张卡片，summary 非空；provider=`glm5` |
+| 真 LLM 内容草稿 | ✅ | `mode=llm`，draft_len=59，无 fallback |
+| 3b-1 相关单测 | ✅ | 45 passed（gate/resolver/custom/amway/contracts/topology-api） |
+
+证据文件：
+- `docs/session-logs/2026-07-21-p0-3b1-closure-evidence.json`
+- 复现脚本：`scripts/p0_3b1_closure_verify.py`（`cd aeo-platform/backend && python ../../scripts/p0_3b1_closure_verify.py`）
+
+**刻意未做 / 残留**：
+- 未启动本地 backend/frontend；未跑完整 brand-intelligence 真采集一轮（含 60s 间隔与多平台浏览器/API 全链路）。
+- 平台门控闭合层级是 **A4 执行入口**（断线 → filter 生效），不是「DB 里 topology 行 + 线上 live crawl 日志对照」。
+- 若上线前要更强证据：起服务 → PUT 去掉 `e-fetch-doubao` → 触发一次 run → 对照 stage 日志无 doubao。
+
+**P0 结论**：代码层 + 真 LLM 产出层 **闭合**；完整 live crawl 对照标为 **残留风险 / 上线前可选项**，不阻塞 3b-1 工程宣告完成。
+
 ## 环境状态
 
-- 后端进程 be5o07udb（port 8000，无 --reload）已加载全部新代码，`flow-topology` 端点已注册
-- 待办：E2E 验证画布断线真实生效（需消耗一次真实采集，受 60 秒间隔约束，接线测试已证明门控值到达执行入口）
-- 待办：3b-1.5/1.6 E2E（真实 LLM）验证分析/内容节点产出与分支运行
+- P0 验证时：本机 `127.0.0.1:8000/3000` 未起服务；`.env.local` 有 `LLM_PROVIDER=glm5` + `GLM5_API_KEY`
 - 蓝皮书下一站：**3b-2 计划可视化**
