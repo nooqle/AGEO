@@ -363,3 +363,16 @@ async def list_orchestration_events(
     entity = await require_amway_entity(db, current_user, entity_id)
     rows = await orch_events.list_events(db, entity_id=entity.id, limit=limit)
     return {"events": [orch_events.event_to_dict(r) for r in rows]}
+
+
+@router.get("/entities/{entity_id}/flow-lessons")
+async def list_flow_lessons(
+    entity_id: str,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Wave O: visible node-level run/topology lessons (no silent apply)."""
+    from app.services import flow_run_lesson_service as lessons
+
+    entity = await require_amway_entity(db, current_user, entity_id)
+    return await lessons.load_lessons_for_entity(db, entity_id=entity.id)

@@ -137,6 +137,15 @@ export function AmwayFlowNodeCard({ id, data, selected }: NodeProps<AmwayFlowNod
           {!isPlatform && data.subtitle ? (
             <div className="mt-0.5 truncate text-[11px] tabular-nums text-[var(--text-tertiary)]">{data.subtitle}</div>
           ) : null}
+          {data.lesson ? (
+            <div
+              className="mt-0.5 line-clamp-2 text-[10px] leading-3.5 text-[var(--text-secondary)]"
+              title={data.lesson}
+              data-testid="amway-flow-node-lesson"
+            >
+              教训：{data.lesson}
+            </div>
+          ) : null}
         </div>
         {isPlatform && data.onToggle ? (
           <button

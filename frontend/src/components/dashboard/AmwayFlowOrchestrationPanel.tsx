@@ -50,6 +50,10 @@ export function AmwayFlowOrchestrationPanel({
   const [events, setEvents] = useState<
     Array<{ id: string; summary: string; created_at?: string | null; event_type: string }>
   >([]);
+  const [lessonsOpen, setLessonsOpen] = useState(true);
+  const [lessons, setLessons] = useState<
+    Array<{ id: string; node_id: string; headline: string; kind: string }>
+  >([]);
 
   const persistRecipeSession = useCallback(
     (next: { id: string; name: string; dirty: boolean } | null) => {
@@ -80,6 +84,22 @@ export function AmwayFlowOrchestrationPanel({
     }
   }, [entityId]);
 
+  const reloadLessons = useCallback(async () => {
+    try {
+      const resp = await api.listAmwayFlowLessons(entityId);
+      setLessons(
+        (resp.lessons || []).map((item) => ({
+          id: item.id,
+          node_id: item.node_id,
+          headline: item.headline,
+          kind: item.kind,
+        })),
+      );
+    } catch {
+      setLessons([]);
+    }
+  }, [entityId]);
+
   // F7: active-run API drops completed; load latest completed explicitly
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +121,10 @@ export function AmwayFlowOrchestrationPanel({
     void reloadEvents();
   }, [reloadEvents]);
 
+  useEffect(() => {
+    void reloadLessons();
+  }, [reloadLessons, activeRunCompleted, latestCompleted]);
+
   const suggestSaveAfterRun = activeRunCompleted || latestCompleted;
 
   const handleRecipeApplied = useCallback(
@@ -112,8 +136,9 @@ export function AmwayFlowOrchestrationPanel({
       invalidateFlowEntityCache(entityId);
       onTopologyApplied(topology, meta);
       void reloadEvents();
+      void reloadLessons();
     },
-    [entityId, onTopologyApplied, persistRecipeSession, reloadEvents],
+    [entityId, onTopologyApplied, persistRecipeSession, reloadEvents, reloadLessons],
   );
 
   const handlePatchApplied = useCallback(
@@ -124,8 +149,17 @@ export function AmwayFlowOrchestrationPanel({
       invalidateFlowEntityCache(entityId);
       onTopologyApplied(topology);
       void reloadEvents();
+      void reloadLessons();
     },
-    [activeRecipeId, activeRecipeName, entityId, onTopologyApplied, persistRecipeSession, reloadEvents],
+    [
+      activeRecipeId,
+      activeRecipeName,
+      entityId,
+      onTopologyApplied,
+      persistRecipeSession,
+      reloadEvents,
+      reloadLessons,
+    ],
   );
 
   const handleRecipeSaved = useCallback(
@@ -135,8 +169,9 @@ export function AmwayFlowOrchestrationPanel({
       else setActiveRecipeName(name);
       invalidateFlowEntityCache(entityId);
       void reloadEvents();
+      void reloadLessons();
     },
-    [activeRecipeId, entityId, persistRecipeSession, reloadEvents],
+    [activeRecipeId, entityId, persistRecipeSession, reloadEvents, reloadLessons],
   );
 
   return (
@@ -186,6 +221,42 @@ export function AmwayFlowOrchestrationPanel({
           isAwaitingPlanConfirm={isAwaitingPlanConfirm}
           onRefreshFlowPlan={onRefreshFlowPlan}
         />
+      </div>
+
+      <div className="border-t border-[var(--border-subtle)] px-3.5 py-2.5">
+        <button
+          type="button"
+          onClick={() => {
+            setLessonsOpen((open) => !open);
+            if (!lessonsOpen) void reloadLessons();
+          }}
+          className="inline-flex items-center gap-1 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--brand-primary)]"
+        >
+          {lessonsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          运行教训
+          {lessons.length ? (
+            <span className="text-[10px] text-[var(--text-tertiary)]">({lessons.length})</span>
+          ) : null}
+        </button>
+        {lessonsOpen ? (
+          <ul className="mt-2 max-h-36 space-y-1.5 overflow-y-auto" data-testid="amway-flow-lessons">
+            {lessons.length === 0 ? (
+              <li className="text-[11px] text-[var(--text-tertiary)]">
+                暂无教训。断平台边、改图或完成一次运行后会出现可见提示（不会自动改图）。
+              </li>
+            ) : (
+              lessons.map((item) => (
+                <li
+                  key={item.id}
+                  className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--text-secondary)]"
+                >
+                  <span className="text-[10px] text-[var(--text-tertiary)]">{item.node_id}</span>
+                  <span className="mt-0.5 block text-[var(--text-primary)]">{item.headline}</span>
+                </li>
+              ))
+            )}
+          </ul>
+        ) : null}
       </div>
 
       <div className="border-t border-[var(--border-subtle)] px-3.5 py-2.5">

@@ -29,6 +29,8 @@ export type AmwayFlowNodeData = {
   description: string;
   enabled?: boolean;
   planned?: boolean;
+  /** Wave O: visible run/topology lesson (no silent apply). */
+  lesson?: string | null;
   onOutput?: (nodeId: string, key: FlowArtifactKey) => void;
   onToggle?: (nodeId: string) => void;
 };

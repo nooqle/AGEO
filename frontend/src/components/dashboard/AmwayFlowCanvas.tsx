@@ -186,6 +186,8 @@ export function AmwayFlowCanvas({
   const topologyDirtyRef = useRef(false);
   const topologyVersionRef = useRef<number | null>(null);
   const [topologySaveError, setTopologySaveError] = useState<string | null>(null);
+  /** Wave O: node_id → lesson headline */
+  const [lessonsByNodeId, setLessonsByNodeId] = useState<Record<string, string>>({});
   const updateTopology = useCallback(
     (updater: (current: FlowTopology) => FlowTopology) => {
       topologyDirtyRef.current = true;
@@ -256,6 +258,29 @@ export function AmwayFlowCanvas({
       cancelled = true;
     };
   }, [entityId]);
+
+  // Wave O: visible lessons (topology + last run + orchestration events)
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listAmwayFlowLessons(entityId)
+      .then((resp) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const item of resp.lessons || []) {
+          if (!item?.node_id || !item?.headline) continue;
+          // First headline wins (backend already prioritizes topology/run)
+          if (!map[item.node_id]) map[item.node_id] = item.headline;
+        }
+        setLessonsByNodeId(map);
+      })
+      .catch(() => {
+        if (!cancelled) setLessonsByNodeId({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entityId, topology.removedEdgeIds, activeRun?.id, activeRun?.status]);
 
   // Keep localStorage platform switches aligned with topology gates (B3)
   useEffect(() => {
@@ -595,6 +620,7 @@ export function AmwayFlowCanvas({
         outputs: nodeOutputsMap.get(definition.id) || [],
         description: definition.description,
         planned: planPlannedNodes.has(definition.id),
+        lesson: lessonsByNodeId[definition.id] || null,
         onOutput: handleOutput,
       },
     }));
@@ -617,6 +643,7 @@ export function AmwayFlowCanvas({
           description: `${platform.label} 采集通道。关闭后下一轮运行不再采集该平台。`,
           enabled: enabledPlatforms.includes(platform.id),
           planned: planPlannedNodes.has(nodeId),
+          lesson: lessonsByNodeId[nodeId] || null,
           onOutput: handleOutput,
           onToggle: togglePlatform,
         },
@@ -650,12 +677,26 @@ export function AmwayFlowCanvas({
             : [{ key: 'contentDraft' as FlowArtifactKey, label: '内容草稿', disabled: !hasResult }],
           description: meta.description,
           planned: planPlannedNodes.has(customNode.id),
+          lesson: lessonsByNodeId[customNode.id] || null,
           onOutput: handleOutput,
         },
       });
     });
     return list;
-  }, [enabledPlatforms, handleOutput, measuredSizes, nodeOutputsMap, nodeStatusMap, nodeSubtitleMap, panel, planPlannedNodes, positions, togglePlatform, topology.customNodes]);
+  }, [
+    enabledPlatforms,
+    handleOutput,
+    lessonsByNodeId,
+    measuredSizes,
+    nodeOutputsMap,
+    nodeStatusMap,
+    nodeSubtitleMap,
+    panel,
+    planPlannedNodes,
+    positions,
+    togglePlatform,
+    topology.customNodes,
+  ]);
 
   const onNodesChange = useCallback((changes: NodeChange<AmwayFlowNode>[]) => {
     setPositions((current) => {

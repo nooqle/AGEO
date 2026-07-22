@@ -1910,6 +1910,22 @@ class ApiService {
     );
   }
 
+  /** Wave O: visible node-level run/topology lessons (no auto-apply). */
+  async listAmwayFlowLessons(entityId: string): Promise<{
+    lessons: Array<{
+      id: string;
+      node_id: string;
+      kind: string;
+      headline: string;
+      source?: string;
+      auto_applied?: boolean;
+    }>;
+    engine?: string;
+    auto_applied?: boolean;
+  }> {
+    return this.request(`/amwaychina/entities/${entityId}/flow-lessons`);
+  }
+
   async applyAmwayFlowRecipe(
     entityId: string,
     recipeId: string,
