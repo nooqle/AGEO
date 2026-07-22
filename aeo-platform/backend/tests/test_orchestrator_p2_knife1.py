@@ -102,6 +102,63 @@ def test_reexport_identity_from_orchestrator_node():
     )
 
 
+def test_knife7_knowledge_fallback_and_command_helpers():
+    from langgraph.types import Command
+
+    from app.workflow.orchestrator.command_helpers import (
+        _build_error_recovery_message,
+        _merge_command_update,
+    )
+    from app.workflow.orchestrator.knowledge_fallback import (
+        _infer_knowledge_fallback_tool,
+        _should_stream_thoughts,
+    )
+    from app.workflow.orchestrator_node import (
+        _build_error_recovery_message as node_err,
+        _infer_knowledge_fallback_tool as node_fb,
+        _should_stream_thoughts as node_stream,
+    )
+
+    assert node_fb is _infer_knowledge_fallback_tool
+    assert node_err is _build_error_recovery_message
+    assert node_stream is _should_stream_thoughts
+
+    assert _should_stream_thoughts({}) is True
+    # no materials -> no fallback
+    assert (
+        _infer_knowledge_fallback_tool(
+            {
+                "orchestrator_history": [
+                    {"role": "user", "content": "导出过往回答表格"}
+                ],
+                "knowledge_manifest": {"available_sources": {}},
+            }
+        )
+        is None
+    )
+    # with materials + export intent
+    fb = _infer_knowledge_fallback_tool(
+        {
+            "orchestrator_history": [
+                {"role": "user", "content": "导出过往回答表格 pdf"}
+            ],
+            "knowledge_manifest": {
+                "available_sources": {"fetch_answer": True},
+                "history": {"analysis_window_count": 1},
+            },
+        }
+    )
+    assert fb is not None
+    assert fb[0] == "knowledge_export"
+
+    msg = _build_error_recovery_message(
+        {"step": "A5", "error": "boom", "category": "system_persistence"}
+    )
+    assert "重新尝试生成报告" in msg
+    merged = _merge_command_update(Command(goto="n", update={"a": 1}), {"b": 2})
+    assert dict(merged.update or {}) == {"a": 1, "b": 2}
+
+
 def test_knife6_tool_gate_and_prompt_context_pins():
     from app.workflow.orchestrator.prompt_context import (
         _build_context_summary,
