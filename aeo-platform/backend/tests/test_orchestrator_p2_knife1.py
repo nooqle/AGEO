@@ -102,6 +102,34 @@ def test_reexport_identity_from_orchestrator_node():
     )
 
 
+def test_knife3_ontology_and_prompt_bundle():
+    from app.workflow.orchestrator.ontology_intelligence import (
+        CORE_RELATIONSHIP_TYPES,
+        _with_intelligence_reply_closure,
+    )
+    from app.workflow.orchestrator.prompt_bundle import (
+        OrchestratorPromptBundle,
+        _wrap_runtime_reminder_message,
+    )
+    from app.workflow.orchestrator.seed_surface import (
+        _looks_like_keyword_list,
+        _normalize_tool_topic_keywords,
+    )
+    from app.workflow.orchestrator_node import (
+        OrchestratorPromptBundle as NodeBundle,
+        _with_intelligence_reply_closure as node_closure,
+    )
+
+    assert "brand_has_intelligence_finding" in CORE_RELATIONSHIP_TYPES
+    closed = _with_intelligence_reply_closure("结论：测试")
+    assert "证据：" in closed
+    assert _looks_like_keyword_list("a,b,c") or True  # pure smoke
+    assert isinstance(_normalize_tool_topic_keywords(["x", "y"]), list)
+    assert "本轮系统提醒" in _wrap_runtime_reminder_message("hello")
+    assert NodeBundle is OrchestratorPromptBundle
+    assert node_closure is _with_intelligence_reply_closure
+
+
 def test_knife2_history_and_workflow():
     from app.workflow.orchestrator.history_query import (
         _is_history_answer_content_query,

@@ -79,4 +79,4 @@ C1 推荐只消费 recipes + events + topology，**不依赖**本拆分完成即
 
 ## 6. 结论
 
-Wave C 交付 **C4 设计稿**；**Wave F 第一刀**已落地 `app/workflow/orchestrator/*` 纯函数包，`orchestrator_node` 约 **-257 行**并保持 re-export 兼容。后续刀：继续抽 history/routing/prompt 大块 → effects → 薄壳。
+Wave C 交付 **C4 设计稿**；F/G/H 三刀已落地 `app/workflow/orchestrator/*`（history / workflow / ontology 情报 / seed / prompt_bundle 等），`orchestrator_node` 约 **7692→5945 行（~-1747）**。后续：tool gate / context_summary / routing async 适配 → effects → 薄壳。
