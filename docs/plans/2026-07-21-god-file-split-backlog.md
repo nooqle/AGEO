@@ -88,6 +88,9 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 - [x] NL 规则 / LLM 编译独立模块 + 稳定 prompt  
 - [x] Canvas P0：types/constants/topologyDoc/analysis/graphUtils/NodeCard/Panels  
 - [x] amwaychina 路由分包（P1）  
-- [ ] orchestrator_node 拆分设计稿（P2）  
+- [ ] **P1.5** 配方条+编排条合并为单一 Orchestration 面板（绑 Wave A 视觉，防 Canvas 回潮）  
+- [ ] orchestrator_node 拆分设计稿（P2）→ 总路线 **Wave C / C4**  
 
-**下次继续**：**P2** Orch / a5 巨石设计稿（独立里程碑，勿与产品功能混做）。
+**与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`（四条线：配方 / 视觉 / 记忆 / **代码拆分**）。  
+
+**下次继续：** Wave A 内做 P1.5；P2 巨石设计稿进 Wave C，勿与配方/视觉混 PR。
