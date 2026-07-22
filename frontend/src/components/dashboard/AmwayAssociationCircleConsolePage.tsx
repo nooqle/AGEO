@@ -620,6 +620,22 @@ export function AmwayAssociationCircleConsolePage({
           uploadedQuestionSetId = savedQuestionSet.id;
           questionSetVersion = savedQuestionSet.version || 1;
         }
+        // Wave B2: inject active recipe when not dirty
+        let recipeScope: Record<string, string> = {};
+        try {
+          const raw = sessionStorage.getItem(`amway-flow-active-recipe:${selectedEntityId}`);
+          if (raw) {
+            const parsed = JSON.parse(raw) as { id?: string; name?: string; dirty?: boolean };
+            if (parsed?.id && parsed?.name && !parsed.dirty) {
+              recipeScope = {
+                recipe_id: String(parsed.id),
+                recipe_name: String(parsed.name),
+              };
+            }
+          }
+        } catch {
+          recipeScope = {};
+        }
         await createRun(selectedEntityId, {
           run_goal: '生成安利品牌联想圈层报告',
           analysis_mode: ASSOCIATION_ANALYSIS_MODE,
@@ -638,6 +654,7 @@ export function AmwayAssociationCircleConsolePage({
             fetch_mode: payload?.fetchMode || 'full',
             enabled_surfaces: ['amwaychina_console', 'chat', 'canvas', 'brand_world'],
             question_input_mode: uploadedQuestions.length ? 'uploaded_list' : 'default_matrix',
+            ...recipeScope,
             ...(uploadedQuestions.length
               ? {
                   uploaded_question_source: payload?.uploadedQuestionSource || 'amwaychina_upload',

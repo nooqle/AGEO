@@ -56,6 +56,7 @@ from app.models.fetch_run_platform_state import FetchRunPlatformState
 from app.models.file_metadata import FileMetadata
 from app.models.flow_topology import FlowTopologyRecord
 from app.models.flow_topology_recipe import FlowTopologyRecipe
+from app.models.flow_orchestration_event import FlowOrchestrationEvent
 from app.models.knowledge import KnowledgeRecord, KnowledgeSegment
 from app.models.llm_usage import LLMUsageRecord
 from app.models.message import Message
@@ -175,6 +176,7 @@ __all__ = [
     "FileMetadata",
     "FlowTopologyRecord",
     "FlowTopologyRecipe",
+    "FlowOrchestrationEvent",
     "KnowledgeRecord",
     "KnowledgeSegment",
     "LLMUsageRecord",

@@ -28,18 +28,23 @@ export function AmwayFlowRecipeBar({
   suggestSaveAfterRun = false,
   activeRecipeName = null,
   activeRecipeDirty = false,
+  activeRecipeId = null,
   onActiveRecipeCleared,
 }: {
   entityId: string;
   getExpectedVersion: () => number | null;
   setExpectedVersion: (version: number) => void;
-  onTopologyApplied: (topology: AmwayFlowTopologyDoc, meta?: { recipeName?: string }) => void;
-  onRecipeSaved?: (name: string) => void;
+  onTopologyApplied: (
+    topology: AmwayFlowTopologyDoc,
+    meta?: { recipeName?: string; recipeId?: string },
+  ) => void;
+  onRecipeSaved?: (name: string, id?: string) => void;
   disabled?: boolean;
   embedded?: boolean;
   suggestSaveAfterRun?: boolean;
   activeRecipeName?: string | null;
   activeRecipeDirty?: boolean;
+  activeRecipeId?: string | null;
   onActiveRecipeCleared?: () => void;
 }) {
   const [recipes, setRecipes] = useState<RecipeItem[]>([]);
@@ -98,7 +103,10 @@ export function AmwayFlowRecipeBar({
           getExpectedVersion(),
         );
         if (typeof resp.version === 'number') setExpectedVersion(resp.version);
-        onTopologyApplied(resp.topology, { recipeName: resp.recipe_name });
+        onTopologyApplied(resp.topology, {
+          recipeName: resp.recipe_name,
+          recipeId: resp.recipe_id,
+        });
         setNotice(`已切换配方「${resp.recipe_name}」（直接替换当前生产线）`);
       } catch (err) {
         const message = err instanceof Error ? err.message : '套用配方失败';
@@ -132,7 +140,7 @@ export function AmwayFlowRecipeBar({
         from_current: true,
       });
       setSaveName('');
-      onRecipeSaved?.(created.name);
+      onRecipeSaved?.(created.name, created.id);
       setNotice(
         `已保存配方「${created.name}」（${created.scope === 'organization' ? '组织共享' : '本品牌'}）`,
       );
@@ -143,6 +151,29 @@ export function AmwayFlowRecipeBar({
       setBusy(false);
     }
   }, [busy, disabled, entityId, onRecipeSaved, reload, saveName, saveScope]);
+
+  const overwriteRecipe = useCallback(
+    async (recipeId: string, name: string) => {
+      if (busy || disabled) return;
+      if (!window.confirm(`用当前生产线覆盖配方「${name}」？`)) return;
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const updated = await api.updateAmwayFlowRecipe(recipeId, entityId, {
+          from_current: true,
+        });
+        onRecipeSaved?.(updated.name, updated.id);
+        setNotice(`已用当前生产线覆盖配方「${updated.name}」`);
+        await reload();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '覆盖失败');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, disabled, entityId, onRecipeSaved, reload],
+  );
 
   const removeRecipe = useCallback(
     async (recipeId: string, name: string) => {
@@ -236,6 +267,17 @@ export function AmwayFlowRecipeBar({
                 <span className="ml-1 text-[10px] opacity-70">
                   {recipe.scope === 'organization' ? '组织' : '品牌'}
                 </span>
+              </button>
+              <button
+                type="button"
+                title="用当前生产线覆盖此配方"
+                disabled={busy || disabled}
+                onClick={() => {
+                  void overwriteRecipe(recipe.id, recipe.name);
+                }}
+                className="inline-flex h-8 items-center rounded-lg border border-[var(--border-subtle)] px-2 text-[10px] font-medium text-[var(--text-tertiary)] transition hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)] disabled:opacity-50"
+              >
+                覆盖
               </button>
               <button
                 type="button"

@@ -1869,6 +1869,47 @@ class ApiService {
     });
   }
 
+  async updateAmwayFlowRecipe(
+    recipeId: string,
+    entityId: string,
+    body: {
+      name?: string;
+      description?: string | null;
+      topology?: AmwayFlowTopologyDoc;
+      from_current?: boolean;
+    },
+  ): Promise<{
+    id: string;
+    name: string;
+    scope: string;
+    version: number;
+    topology: AmwayFlowTopologyDoc;
+  }> {
+    const qs = new URLSearchParams({ entity_id: entityId });
+    return this.request(`/amwaychina/flow-recipes/${recipeId}?${qs.toString()}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async listAmwayOrchestrationEvents(
+    entityId: string,
+    limit = 20,
+  ): Promise<{
+    events: Array<{
+      id: string;
+      event_type: string;
+      summary: string;
+      created_at?: string | null;
+      payload?: Record<string, unknown>;
+    }>;
+  }> {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    return this.request(
+      `/amwaychina/entities/${entityId}/orchestration-events?${qs.toString()}`,
+    );
+  }
+
   async applyAmwayFlowRecipe(
     entityId: string,
     recipeId: string,

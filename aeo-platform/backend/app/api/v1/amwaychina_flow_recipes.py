@@ -33,6 +33,8 @@ class RecipeUpdateBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     topology: dict[str, Any] | None = None
+    # Wave B4: overwrite recipe topology from entity's current production line
+    from_current: bool = False
 
 
 class RecipeApplyBody(BaseModel):
@@ -141,6 +143,21 @@ async def create_flow_recipe(
         topology=topology,
         created_by_user_id=user_id,
     )
+    # Wave B1: log save (use auth entity id for brand context)
+    try:
+        from app.services import flow_orchestration_event_service as orch_events
+
+        log_entity_id = entity.id
+        await orch_events.append_event(
+            db,
+            entity_id=log_entity_id,
+            event_type="save_recipe",
+            summary=f"另存配方「{row.name}」（{'组织' if row.entity_id is None else '本品牌'}）",
+            payload={"recipe_id": str(row.id), "scope": "organization" if row.entity_id is None else "entity"},
+            created_by_user_id=user_id,
+        )
+    except Exception:
+        pass
     return recipes.recipe_to_dict(row)
 
 
@@ -161,13 +178,52 @@ async def update_flow_recipe(
     )
     if row.entity_id is not None and row.entity_id != entity.id:
         raise HTTPException(status_code=403, detail="无权修改其他品牌的配方")
+    topology = body.topology
+    event_type = "update_recipe"
+    if body.from_current:
+        topo_row = (
+            await db.execute(
+                select(FlowTopologyRecord).where(
+                    FlowTopologyRecord.entity_id == entity.id
+                )
+            )
+        ).scalar_one_or_none()
+        topology = (
+            topo_row.topology
+            if topo_row is not None and isinstance(topo_row.topology, dict)
+            else {}
+        )
+        event_type = "overwrite_recipe"
     updated = await recipes.update_recipe(
         db,
         recipe=row,
         name=body.name,
         description=body.description,
-        topology=body.topology,
+        topology=topology,
     )
+    try:
+        from app.services import flow_orchestration_event_service as orch_events
+        from uuid import UUID as _UUID
+
+        user_id = None
+        try:
+            user_id = _UUID(str(current_user.id))
+        except (TypeError, ValueError):
+            user_id = None
+        await orch_events.append_event(
+            db,
+            entity_id=entity.id,
+            event_type=event_type,
+            summary=(
+                f"用当前生产线覆盖配方「{updated.name}」"
+                if event_type == "overwrite_recipe"
+                else f"更新配方「{updated.name}」"
+            ),
+            payload={"recipe_id": str(updated.id), "version": updated.version},
+            created_by_user_id=user_id,
+        )
+    except Exception:
+        pass
     return recipes.recipe_to_dict(updated)
 
 
@@ -214,9 +270,43 @@ async def apply_flow_recipe(
         recipe=recipe,
         expected_version=body.expected_version,
     )
+    try:
+        from app.services import flow_orchestration_event_service as orch_events
+        from uuid import UUID as _UUID
+
+        user_id = None
+        try:
+            user_id = _UUID(str(current_user.id))
+        except (TypeError, ValueError):
+            user_id = None
+        await orch_events.append_event(
+            db,
+            entity_id=entity.id,
+            event_type="apply_recipe",
+            summary=f"套用配方「{recipe.name}」",
+            payload={"recipe_id": str(recipe.id), "recipe_name": recipe.name},
+            created_by_user_id=user_id,
+        )
+    except Exception:
+        pass
     return {
         "topology": topology,
         "version": version,
         "recipe_id": str(recipe.id),
         "recipe_name": recipe.name,
     }
+
+
+@router.get("/entities/{entity_id}/orchestration-events")
+async def list_orchestration_events(
+    entity_id: str,
+    limit: int = Query(20, ge=1, le=50),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Wave B1: recent visible orchestration changes."""
+    from app.services import flow_orchestration_event_service as orch_events
+
+    entity = await require_amway_entity(db, current_user, entity_id)
+    rows = await orch_events.list_events(db, entity_id=entity.id, limit=limit)
+    return {"events": [orch_events.event_to_dict(r) for r in rows]}

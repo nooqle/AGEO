@@ -363,6 +363,34 @@ async def apply_flow_topology_patch(
         row.version = int(row.version or 1) + 1
         await db.commit()
     await db.refresh(row)
+
+    # Wave B: visible orchestration event
+    try:
+        from app.services import flow_orchestration_event_service as orch_events
+        from uuid import UUID as _UUID
+
+        user_id = None
+        try:
+            user_id = _UUID(str(current_user.id))
+        except (TypeError, ValueError):
+            user_id = None
+        summary_text = ""
+        if isinstance(result.get("summary"), dict):
+            summary_text = str(result["summary"].get("text") or "")
+        await orch_events.append_event(
+            db,
+            entity_id=entity.id,
+            event_type="apply_patch",
+            summary=summary_text or "应用了拓扑编排变更",
+            payload={
+                "ops_count": len(result.get("ops") or []),
+                "intent_id": body.intent_id,
+            },
+            created_by_user_id=user_id,
+        )
+    except Exception:
+        pass
+
     return {
         **result,
         "topology": normalized,

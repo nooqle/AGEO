@@ -1,7 +1,7 @@
 # Wave A 验收标准（开工锁定 · 开发后对照）
 
 日期：2026-07-21  
-状态：**2026-07-22 验收 FAIL（F7）；B1/B2/B3 已修于 `c4741f2`，待 F7 复验后改判**  
+状态：**2026-07-22 复验通过；Wave A PASS（修复提交 `c4741f2`）**
 关联总路线：`docs/plans/2026-07-21-blueprint-status-and-next.md`
 
 ---
@@ -46,7 +46,7 @@ Wave B / C **必须**在各自开工日另开 `wave-b-acceptance.md` / `wave-c-a
 | F4 | 可**删除**配方（删除本身可有确认） | 删除后列表消失 | ✓ 确认删除后列表消失并提示成功 |
 | F5 | **运行即开跑**：点开始后进入执行，不进 `waiting_scope_confirmation` 二道闸 | 起跑后 status 非 waiting 确认闸 | ✓ 直接进入 `fetching_answers`，无 user action |
 | F6 | 规则/预设编译预览 → 确认应用仍可用 | 「跳过豆包」预览后应用 | ✓ 预览后应用，变为三平台/9 步 |
-| F7 | run 为 `completed` 时出现**存为配方**入口 | 完成态 run 下可见 CTA | **✗ 历史 completed run 存在，但刷新后 CTA 不可见** |
+| F7 | run 为 `completed` 时出现**存为配方**入口 | 完成态 run 下可见 CTA | ✓ 0 active、2 completed 条件下刷新，提示与 CTA 均可见 |
 | F8 | 切换配方后有**当前配方**弱提示（文案或角标） | 切换后可见名称 | ✓ 可见“当前：配方名” |
 
 ---
@@ -59,7 +59,7 @@ Wave B / C **必须**在各自开工日另开 `wave-b-acceptance.md` / `wave-c-a
 | V2 | 配方与编排建议在**同一编排面板**内，上下结构清晰 | 肉眼：非两块平行灰条硬叠 | ✓ 同一面板上下分区，观感通过 |
 | V3 | 主行动仍为 Evidence Teal；无大面积装饰 glow | 肉眼 + 主 CTA 类名收敛 | ✓ 去掉 amway-cta-glow |
 | V4 | 类型色有角色：内容节点橙可保留，但不与紫并存 | 对照 A2.4 色表 | ✓ 代码色表 |
-| V5 | 演示路径不显「设置页堆功能」 | 30 秒演示路径主观过关 | ✓ 主路径清楚；另记录旧确认闸文案 Bug |
+| V5 | 演示路径不显「设置页堆功能」 | 30 秒演示路径主观过关 | ✓ 主路径清楚；计划说明与直接执行行为一致 |
 
 **色表（Wave A 锁定）：**
 
@@ -103,12 +103,12 @@ Wave B / C **必须**在各自开工日另开 `wave-b-acceptance.md` / `wave-c-a
 |---|---|
 | 执行人 | Codex |
 | 完成日 | 2026-07-22 |
-| 功能 F1–F8 | **未过（7/8，F7 失败）** |
+| 功能 F1–F8 | **全过（8/8）** |
 | 视觉 V1–V5 | **全过（5/5）** |
 | 工程 E1–E7 | **全过（7/7）** |
 | 非目标 | **守住** |
-| **总裁决** | **FAIL** |
-| 证据 | `docs/session-logs/2026-07-22-wave-a-acceptance-run.md`；81 tests、tsc、validate_change、浏览器 Live 验收 |
+| **总裁决** | **PASS** |
+| 证据 | `docs/session-logs/2026-07-22-wave-a-acceptance-run.md`；F7/B3/B2 浏览器复验、81 tests、tsc、validate_change |
 
 **PASS 条件：** F 全过 ∧ V 全过 ∧ E 全过 ∧ 非目标守住。  
 **PARTIAL：** 仅次要项（如 V5 主观）未过且已记缺口。  

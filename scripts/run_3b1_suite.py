@@ -27,6 +27,7 @@ SUITES = [
     "tests/test_topology_nl_compiler.py",  # 3c-C1 rule NL→ops
     "tests/test_topology_nl_llm.py",  # 3c-C2 hybrid LLM compile
     "tests/test_flow_topology_recipes.py",  # flow recipes (org/entity)
+    "tests/test_flow_orchestration_events.py",  # Wave B event log shape
 ]
 
 

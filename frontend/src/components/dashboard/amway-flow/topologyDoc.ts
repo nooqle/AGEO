@@ -36,6 +36,26 @@ export function writeEnabledFlowPlatforms(entityId: string, platforms: string[])
   }
 }
 
+/** Wave B3: topology removedEdgeIds is authority for platform gates. */
+export function platformsEnabledByTopology(topology: {
+  removedEdgeIds?: string[];
+}): string[] {
+  const removed = new Set(
+    Array.isArray(topology.removedEdgeIds) ? topology.removedEdgeIds.map(String) : [],
+  );
+  const enabled = ALL_PLATFORM_IDS.filter((id) => !removed.has(`e-fetch-${id}`));
+  return enabled.length ? enabled : [...ALL_PLATFORM_IDS];
+}
+
+export function syncPlatformStorageFromTopology(
+  entityId: string,
+  topology: { removedEdgeIds?: string[] },
+): string[] {
+  const enabled = platformsEnabledByTopology(topology);
+  writeEnabledFlowPlatforms(entityId, enabled);
+  return enabled;
+}
+
 
 export function emptyFlowTopology(): FlowTopology {
   return { version: 1, customNodes: [], customEdges: [], removedEdgeIds: [] };

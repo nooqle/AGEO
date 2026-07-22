@@ -86,9 +86,11 @@ import {
   emptyFlowTopology,
   layoutStorageKey,
   parseFlowTopology,
+  platformsEnabledByTopology,
   readEnabledFlowPlatforms,
   readFlowTopology,
   readStoredPositions,
+  syncPlatformStorageFromTopology,
   writeEnabledFlowPlatforms,
   writeFlowTopology,
 } from './amway-flow/topologyDoc';
@@ -170,10 +172,14 @@ export function AmwayFlowCanvas({
   // 必须随 userNode 回传，否则运行状态翻转等高频更新时节点可能停留在 visibility:hidden。
   const [measuredSizes, setMeasuredSizes] = useState<Record<string, { width: number; height: number }>>({});
   const [panel, setPanel] = useState<PanelState>(null);
-  const [enabledPlatforms, setEnabledPlatforms] = useState<string[]>(() => readEnabledFlowPlatforms(entityId));
   // Phase 3a 自定义拓扑（视图层编排）。3b-1.4 起后端为权威存储，
   // localStorage 降级为首帧缓存与离线回退。
   const [topology, setTopology] = useState<FlowTopology>(() => readFlowTopology(entityId));
+  // Wave B3: platform enablement follows topology e-fetch-* edges (authority)
+  const [enabledPlatforms, setEnabledPlatforms] = useState<string[]>(() => {
+    const localTopo = readFlowTopology(entityId);
+    return platformsEnabledByTopology(localTopo);
+  });
   // 不变式：传给 updateTopology 的 updater 必须是纯函数——React StrictMode（dev）
   // 会双跑 updater 检测纯度，含 Math.random/副作用会产生 state 与后端各存一份的分叉。
   // id 生成等不纯逻辑在调用处完成；持久化副作用统一收敛到下方 useEffect。
@@ -226,6 +232,7 @@ export function AmwayFlowCanvas({
           JSON.stringify(current) === JSON.stringify(remote) ? current : remote,
         );
         writeFlowTopology(entityId, remote);
+        setEnabledPlatforms(syncPlatformStorageFromTopology(entityId, remote));
         setTopologySaveError(null);
       })
       .catch(() => undefined);
@@ -233,6 +240,11 @@ export function AmwayFlowCanvas({
       cancelled = true;
     };
   }, [entityId]);
+
+  // Keep localStorage platform switches aligned with topology gates (B3)
+  useEffect(() => {
+    setEnabledPlatforms(syncPlatformStorageFromTopology(entityId, topology));
+  }, [entityId, topology.removedEdgeIds]);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
@@ -459,21 +471,19 @@ export function AmwayFlowCanvas({
     (nodeId: string) => {
       if (running || isAwaitingPlanConfirm) return;
       const platformId = nodeId.replace(/^platform-/, '');
-      // StrictMode purity: compute next outside setState updater; persist after.
-      setEnabledPlatforms((current) => {
-        const next = current.includes(platformId)
-          ? current.filter((id) => id !== platformId)
-          : [...current, platformId];
-        return next.length ? next : current;
+      const edgeId = `e-fetch-${platformId}`;
+      // Wave B3: toggle = connect/disconnect platform edge on topology
+      updateTopology((current) => {
+        const removed = new Set(current.removedEdgeIds);
+        if (removed.has(edgeId)) removed.delete(edgeId);
+        else removed.add(edgeId);
+        const enabled = ALL_PLATFORM_IDS.filter((id) => !removed.has(`e-fetch-${id}`));
+        if (!enabled.length) return current;
+        return { ...current, removedEdgeIds: Array.from(removed) };
       });
     },
-    [isAwaitingPlanConfirm, running],
+    [isAwaitingPlanConfirm, running, updateTopology],
   );
-
-  // Persist platform switches outside the setState updater (P1-6).
-  useEffect(() => {
-    writeEnabledFlowPlatforms(entityId, enabledPlatforms);
-  }, [entityId, enabledPlatforms]);
 
   const nodeSubtitleMap = useMemo(() => {
     const fetching = running && stageCode.startsWith('A4');
@@ -1088,6 +1098,7 @@ export function AmwayFlowCanvas({
                   const next = parseFlowTopology(remote);
                   setTopology(next);
                   writeFlowTopology(entityId, next);
+                  setEnabledPlatforms(syncPlatformStorageFromTopology(entityId, next));
                 }}
               />
             </div>
@@ -1149,6 +1160,13 @@ export function AmwayFlowCanvas({
                       ? '运行计划'
                       : '本次执行计划'}
                 </span>
+                {typeof (activeRun?.input_scope as Record<string, unknown> | undefined)?.recipe_name === 'string'
+                  && String((activeRun?.input_scope as Record<string, unknown>).recipe_name || '').trim()
+                  ? (
+                    <span className="rounded-full border border-[var(--brand-primary)]/30 bg-[var(--brand-bg)] px-2 py-0.5 text-[10px] font-medium text-[var(--brand-primary)]">
+                      基于配方：{String((activeRun?.input_scope as Record<string, unknown>).recipe_name)}
+                    </span>
+                  ) : null}
                 <span
                   className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
                     isAwaitingPlanConfirm || executionPlan.source === 'run_flow_plan'
