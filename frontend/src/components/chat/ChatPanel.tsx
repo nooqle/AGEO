@@ -43,11 +43,14 @@ import {
   readDashboardChatHandoffValue,
   type DashboardChatHandoffPayload,
 } from '@/lib/dashboardChatHandoff';
-import {
-  classifyChatTopologyIntent,
-  stripChatTopologyPrefix,
-} from '@/lib/chatTopologyIntent';
+import { classifyChatTopologyIntent } from '@/lib/chatTopologyIntent';
 import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
+import {
+  applyChatCompilePatch,
+  applyChatRecipe,
+  loadChatCompilePreview,
+  loadChatRecipeSuggestions,
+} from '@/lib/chatTopologyOrchestration';
 import {
   TopologyOrchestrationCard,
   type TopologyCompilePreview,
@@ -2514,34 +2517,16 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
 
       try {
         if (kind === 'compile_nl') {
-          const topo = await api.getAmwayFlowTopology(entityId);
-          const expectedVersion =
-            typeof topo.version === 'number' ? topo.version : null;
-          const compileText = stripChatTopologyPrefix(userText) || userText;
-          const resp = await api.compileAmwayFlowTopologyNl(entityId, {
-            text: compileText,
-            expected_version: expectedVersion,
-            allow_llm: true,
-          });
-          const ops = Array.isArray(resp.ops) ? resp.ops : [];
-          if (typeof resp.base?.version === 'number') {
-            // keep for apply
-          }
-          const planned = Array.isArray(resp.plan?.planned_platforms)
-            ? resp.plan!.planned_platforms!.map(String)
-            : [];
-          if (!ops.length) {
+          const result = await loadChatCompilePreview(entityId, userText);
+          if (result.status === 'error') {
             setTopologyOrchCard({
               anchorMessageId,
               kind,
               userText,
               status: 'error',
               entityId,
-              error: JOURNEY.chatCompileFail,
-              expectedVersion:
-                typeof resp.base?.version === 'number'
-                  ? resp.base.version
-                  : expectedVersion,
+              error: result.error,
+              expectedVersion: result.expectedVersion ?? null,
             });
             return;
           }
@@ -2551,46 +2536,21 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
             userText,
             status: 'ready',
             entityId,
-            ops,
-            expectedVersion:
-              typeof resp.base?.version === 'number'
-                ? resp.base.version
-                : expectedVersion,
-            compile: {
-              summaryText: String(resp.summary?.text || '无实质变更'),
-              planSummary: resp.plan?.summary ? String(resp.plan.summary) : undefined,
-              plannedPlatforms: planned,
-              compileMatched: resp.compile?.matched
-                ? String(resp.compile.matched)
-                : undefined,
-              compileMode: resp.compile?.mode ? String(resp.compile.mode) : undefined,
-              opsCount: ops.length,
-            },
+            ops: result.ops,
+            expectedVersion: result.expectedVersion,
+            compile: result.compile,
           });
           return;
         }
 
-        const resp = await api.recommendAmwayFlowRecipes(entityId, {
-          intent: userText,
-          limit: 3,
-        });
-        const recommendations: TopologyRecipeSuggestion[] = (resp.recommendations || []).map(
-          (item) => ({
-            recipe_id: item.recipe_id,
-            name: item.name,
-            scope: item.scope,
-            reasons: Array.isArray(item.reasons)
-              ? item.reasons.map(String).filter(Boolean)
-              : [],
-          }),
-        );
+        const result = await loadChatRecipeSuggestions(entityId, userText);
         setTopologyOrchCard({
           anchorMessageId,
           kind,
           userText,
           status: 'ready',
           entityId,
-          recommendations,
+          recommendations: result.recommendations as TopologyRecipeSuggestion[],
         });
       } catch (err) {
         setTopologyOrchCard({
@@ -2688,23 +2648,7 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
     if (card.status === 'applying' || card.status === 'applied') return;
     setTopologyOrchCard({ ...card, status: 'applying', error: null });
     try {
-      let expected = card.expectedVersion;
-      if (expected == null) {
-        const topo = await api.getAmwayFlowTopology(card.entityId);
-        expected = typeof topo.version === 'number' ? topo.version : null;
-      }
-      if (expected == null) {
-        setTopologyOrchCard({
-          ...card,
-          status: 'error',
-          error: '无法读取拓扑版本，请打开生产线后重试。',
-        });
-        return;
-      }
-      await api.applyAmwayFlowTopologyPatch(card.entityId, {
-        ops: card.ops,
-        expected_version: expected,
-      });
+      await applyChatCompilePatch(card.entityId, card.ops, card.expectedVersion ?? null);
       setTopologyOrchCard({
         ...card,
         status: 'applied',
@@ -2730,9 +2674,7 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
       if (card.status === 'applying' || card.status === 'applied') return;
       setTopologyOrchCard({ ...card, status: 'applying', error: null });
       try {
-        const topo = await api.getAmwayFlowTopology(card.entityId);
-        const expected = typeof topo.version === 'number' ? topo.version : null;
-        const resp = await api.applyAmwayFlowRecipe(card.entityId, recipeId, expected);
+        const resp = await applyChatRecipe(card.entityId, recipeId);
         setTopologyOrchCard({
           ...card,
           status: 'applied',

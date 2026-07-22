@@ -221,21 +221,37 @@ export function AmwayFlowCanvas({
   // 挂载后从后端拉取权威拓扑；与本地有差异时以后端为准并回写缓存
   useEffect(() => {
     let cancelled = false;
-    void api.getAmwayFlowTopology(entityId)
-      .then((resp) => {
-        if (cancelled) return;
-        const remote = parseFlowTopology(resp?.topology);
-        if (typeof (resp as { version?: number })?.version === 'number') {
-          topologyVersionRef.current = Number((resp as { version?: number }).version);
-        }
-        setTopology((current) =>
-          JSON.stringify(current) === JSON.stringify(remote) ? current : remote,
-        );
-        writeFlowTopology(entityId, remote);
-        setEnabledPlatforms(syncPlatformStorageFromTopology(entityId, remote));
-        setTopologySaveError(null);
-      })
-      .catch(() => undefined);
+    let attempt = 0;
+    const loadTopology = () => {
+      attempt += 1;
+      void api
+        .getAmwayFlowTopology(entityId)
+        .then((resp) => {
+          if (cancelled) return;
+          const remote = parseFlowTopology(resp?.topology);
+          if (typeof (resp as { version?: number })?.version === 'number') {
+            topologyVersionRef.current = Number((resp as { version?: number }).version);
+          }
+          setTopology((current) =>
+            JSON.stringify(current) === JSON.stringify(remote) ? current : remote,
+          );
+          writeFlowTopology(entityId, remote);
+          setEnabledPlatforms(syncPlatformStorageFromTopology(entityId, remote));
+          setTopologySaveError(null);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // E3: cold-start flakiness — one automatic retry, then human-readable soft error
+          if (attempt < 2) {
+            window.setTimeout(loadTopology, 600);
+            return;
+          }
+          setTopologySaveError(
+            '生产线未能从服务器加载。请刷新页面重试；本地缓存仍可先查看。',
+          );
+        });
+    };
+    loadTopology();
     return () => {
       cancelled = true;
     };

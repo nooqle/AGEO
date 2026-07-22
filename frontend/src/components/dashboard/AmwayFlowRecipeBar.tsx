@@ -9,6 +9,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { BookMarked, Trash2 } from 'lucide-react';
 import { api, type AmwayFlowTopologyDoc } from '@/services/api';
 import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import {
+  flowCacheKey,
+  getOrLoadFlowCache,
+  invalidateFlowEntityCache,
+} from '@/lib/amwayFlowEntityCache';
 
 type RecipeItem = {
   id: string;
@@ -58,19 +64,34 @@ export function AmwayFlowRecipeBar({
 }) {
   const [recipes, setRecipes] = useState<RecipeItem[]>([]);
   const [suggestions, setSuggestions] = useState<RecipeSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveName, setSaveName] = useState('');
   const [saveScope, setSaveScope] = useState<'entity' | 'organization'>('entity');
   const [loaded, setLoaded] = useState(false);
+  const [confirmState, setConfirmState] = useState<
+    | null
+    | {
+        kind: 'overwrite' | 'delete';
+        recipeId: string;
+        name: string;
+      }
+  >(null);
 
   const reloadSuggestions = useCallback(async () => {
+    setSuggestionsLoading(true);
     try {
-      const resp = await api.recommendAmwayFlowRecipes(entityId, {
-        activeRecipeId: activeRecipeDirty ? null : activeRecipeId,
-        limit: 3,
-      });
+      const activeKey = activeRecipeDirty ? '' : activeRecipeId || '';
+      const resp = await getOrLoadFlowCache(
+        flowCacheKey([entityId, 'recommend', activeKey]),
+        () =>
+          api.recommendAmwayFlowRecipes(entityId, {
+            activeRecipeId: activeRecipeDirty ? null : activeRecipeId,
+            limit: 3,
+          }),
+      );
       setSuggestions(
         (resp.recommendations || []).map((item) => ({
           recipe_id: item.recipe_id,
@@ -82,12 +103,16 @@ export function AmwayFlowRecipeBar({
       );
     } catch {
       setSuggestions([]);
+    } finally {
+      setSuggestionsLoading(false);
     }
   }, [activeRecipeDirty, activeRecipeId, entityId]);
 
   const reload = useCallback(async () => {
     try {
-      const resp = await api.listAmwayFlowRecipes(entityId);
+      const resp = await getOrLoadFlowCache(flowCacheKey([entityId, 'recipes']), () =>
+        api.listAmwayFlowRecipes(entityId),
+      );
       setRecipes(
         (resp.recipes || []).map((r) => ({
           id: r.id,
@@ -127,6 +152,8 @@ export function AmwayFlowRecipeBar({
       setBusy(true);
       setError(null);
       setNotice(null);
+      // E2: clear stale suggestions immediately so apply state is not ambiguous
+      setSuggestions([]);
       try {
         const resp = await api.applyAmwayFlowRecipe(
           entityId,
@@ -134,6 +161,7 @@ export function AmwayFlowRecipeBar({
           getExpectedVersion(),
         );
         if (typeof resp.version === 'number') setExpectedVersion(resp.version);
+        invalidateFlowEntityCache(entityId);
         onTopologyApplied(resp.topology, {
           recipeName: resp.recipe_name,
           recipeId: resp.recipe_id,
@@ -144,7 +172,7 @@ export function AmwayFlowRecipeBar({
         const message = err instanceof Error ? err.message : '套用配方失败';
         setError(
           message.includes('版本冲突')
-            ? '拓扑版本冲突：请刷新页面后再切换配方。'
+            ? JOURNEY.conflictRefresh
             : message,
         );
       } finally {
@@ -180,6 +208,7 @@ export function AmwayFlowRecipeBar({
         from_current: true,
       });
       setSaveName('');
+      invalidateFlowEntityCache(entityId);
       onRecipeSaved?.(created.name, created.id);
       setNotice(
         `已保存配方「${created.name}」（${created.scope === 'organization' ? '组织共享' : '本品牌'}）`,
@@ -192,48 +221,49 @@ export function AmwayFlowRecipeBar({
     }
   }, [busy, disabled, entityId, onRecipeSaved, reload, saveName, saveScope]);
 
-  const overwriteRecipe = useCallback(
-    async (recipeId: string, name: string) => {
-      if (busy || disabled) return;
-      if (!window.confirm(`用当前生产线覆盖配方「${name}」？`)) return;
-      setBusy(true);
-      setError(null);
-      setNotice(null);
-      try {
+  const runConfirmedAction = useCallback(async () => {
+    if (!confirmState || busy || disabled) return;
+    const { kind, recipeId, name } = confirmState;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      if (kind === 'overwrite') {
         const updated = await api.updateAmwayFlowRecipe(recipeId, entityId, {
           from_current: true,
         });
+        invalidateFlowEntityCache(entityId);
         onRecipeSaved?.(updated.name, updated.id);
         setNotice(`已用当前生产线覆盖配方「${updated.name}」`);
-        await reload();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : '覆盖失败');
-      } finally {
-        setBusy(false);
-      }
-    },
-    [busy, disabled, entityId, onRecipeSaved, reload],
-  );
-
-  const removeRecipe = useCallback(
-    async (recipeId: string, name: string) => {
-      if (busy || disabled) return;
-      if (!window.confirm(`删除配方「${name}」？此操作不可撤销。`)) return;
-      setBusy(true);
-      setError(null);
-      try {
+      } else {
         await api.deleteAmwayFlowRecipe(recipeId, entityId);
+        invalidateFlowEntityCache(entityId);
         if (activeRecipeName === name) onActiveRecipeCleared?.();
         setNotice(`已删除配方「${name}」`);
-        await reload();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : '删除失败');
-      } finally {
-        setBusy(false);
       }
-    },
-    [activeRecipeName, busy, disabled, entityId, onActiveRecipeCleared, reload],
-  );
+      setConfirmState(null);
+      await reload();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : kind === 'overwrite'
+            ? '覆盖失败'
+            : '删除失败',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    activeRecipeName,
+    busy,
+    confirmState,
+    disabled,
+    entityId,
+    onActiveRecipeCleared,
+    onRecipeSaved,
+    reload,
+  ]);
 
   const shellClass = embedded
     ? ''
@@ -276,7 +306,7 @@ export function AmwayFlowRecipeBar({
         </div>
       ) : null}
 
-      {loaded && suggestions.length > 0 ? (
+      {loaded && (suggestionsLoading || suggestions.length > 0) ? (
         <div
           className="mt-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2"
           data-testid="amway-recipe-suggestions"
@@ -287,6 +317,9 @@ export function AmwayFlowRecipeBar({
           <p className="mt-0.5 text-[10px] leading-4 text-[var(--text-tertiary)]">
             {JOURNEY.recipeSuggestHint}
           </p>
+          {suggestionsLoading && suggestions.length === 0 ? (
+            <p className="mt-2 text-[11px] text-[var(--text-tertiary)]">正在加载建议…</p>
+          ) : null}
           <ul className="mt-2 space-y-2">
             {suggestions.map((item) => (
               <li
@@ -366,7 +399,11 @@ export function AmwayFlowRecipeBar({
                 title="用当前生产线覆盖此配方"
                 disabled={busy || disabled}
                 onClick={() => {
-                  void overwriteRecipe(recipe.id, recipe.name);
+                  setConfirmState({
+                    kind: 'overwrite',
+                    recipeId: recipe.id,
+                    name: recipe.name,
+                  });
                 }}
                 className="inline-flex h-8 items-center rounded-lg border border-[var(--border-subtle)] px-2 text-[10px] font-medium text-[var(--text-tertiary)] transition hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)] disabled:opacity-50"
               >
@@ -377,7 +414,11 @@ export function AmwayFlowRecipeBar({
                 aria-label={`删除配方 ${recipe.name}`}
                 disabled={busy || disabled}
                 onClick={() => {
-                  void removeRecipe(recipe.id, recipe.name);
+                  setConfirmState({
+                    kind: 'delete',
+                    recipeId: recipe.id,
+                    name: recipe.name,
+                  });
                 }}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-tertiary)] transition hover:border-[var(--error)] hover:text-[var(--error)] disabled:opacity-50"
               >
@@ -424,6 +465,29 @@ export function AmwayFlowRecipeBar({
       {error ? (
         <p className="mt-2 text-xs leading-5 text-[var(--error)]">{error}</p>
       ) : null}
+
+      <ConfirmDialog
+        open={Boolean(confirmState)}
+        title={
+          confirmState?.kind === 'delete'
+            ? `删除配方「${confirmState.name}」？`
+            : `覆盖配方「${confirmState?.name || ''}」？`
+        }
+        description={
+          confirmState?.kind === 'delete'
+            ? '删除后不可恢复。当前生产线不会被改动。'
+            : '将用当前生产线内容覆盖该配方。确认后立即写入。'
+        }
+        confirmLabel={confirmState?.kind === 'delete' ? '删除' : '覆盖'}
+        tone={confirmState?.kind === 'delete' ? 'danger' : 'default'}
+        busy={busy}
+        onConfirm={() => {
+          void runConfirmedAction();
+        }}
+        onOpenChange={(open) => {
+          if (!open && !busy) setConfirmState(null);
+        }}
+      />
     </div>
   );
 }

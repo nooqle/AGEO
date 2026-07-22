@@ -13,6 +13,7 @@ import {
 } from '@/lib/amwayFlowTopologyPatch';
 import type { AmwayFlowTopologyDoc } from '@/services/api';
 import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
+import { invalidateFlowEntityCache } from '@/lib/amwayFlowEntityCache';
 
 export type FlowTopologyDoc = AmwayFlowTopologyDoc;
 
@@ -175,6 +176,7 @@ export function AmwayFlowTopologyPatchBar({
       if (typeof resp.version === 'number') {
         setExpectedVersion(resp.version);
       }
+      invalidateFlowEntityCache(entityId);
       onTopologyApplied(parseTopologyDoc(resp.topology));
       setPreview(null);
 

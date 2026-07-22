@@ -15,6 +15,11 @@ import {
 import { AmwayFlowRecipeBar } from '@/components/dashboard/AmwayFlowRecipeBar';
 import { AmwayFlowTopologyPatchBar } from '@/components/dashboard/AmwayFlowTopologyPatchBar';
 import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
+import {
+  flowCacheKey,
+  getOrLoadFlowCache,
+  invalidateFlowEntityCache,
+} from '@/lib/amwayFlowEntityCache';
 
 export function AmwayFlowOrchestrationPanel({
   entityId,
@@ -64,7 +69,11 @@ export function AmwayFlowOrchestrationPanel({
 
   const reloadEvents = useCallback(async () => {
     try {
-      const resp = await api.listAmwayOrchestrationEvents(entityId, 15);
+      const resp = await getOrLoadFlowCache(
+        flowCacheKey([entityId, 'events', 15]),
+        () => api.listAmwayOrchestrationEvents(entityId, 15),
+        8_000,
+      );
       setEvents(resp.events || []);
     } catch {
       setEvents([]);
@@ -100,10 +109,11 @@ export function AmwayFlowOrchestrationPanel({
       const id = meta?.recipeId || null;
       if (id && name) persistRecipeSession({ id, name, dirty: false });
       else persistRecipeSession(null);
+      invalidateFlowEntityCache(entityId);
       onTopologyApplied(topology, meta);
       void reloadEvents();
     },
-    [onTopologyApplied, persistRecipeSession, reloadEvents],
+    [entityId, onTopologyApplied, persistRecipeSession, reloadEvents],
   );
 
   const handlePatchApplied = useCallback(
@@ -111,10 +121,11 @@ export function AmwayFlowOrchestrationPanel({
       if (activeRecipeId && activeRecipeName) {
         persistRecipeSession({ id: activeRecipeId, name: activeRecipeName, dirty: true });
       }
+      invalidateFlowEntityCache(entityId);
       onTopologyApplied(topology);
       void reloadEvents();
     },
-    [activeRecipeId, activeRecipeName, onTopologyApplied, persistRecipeSession, reloadEvents],
+    [activeRecipeId, activeRecipeName, entityId, onTopologyApplied, persistRecipeSession, reloadEvents],
   );
 
   const handleRecipeSaved = useCallback(
@@ -122,9 +133,10 @@ export function AmwayFlowOrchestrationPanel({
       if (id) persistRecipeSession({ id, name, dirty: false });
       else if (activeRecipeId) persistRecipeSession({ id: activeRecipeId, name, dirty: false });
       else setActiveRecipeName(name);
+      invalidateFlowEntityCache(entityId);
       void reloadEvents();
     },
-    [activeRecipeId, persistRecipeSession, reloadEvents],
+    [activeRecipeId, entityId, persistRecipeSession, reloadEvents],
   );
 
   return (
