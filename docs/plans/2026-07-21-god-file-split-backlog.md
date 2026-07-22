@@ -92,8 +92,9 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 - [x] orchestrator_node 拆分设计稿（P2）→ `docs/plans/2026-07-22-orchestrator-p2-split-design.md`  
 - [x] orchestrator_node **第一刀**（纯函数包）→ Wave F（~-257 行）  
 - [x] orchestrator_node **第二刀**（history/workflow/knowledge）→ Wave G（再 ~-566 行）  
-- [x] orchestrator_node **第三刀**（ontology 情报回复 / seed / prompt_bundle）→ Wave H（再 ~-923 行；累计 ~-1747）  
-- [ ] orchestrator_node 后续刀（routing/validate_tool/context_summary/effects/薄壳）→ 独立波次  
+- [x] orchestrator_node **第三刀**（ontology 情报回复 / seed / prompt_bundle）→ Wave H（再 ~-923）  
+- [x] orchestrator_node **第四刀（谨慎）**（action feedback / misc pure）→ Wave I（再 ~-246；累计 ~-1993）  
+- [ ] 后续高耦合块（followup / hidden tools / context_summary / validate_tool / async）→ 更小步 + 更强钉死  
 
 **与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`。  
 

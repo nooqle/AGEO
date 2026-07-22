@@ -102,6 +102,79 @@ def test_reexport_identity_from_orchestrator_node():
     )
 
 
+def test_knife4_feedback_and_misc_pure_behavior_pins():
+    """Cautious knife: pin identities + pure behavior contracts."""
+    from app.workflow.orchestrator.misc_pure import (
+        _format_tool_args_for_suggestion,
+        _infer_current_import_query,
+        _normalize_sentiment_followup_value,
+    )
+    from app.workflow.orchestrator.ontology_action_feedback import (
+        ONTOLOGY_TOOL_ACTION_MAP,
+        _merge_ontology_provided_inputs_into_tool_args,
+        _ontology_action_gate_message,
+        _ontology_action_gate_options,
+        _ontology_confirmed_action_for_tool,
+        _ontology_feedback_covers_missing_inputs,
+    )
+    from app.workflow.orchestrator_node import (
+        ONTOLOGY_TOOL_ACTION_MAP as node_map,
+        _merge_ontology_provided_inputs_into_tool_args as node_merge,
+        _normalize_sentiment_followup_value as node_sent,
+    )
+
+    assert node_map is ONTOLOGY_TOOL_ACTION_MAP
+    assert node_merge is _merge_ontology_provided_inputs_into_tool_args
+    assert node_sent is _normalize_sentiment_followup_value
+    assert _normalize_sentiment_followup_value("负向提及") == "negative"
+    assert _normalize_sentiment_followup_value("正向") == "positive"
+    assert _format_tool_args_for_suggestion({"a": 1, "b": ""}) == "(a=1)"
+    assert (
+        _infer_current_import_query(
+            {
+                "current_import_artifact": {"artifact_id": "x"},
+                "orchestrator_history": [{"role": "user", "content": "上传问题列表"}],
+            }
+        )
+        == "上传问题列表"
+    )
+    merged = _merge_ontology_provided_inputs_into_tool_args(
+        action_key="generate_official_website_evidence_plan",
+        tool_args={},
+        provided_inputs={"official_domain": "example.com"},
+    )
+    assert merged["root_url"] == "example.com"
+    assert _ontology_feedback_covers_missing_inputs(
+        action_key="generate_official_website_evidence_plan",
+        missing_inputs=["official_domain"],
+        feedback={"provided_inputs": {"root_url": "x.com"}},
+    )
+    assert "确认" in _ontology_action_gate_message(
+        kind="needs_confirmation",
+        action_name="抓取",
+        action_item={},
+        reason="需确认",
+    )
+    assert len(_ontology_action_gate_options("needs_confirmation", {"action_key": "k"})) == 2
+    confirmed = _ontology_confirmed_action_for_tool(
+        {
+            "ontology_world": {
+                "action_feedback_summary": {
+                    "latest_by_action": {
+                        "run_answer_fetch": {
+                            "feedback_type": "confirm",
+                            "action_record_id": "ar1",
+                        }
+                    }
+                }
+            }
+        },
+        "answer_fetch",
+    )
+    assert confirmed is not None
+    assert confirmed["action_record_id"] == "ar1"
+
+
 def test_knife3_ontology_and_prompt_bundle():
     from app.workflow.orchestrator.ontology_intelligence import (
         CORE_RELATIONSHIP_TYPES,

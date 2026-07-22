@@ -215,7 +215,7 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 
 **现状：** 蓝图 3a→3b→3c 主工程路径已通；**配方 v0** 立住可见编排记忆；运行简化为一点即跑；**Canvas/API 拆分 P0–P1 已完成，P2 巨石未动**；校准复利与 Chat 主入口、推荐未做；视觉方向对但生产线新层偏工具化。
 
-**下一步：** Wave F/G PASS；**Wave H 第三刀已实现**（node ~5945 行，累计 ~-1747）。后续：P2 第四刀（tool gate / context_summary）或 annotation。
+**下一步：** Wave F–H PASS；**Wave I 第四刀（谨慎）已实现**（node ~5699，累计 ~-1993）。后续高耦合块更小步，或切 annotation。
 
 ---
 
