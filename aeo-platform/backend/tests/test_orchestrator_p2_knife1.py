@@ -102,6 +102,69 @@ def test_reexport_identity_from_orchestrator_node():
     )
 
 
+def test_knife8_agent_summary_gate_and_messages():
+    from app.workflow.orchestrator.agent_result_summary import (
+        DIRECTIVE_A1_NO_BASELINE,
+        _build_agent_result_summary,
+    )
+    from app.workflow.orchestrator.ontology_action_gate import (
+        _ontology_action_gate_decision,
+    )
+    from app.workflow.orchestrator.orchestrator_messages import (
+        build_orchestrator_messages,
+    )
+    from app.workflow.orchestrator_node import (
+        _build_agent_result_summary as node_sum,
+        _ontology_action_gate_decision as node_gate,
+        build_orchestrator_messages as node_msgs,
+    )
+
+    assert node_sum is _build_agent_result_summary
+    assert node_gate is _ontology_action_gate_decision
+    assert node_msgs is build_orchestrator_messages
+
+    summary = _build_agent_result_summary(
+        {
+            "brand_profile": {
+                "brand_name": "X",
+                "industry": "Y",
+                "brand_positioning": "Z",
+            },
+            "competitors": [{"name": "A"}],
+        },
+        "brand_analysis",
+    )
+    assert "品牌分析完成" in summary
+    assert "X" in summary
+    # directive text still attached for no-baseline path
+    assert "品牌全景" in summary or DIRECTIVE_A1_NO_BASELINE[:8] in summary
+
+    assert _ontology_action_gate_decision(None, "answer_fetch") is None
+    decision = _ontology_action_gate_decision(
+        {
+            "ontology_action_plan": {
+                "action_readiness": [
+                    {
+                        "action_key": "run_answer_fetch",
+                        "readiness": "needs_confirmation",
+                        "requires_confirmation": True,
+                        "reason": "需确认",
+                    }
+                ]
+            }
+        },
+        "answer_fetch",
+    )
+    assert decision is not None
+    assert decision["kind"] == "needs_confirmation"
+
+    msgs = build_orchestrator_messages(
+        {"brand_name": "测试", "orchestrator_history": []}
+    )
+    assert msgs and msgs[0]["role"] == "user"
+    assert "测试" in msgs[0]["content"]
+
+
 def test_knife7_knowledge_fallback_and_command_helpers():
     from langgraph.types import Command
 

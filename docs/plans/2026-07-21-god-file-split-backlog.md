@@ -96,8 +96,10 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 - [x] orchestrator_node **第四刀（谨慎）** → Wave I（~-246）  
 - [x] orchestrator_node **第五刀（谨慎）** → Wave J（~-327）  
 - [x] orchestrator_node **第六刀（谨慎）** → Wave K（~-310）  
-- [x] orchestrator_node **第七刀（谨慎）** → Wave L knowledge_fallback / command_helpers（~-425；累计 ~-3055）  
-- [ ] 后续（agent result summary / async 路由薄壳）→ 继续小步  
+- [x] orchestrator_node **第七刀（谨慎）** → Wave L（~-425）  
+- [x] orchestrator_node **第八刀（谨慎）** → Wave M summary / gate decision / messages（~-571；累计 ~-3626）  
+- [x] **阶段 A（纯函数）OK 线已过** — 见 `2026-07-22-orch-p2-split-enough-criteria.md`  
+- [ ] 阶段 B 可选继续 / 阶段 C 薄壳另立项  
 
 **与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`。  
 
