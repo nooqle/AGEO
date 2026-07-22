@@ -1141,6 +1141,18 @@ class ApiService {
     return response.run;
   }
 
+  /** Latest run including terminal states (completed/failed/cancelled). */
+  async getLatestBrandIntelligenceRun(
+    entityId: string,
+    status?: string,
+  ): Promise<BrandIntelligenceRun | null> {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    const response = await this.request<BrandIntelligenceRunResponse>(
+      `/intelligence-runs/entities/${entityId}/latest${qs}`,
+    );
+    return response.run;
+  }
+
   async createBrandIntelligenceRun(
     entityId: string,
     payload: CreateBrandIntelligenceRunInput,

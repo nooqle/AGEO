@@ -1079,7 +1079,7 @@ export function AmwayFlowCanvas({
                 disabled={Boolean(runningCustomNodeId)}
                 isAwaitingPlanConfirm={isAwaitingPlanConfirm}
                 onRefreshFlowPlan={onRefreshFlowPlan}
-                suggestSaveAfterRun={
+                activeRunCompleted={
                   Boolean(activeRun)
                   && String(activeRun?.status || '').toLowerCase() === 'completed'
                 }
@@ -1199,10 +1199,10 @@ export function AmwayFlowCanvas({
             </ol>
             <p className="mt-2 text-[11px] leading-5 text-[var(--text-tertiary)]">
               {isAwaitingPlanConfirm
-                ? '确认后才会真正开始采集与分析。可先改连线/平台，再点「刷新计划」更新路径。'
+                ? '仍停在待确认的历史任务：可点「确认并执行」继续，或取消后重新开始。'
                 : executionPlan.source === 'run_flow_plan'
-                  ? '任务确认后按锁定计划执行；运行态会随 stage 推进高亮当前步骤。'
-                  : '计划由当前画布拓扑实时推导。点击「开始运行」后进入确认闸，确认后才执行。'}
+                  ? '当前按已锁定的运行计划推进；高亮步骤会随 stage 变化。'
+                  : '计划由当前画布拓扑实时推导。点击「开始运行」后按该计划直接执行（运行即确认）。'}
             </p>
             {topologySaveError ? (
               <p className="mt-2 rounded-lg border border-[rgba(220,38,38,0.25)] bg-[rgba(220,38,38,0.06)] px-3 py-2 text-[11px] leading-5 text-[var(--error)]">

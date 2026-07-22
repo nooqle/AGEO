@@ -180,12 +180,12 @@ export function AmwayFlowTopologyPatchBar({
       if (isAwaitingPlanConfirm && onRefreshFlowPlan) {
         try {
           await Promise.resolve(onRefreshFlowPlan());
-          setNotice('拓扑已应用，并已按新拓扑刷新待确认计划（未自动开跑）。');
+          setNotice('拓扑已应用，并已刷新待确认任务的计划快照（仍未开跑）。');
         } catch {
           setNotice('拓扑已应用，但刷新运行计划失败；请点「刷新计划」或重新发起。');
         }
       } else {
-        setNotice('拓扑已应用；下次发起运行时将使用新编排计划。');
+        setNotice('拓扑已应用；点击「开始运行」将按新计划直接执行。');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : '应用失败';
@@ -328,7 +328,7 @@ export function AmwayFlowTopologyPatchBar({
       ) : null}
       {isAwaitingPlanConfirm ? (
         <p className="mt-1.5 text-[11px] leading-4 text-[var(--text-tertiary)]">
-          当前在待确认计划闸：应用编排后会自动刷新计划快照，不会直接开始采集。
+          仍有待确认的历史任务：应用编排会刷新其计划快照，不会自动开始采集。
         </p>
       ) : null}
     </div>

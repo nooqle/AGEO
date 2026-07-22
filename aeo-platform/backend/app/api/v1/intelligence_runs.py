@@ -53,6 +53,28 @@ async def get_active_intelligence_run(
     return _envelope(service, run)
 
 
+@router.get("/entities/{entity_id}/latest")
+async def get_latest_intelligence_run(
+    entity_id: str,
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Latest run including completed/failed/cancelled (not only in-flight)."""
+    service = BrandIntelligenceRunService(db)
+    try:
+        run = await service.get_latest_run(
+            entity_id=entity_id,
+            current_user=current_user,
+            status=status,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _envelope(service, run)
+
+
 @router.post("/entities/{entity_id}", status_code=201)
 async def create_intelligence_run(
     entity_id: str,

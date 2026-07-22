@@ -454,6 +454,31 @@ class BrandIntelligenceRunService:
         result = await self.db.execute(stmt)
         return await self._sync_with_analysis_task(result.scalar_one_or_none())
 
+    async def get_latest_run(
+        self,
+        *,
+        entity_id: str | UUID,
+        current_user: User,
+        status: str | None = None,
+    ) -> BrandIntelligenceRun | None:
+        """Most recent run for entity, including terminal states (completed/failed/…).
+
+        Active-run APIs deliberately exclude completed; Wave A F7 needs the latest
+        completed run to offer "save as recipe" after reload.
+        """
+        entity = await self._require_entity(entity_id, current_user)
+        clauses = [BrandIntelligenceRun.entity_id == entity.id]
+        if status:
+            clauses.append(BrandIntelligenceRun.status == str(status).strip().lower())
+        stmt = (
+            select(BrandIntelligenceRun)
+            .where(*clauses)
+            .order_by(desc(BrandIntelligenceRun.updated_at))
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return await self._sync_with_analysis_task(result.scalar_one_or_none())
+
     async def get_run(
         self,
         *,

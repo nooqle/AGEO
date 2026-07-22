@@ -22,18 +22,25 @@ export function AmwayFlowRecipeBar({
   getExpectedVersion,
   setExpectedVersion,
   onTopologyApplied,
+  onRecipeSaved,
   disabled = false,
   embedded = false,
   suggestSaveAfterRun = false,
+  activeRecipeName = null,
+  activeRecipeDirty = false,
+  onActiveRecipeCleared,
 }: {
   entityId: string;
   getExpectedVersion: () => number | null;
   setExpectedVersion: (version: number) => void;
   onTopologyApplied: (topology: AmwayFlowTopologyDoc, meta?: { recipeName?: string }) => void;
+  onRecipeSaved?: (name: string) => void;
   disabled?: boolean;
-  /** When true, omit outer card chrome (parent OrchestrationPanel provides it). */
   embedded?: boolean;
   suggestSaveAfterRun?: boolean;
+  activeRecipeName?: string | null;
+  activeRecipeDirty?: boolean;
+  onActiveRecipeCleared?: () => void;
 }) {
   const [recipes, setRecipes] = useState<RecipeItem[]>([]);
   const [busy, setBusy] = useState(false);
@@ -41,7 +48,6 @@ export function AmwayFlowRecipeBar({
   const [notice, setNotice] = useState<string | null>(null);
   const [saveName, setSaveName] = useState('');
   const [saveScope, setSaveScope] = useState<'entity' | 'organization'>('entity');
-  const [activeRecipeName, setActiveRecipeName] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   const reload = useCallback(async () => {
@@ -93,7 +99,6 @@ export function AmwayFlowRecipeBar({
         );
         if (typeof resp.version === 'number') setExpectedVersion(resp.version);
         onTopologyApplied(resp.topology, { recipeName: resp.recipe_name });
-        setActiveRecipeName(resp.recipe_name);
         setNotice(`已切换配方「${resp.recipe_name}」（直接替换当前生产线）`);
       } catch (err) {
         const message = err instanceof Error ? err.message : '套用配方失败';
@@ -127,7 +132,7 @@ export function AmwayFlowRecipeBar({
         from_current: true,
       });
       setSaveName('');
-      setActiveRecipeName(created.name);
+      onRecipeSaved?.(created.name);
       setNotice(
         `已保存配方「${created.name}」（${created.scope === 'organization' ? '组织共享' : '本品牌'}）`,
       );
@@ -137,7 +142,7 @@ export function AmwayFlowRecipeBar({
     } finally {
       setBusy(false);
     }
-  }, [busy, disabled, entityId, reload, saveName, saveScope]);
+  }, [busy, disabled, entityId, onRecipeSaved, reload, saveName, saveScope]);
 
   const removeRecipe = useCallback(
     async (recipeId: string, name: string) => {
@@ -147,7 +152,7 @@ export function AmwayFlowRecipeBar({
       setError(null);
       try {
         await api.deleteAmwayFlowRecipe(recipeId, entityId);
-        if (activeRecipeName === name) setActiveRecipeName(null);
+        if (activeRecipeName === name) onActiveRecipeCleared?.();
         setNotice(`已删除配方「${name}」`);
         await reload();
       } catch (err) {
@@ -156,12 +161,18 @@ export function AmwayFlowRecipeBar({
         setBusy(false);
       }
     },
-    [activeRecipeName, busy, disabled, entityId, reload],
+    [activeRecipeName, busy, disabled, entityId, onActiveRecipeCleared, reload],
   );
 
   const shellClass = embedded
     ? ''
     : 'mt-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2.5';
+
+  const badgeLabel = activeRecipeName
+    ? activeRecipeDirty
+      ? `基于：${activeRecipeName} · 已修改`
+      : `当前：${activeRecipeName}`
+    : null;
 
   return (
     <div className={shellClass}>
@@ -172,9 +183,15 @@ export function AmwayFlowRecipeBar({
           <span className="font-normal text-[var(--text-tertiary)]">
             组织 / 本品牌 · 切换即替换
           </span>
-          {activeRecipeName ? (
-            <span className="rounded-full border border-[var(--brand-primary)]/30 bg-[var(--brand-bg)] px-2 py-0.5 text-[10px] font-medium text-[var(--brand-primary)]">
-              当前：{activeRecipeName}
+          {badgeLabel ? (
+            <span
+              className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                activeRecipeDirty
+                  ? 'border-[var(--border-strong)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]'
+                  : 'border-[var(--brand-primary)]/30 bg-[var(--brand-bg)] text-[var(--brand-primary)]'
+              }`}
+            >
+              {badgeLabel}
             </span>
           ) : null}
         </div>
@@ -183,7 +200,7 @@ export function AmwayFlowRecipeBar({
       {suggestSaveAfterRun ? (
         <div className="mt-2 rounded-lg border border-[var(--brand-primary)]/30 bg-[var(--brand-bg)] px-3 py-2">
           <p className="text-xs leading-5 text-[var(--text-secondary)]">
-            本轮运行已完成。可将当前生产线存为配方，供组织或本品牌下次一键套用。
+            最近有已完成的运行。可将当前生产线存为配方，供组织或本品牌下次一键套用。
           </p>
         </div>
       ) : null}
@@ -210,7 +227,7 @@ export function AmwayFlowRecipeBar({
                   void applyRecipe(recipe.id);
                 }}
                 className={`inline-flex h-8 items-center rounded-lg border px-2.5 text-xs font-medium transition disabled:opacity-50 ${
-                  activeRecipeName === recipe.name
+                  activeRecipeName === recipe.name && !activeRecipeDirty
                     ? 'border-[var(--brand-primary)] bg-[var(--brand-bg)] text-[var(--brand-primary)]'
                     : 'border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]'
                 }`}
@@ -262,7 +279,7 @@ export function AmwayFlowRecipeBar({
           }}
           className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
         >
-          {recipes.length === 0 ? '存为配方' : '另存'}
+          {recipes.length === 0 || suggestSaveAfterRun ? '存为配方' : '另存'}
         </button>
       </div>
 
