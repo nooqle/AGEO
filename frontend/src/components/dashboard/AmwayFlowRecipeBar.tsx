@@ -17,6 +17,14 @@ type RecipeItem = {
   description?: string | null;
 };
 
+type RecipeSuggestion = {
+  recipe_id: string;
+  name: string;
+  scope: string;
+  reasons: string[];
+  score: number;
+};
+
 export function AmwayFlowRecipeBar({
   entityId,
   getExpectedVersion,
@@ -48,12 +56,33 @@ export function AmwayFlowRecipeBar({
   onActiveRecipeCleared?: () => void;
 }) {
   const [recipes, setRecipes] = useState<RecipeItem[]>([]);
+  const [suggestions, setSuggestions] = useState<RecipeSuggestion[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveName, setSaveName] = useState('');
   const [saveScope, setSaveScope] = useState<'entity' | 'organization'>('entity');
   const [loaded, setLoaded] = useState(false);
+
+  const reloadSuggestions = useCallback(async () => {
+    try {
+      const resp = await api.recommendAmwayFlowRecipes(entityId, {
+        activeRecipeId: activeRecipeDirty ? null : activeRecipeId,
+        limit: 3,
+      });
+      setSuggestions(
+        (resp.recommendations || []).map((item) => ({
+          recipe_id: item.recipe_id,
+          name: item.name,
+          scope: item.scope,
+          reasons: Array.isArray(item.reasons) ? item.reasons.filter(Boolean) : [],
+          score: item.score,
+        })),
+      );
+    } catch {
+      setSuggestions([]);
+    }
+  }, [activeRecipeDirty, activeRecipeId, entityId]);
 
   const reload = useCallback(async () => {
     try {
@@ -72,7 +101,8 @@ export function AmwayFlowRecipeBar({
     } finally {
       setLoaded(true);
     }
-  }, [entityId]);
+    await reloadSuggestions();
+  }, [entityId, reloadSuggestions]);
 
   useEffect(() => {
     void reload();
@@ -108,6 +138,7 @@ export function AmwayFlowRecipeBar({
           recipeId: resp.recipe_id,
         });
         setNotice(`已切换配方「${resp.recipe_name}」（直接替换当前生产线）`);
+        await reloadSuggestions();
       } catch (err) {
         const message = err instanceof Error ? err.message : '套用配方失败';
         setError(
@@ -119,7 +150,15 @@ export function AmwayFlowRecipeBar({
         setBusy(false);
       }
     },
-    [busy, disabled, entityId, getExpectedVersion, onTopologyApplied, setExpectedVersion],
+    [
+      busy,
+      disabled,
+      entityId,
+      getExpectedVersion,
+      onTopologyApplied,
+      reloadSuggestions,
+      setExpectedVersion,
+    ],
   );
 
   const saveCurrent = useCallback(async () => {
@@ -233,6 +272,57 @@ export function AmwayFlowRecipeBar({
           <p className="text-xs leading-5 text-[var(--text-secondary)]">
             最近有已完成的运行。可将当前生产线存为配方，供组织或本品牌下次一键套用。
           </p>
+        </div>
+      ) : null}
+
+      {loaded && suggestions.length > 0 ? (
+        <div
+          className="mt-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2"
+          data-testid="amway-recipe-suggestions"
+        >
+          <p className="text-[11px] font-medium text-[var(--text-secondary)]">建议配方</p>
+          <p className="mt-0.5 text-[10px] leading-4 text-[var(--text-tertiary)]">
+            按结构相近、近期套用与品牌范围排序 · 不会自动套用
+          </p>
+          <ul className="mt-2 space-y-2">
+            {suggestions.map((item) => (
+              <li
+                key={item.recipe_id}
+                className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-medium text-[var(--text-primary)]">
+                      {item.name}
+                    </span>
+                    <span className="text-[10px] text-[var(--text-tertiary)]">
+                      {item.scope === 'organization' ? '组织' : '品牌'}
+                    </span>
+                  </div>
+                  <ul className="mt-1 space-y-0.5">
+                    {(item.reasons.length ? item.reasons : ['可见配方池候选']).map((reason) => (
+                      <li
+                        key={`${item.recipe_id}-${reason}`}
+                        className="text-[10px] leading-4 text-[var(--text-tertiary)]"
+                      >
+                        · {reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy || disabled}
+                  onClick={() => {
+                    void applyRecipe(item.recipe_id);
+                  }}
+                  className="inline-flex h-7 shrink-0 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-bg)] px-2.5 text-[11px] font-semibold text-[var(--brand-primary)] transition hover:bg-[var(--brand-primary)] hover:text-[var(--brand-contrast)] disabled:opacity-50"
+                >
+                  套用
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
 

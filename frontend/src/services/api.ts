@@ -1931,6 +1931,37 @@ class ApiService {
     );
   }
 
+  /** Wave C1: deterministic recipe suggestions with visible reasons (no auto-apply). */
+  async recommendAmwayFlowRecipes(
+    entityId: string,
+    opts?: {
+      intent?: string | null;
+      activeRecipeId?: string | null;
+      limit?: number;
+    },
+  ): Promise<{
+    recommendations: Array<{
+      recipe_id: string;
+      name: string;
+      scope: string;
+      description?: string | null;
+      version: number;
+      score: number;
+      reasons: string[];
+    }>;
+    engine?: string;
+    auto_applied?: boolean;
+  }> {
+    const qs = new URLSearchParams();
+    if (opts?.intent?.trim()) qs.set('intent', opts.intent.trim());
+    if (opts?.activeRecipeId) qs.set('active_recipe_id', opts.activeRecipeId);
+    if (opts?.limit != null) qs.set('limit', String(opts.limit));
+    const q = qs.toString();
+    return this.request(
+      `/amwaychina/entities/${entityId}/flow-recipes/recommendations${q ? `?${q}` : ''}`,
+    );
+  }
+
   /** 3c-C1: natural language → ops preview (rule compiler, no write). */
   async compileAmwayFlowTopologyNl(
     entityId: string,

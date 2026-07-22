@@ -247,6 +247,59 @@ async def delete_flow_recipe(
     return {"ok": True}
 
 
+@router.get("/entities/{entity_id}/flow-recipes/recommendations")
+async def recommend_flow_recipes(
+    entity_id: str,
+    intent: str | None = Query(
+        None, description="Optional free-text intent for keyword match on name/description"
+    ),
+    active_recipe_id: str | None = Query(
+        None, description="Exclude currently active recipe from suggestions"
+    ),
+    limit: int = Query(3, ge=1, le=5),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Wave C1: deterministic recipe suggestions with visible reasons (no auto-apply)."""
+    from app.services import flow_orchestration_event_service as orch_events
+    from app.services import flow_topology_recipe_recommend as recommend
+
+    entity = await require_amway_entity(db, current_user, entity_id)
+    if entity.organization_id is None:
+        return recommend.build_recommendation_payload([])
+
+    rows = await recipes.list_recipes(
+        db,
+        organization_id=entity.organization_id,
+        entity_id=entity.id,
+    )
+    recipe_dicts = [recipes.recipe_to_dict(r) for r in rows]
+
+    topo_row = (
+        await db.execute(
+            select(FlowTopologyRecord).where(FlowTopologyRecord.entity_id == entity.id)
+        )
+    ).scalar_one_or_none()
+    current_topology = (
+        topo_row.topology
+        if topo_row is not None and isinstance(topo_row.topology, dict)
+        else {}
+    )
+
+    event_rows = await orch_events.list_events(db, entity_id=entity.id, limit=50)
+    events = [orch_events.event_to_dict(e) for e in event_rows]
+
+    items = recommend.rank_recommendations(
+        recipes=recipe_dicts,
+        current_topology=current_topology,
+        events=events,
+        intent=intent,
+        active_recipe_id=active_recipe_id,
+        limit=limit,
+    )
+    return recommend.build_recommendation_payload(items)
+
+
 @router.post("/entities/{entity_id}/flow-recipes/{recipe_id}/apply")
 async def apply_flow_recipe(
     entity_id: str,
