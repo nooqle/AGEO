@@ -100,3 +100,30 @@ def test_reexport_identity_from_orchestrator_node():
     assert node_report_done(
         {"execution_status": "completed", "current_step": "A5", "report": {"a": 1}}
     )
+
+
+def test_knife2_history_and_workflow():
+    from app.workflow.orchestrator.history_query import (
+        _is_history_answer_content_query,
+        _is_precise_history_query,
+        _session_was_recalled,
+    )
+    from app.workflow.orchestrator.workflow_progress import (
+        WORKFLOW_STEPS,
+        _build_workflow_steps,
+        _matches_failed_step,
+    )
+    from app.workflow.orchestrator_node import (
+        _is_history_answer_content_query as node_hist,
+        _matches_failed_step as node_match,
+    )
+
+    assert _is_history_answer_content_query("查看过往回答内容")
+    assert not _is_precise_history_query("随便问问")
+    assert _session_was_recalled({"session_recalled": True})
+    assert len(WORKFLOW_STEPS) == 5
+    assert _matches_failed_step("answer_fetch", "A4")
+    steps = _build_workflow_steps({"analysis_mode": "persona", "brand_profile": {"x": 1}})
+    assert steps[0]["status"] == "completed"
+    assert node_hist is _is_history_answer_content_query
+    assert node_match is _matches_failed_step
