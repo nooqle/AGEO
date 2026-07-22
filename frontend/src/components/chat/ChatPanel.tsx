@@ -43,13 +43,37 @@ import {
   readDashboardChatHandoffValue,
   type DashboardChatHandoffPayload,
 } from '@/lib/dashboardChatHandoff';
+import {
+  classifyChatTopologyIntent,
+  stripChatTopologyPrefix,
+} from '@/lib/chatTopologyIntent';
+import {
+  TopologyOrchestrationCard,
+  type TopologyCompilePreview,
+  type TopologyRecipeSuggestion,
+} from '@/components/chat/TopologyOrchestrationCard';
 
 
 interface ChatPanelProps {
   sessionId: string;
+  /** Brand entity bound to this chat session (Wave D orchestration short-circuit). */
+  entityId?: string | null;
   className?: string;
   exampleBrands?: ExampleBrand[];
 }
+
+type TopologyOrchCardState = {
+  anchorMessageId: string;
+  kind: 'compile_nl' | 'recipe_suggest';
+  userText: string;
+  status: 'loading' | 'ready' | 'applying' | 'applied' | 'error' | 'no_entity';
+  entityId: string | null;
+  error?: string | null;
+  ops?: Array<Record<string, unknown>>;
+  expectedVersion?: number | null;
+  compile?: TopologyCompilePreview | null;
+  recommendations?: TopologyRecipeSuggestion[];
+};
 
 interface DashboardHandoffView {
   entrySource: string | null;
@@ -684,9 +708,10 @@ function getBrowserActionCardKey(state: BrowserState): string {
       : `${state.platform}:${state.state}:${state.message}`);
 }
 
-export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProps) {
+export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampleBrands }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const recalledContentRef = useRef<string | null>(null);
+  const skipTopologyInterceptRef = useRef(false);
   const autoScrollEnabledRef = useRef(true);
   const lastBrowserActionScrollKeyRef = useRef<string | null>(null);
   const oldestLoadedMessageIdRef = useRef<string | null>(null);
@@ -704,6 +729,7 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
   const [inputValue, setInputValue] = useState('');
   const [selectedToolMode, setSelectedToolMode] = useState<ToolMode | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [topologyOrchCard, setTopologyOrchCard] = useState<TopologyOrchCardState | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialArtifactId = searchParams.get('artifact_id');
@@ -2449,6 +2475,136 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     updateBrowserState,
     wsBrowserActionResolution,
   ]);
+  const resolveChatEntityId = useCallback((): string | null => {
+    const fromProp = typeof entityIdProp === 'string' ? entityIdProp.trim() : '';
+    if (fromProp) return fromProp;
+    const fromQuery = searchParams.get('entity_id')?.trim() || '';
+    if (fromQuery) return fromQuery;
+    const fromHandoff = readAutoStartParam('entity_id')?.trim() || '';
+    return fromHandoff || null;
+  }, [entityIdProp, readAutoStartParam, searchParams]);
+
+  const runTopologyOrchestration = useCallback(
+    async (args: {
+      kind: 'compile_nl' | 'recipe_suggest';
+      userText: string;
+      anchorMessageId: string;
+      entityId: string | null;
+    }) => {
+      const { kind, userText, anchorMessageId, entityId } = args;
+      if (!entityId) {
+        setTopologyOrchCard({
+          anchorMessageId,
+          kind,
+          userText,
+          status: 'no_entity',
+          entityId: null,
+        });
+        return;
+      }
+
+      setTopologyOrchCard({
+        anchorMessageId,
+        kind,
+        userText,
+        status: 'loading',
+        entityId,
+      });
+
+      try {
+        if (kind === 'compile_nl') {
+          const topo = await api.getAmwayFlowTopology(entityId);
+          const expectedVersion =
+            typeof topo.version === 'number' ? topo.version : null;
+          const compileText = stripChatTopologyPrefix(userText) || userText;
+          const resp = await api.compileAmwayFlowTopologyNl(entityId, {
+            text: compileText,
+            expected_version: expectedVersion,
+            allow_llm: true,
+          });
+          const ops = Array.isArray(resp.ops) ? resp.ops : [];
+          if (typeof resp.base?.version === 'number') {
+            // keep for apply
+          }
+          const planned = Array.isArray(resp.plan?.planned_platforms)
+            ? resp.plan!.planned_platforms!.map(String)
+            : [];
+          if (!ops.length) {
+            setTopologyOrchCard({
+              anchorMessageId,
+              kind,
+              userText,
+              status: 'error',
+              entityId,
+              error: '未能编译出可应用的变更。可改用生产线预设，或当作普通对话发送。',
+              expectedVersion:
+                typeof resp.base?.version === 'number'
+                  ? resp.base.version
+                  : expectedVersion,
+            });
+            return;
+          }
+          setTopologyOrchCard({
+            anchorMessageId,
+            kind,
+            userText,
+            status: 'ready',
+            entityId,
+            ops,
+            expectedVersion:
+              typeof resp.base?.version === 'number'
+                ? resp.base.version
+                : expectedVersion,
+            compile: {
+              summaryText: String(resp.summary?.text || '无实质变更'),
+              planSummary: resp.plan?.summary ? String(resp.plan.summary) : undefined,
+              plannedPlatforms: planned,
+              compileMatched: resp.compile?.matched
+                ? String(resp.compile.matched)
+                : undefined,
+              compileMode: resp.compile?.mode ? String(resp.compile.mode) : undefined,
+              opsCount: ops.length,
+            },
+          });
+          return;
+        }
+
+        const resp = await api.recommendAmwayFlowRecipes(entityId, {
+          intent: userText,
+          limit: 3,
+        });
+        const recommendations: TopologyRecipeSuggestion[] = (resp.recommendations || []).map(
+          (item) => ({
+            recipe_id: item.recipe_id,
+            name: item.name,
+            scope: item.scope,
+            reasons: Array.isArray(item.reasons)
+              ? item.reasons.map(String).filter(Boolean)
+              : [],
+          }),
+        );
+        setTopologyOrchCard({
+          anchorMessageId,
+          kind,
+          userText,
+          status: 'ready',
+          entityId,
+          recommendations,
+        });
+      } catch (err) {
+        setTopologyOrchCard({
+          anchorMessageId,
+          kind,
+          userText,
+          status: 'error',
+          entityId,
+          error: err instanceof Error ? err.message : '编排预览失败',
+        });
+      }
+    },
+    [],
+  );
+
   // Handle sending message
   const handleSendMessage = useCallback((
     content: string,
@@ -2464,10 +2620,38 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
       setPendingConfirmation(null);
     }
 
+    const trimmed = content.trim();
+    const hasAttachments = Boolean(attachments && attachments.length > 0);
+    const forceNormal = skipTopologyInterceptRef.current;
+    if (forceNormal) {
+      skipTopologyInterceptRef.current = false;
+    }
+
+    const intent =
+      !forceNormal && !hasAttachments
+        ? classifyChatTopologyIntent(trimmed)
+        : { kind: null as null, reason: 'skip' };
+
+    // Wave D: short-circuit topology/recipe intents to Console APIs (no WS agent run).
+    if (intent.kind) {
+      const userMessageId = addMessage({
+        type: 'user',
+        content: trimmed,
+      });
+      autoScrollEnabledRef.current = true;
+      void runTopologyOrchestration({
+        kind: intent.kind,
+        userText: trimmed,
+        anchorMessageId: userMessageId,
+        entityId: resolveChatEntityId(),
+      });
+      return;
+    }
+
     // Add user message to local state
     addMessage({
       type: 'user',
-      content: content.trim(),
+      content: trimmed,
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     });
 
@@ -2477,8 +2661,88 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
     startExecution();
 
     // Send message via WebSocket (with optional context)
-    sendMessage(content.trim(), context, attachments, toolMode);
-  }, [addMessage, startExecution, sendMessage, isAgentExecuting, pendingConfirmation, setPendingConfirmation]);
+    sendMessage(trimmed, context, attachments, toolMode);
+  }, [
+    addMessage,
+    startExecution,
+    sendMessage,
+    isAgentExecuting,
+    pendingConfirmation,
+    setPendingConfirmation,
+    resolveChatEntityId,
+    runTopologyOrchestration,
+  ]);
+
+  const handleApplyTopologyCompile = useCallback(async () => {
+    const card = topologyOrchCard;
+    if (!card || card.kind !== 'compile_nl' || !card.entityId || !card.ops?.length) return;
+    if (card.status === 'applying' || card.status === 'applied') return;
+    setTopologyOrchCard({ ...card, status: 'applying', error: null });
+    try {
+      let expected = card.expectedVersion;
+      if (expected == null) {
+        const topo = await api.getAmwayFlowTopology(card.entityId);
+        expected = typeof topo.version === 'number' ? topo.version : null;
+      }
+      if (expected == null) {
+        setTopologyOrchCard({
+          ...card,
+          status: 'error',
+          error: '无法读取拓扑版本，请打开生产线后重试。',
+        });
+        return;
+      }
+      await api.applyAmwayFlowTopologyPatch(card.entityId, {
+        ops: card.ops,
+        expected_version: expected,
+      });
+      setTopologyOrchCard({
+        ...card,
+        status: 'applied',
+        error: null,
+      });
+      toast.success('已应用生产线变更');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '应用失败';
+      setTopologyOrchCard({
+        ...card,
+        status: 'error',
+        error: message.includes('版本冲突')
+          ? '拓扑版本冲突：请打开生产线刷新后再试，或重新发送指令。'
+          : message,
+      });
+    }
+  }, [topologyOrchCard]);
+
+  const handleApplyTopologyRecipe = useCallback(
+    async (recipeId: string) => {
+      const card = topologyOrchCard;
+      if (!card || card.kind !== 'recipe_suggest' || !card.entityId) return;
+      if (card.status === 'applying' || card.status === 'applied') return;
+      setTopologyOrchCard({ ...card, status: 'applying', error: null });
+      try {
+        const topo = await api.getAmwayFlowTopology(card.entityId);
+        const expected = typeof topo.version === 'number' ? topo.version : null;
+        const resp = await api.applyAmwayFlowRecipe(card.entityId, recipeId, expected);
+        setTopologyOrchCard({
+          ...card,
+          status: 'applied',
+          error: null,
+        });
+        toast.success(`已套用配方「${resp.recipe_name}」`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : '套用失败';
+        setTopologyOrchCard({
+          ...card,
+          status: 'error',
+          error: message.includes('版本冲突')
+            ? '拓扑版本冲突：请打开生产线刷新后再试。'
+            : message,
+        });
+      }
+    },
+    [topologyOrchCard],
+  );
 
   // Auto-send brand name when navigating from Dashboard with ?brand= param
   useEffect(() => {
@@ -2949,13 +3213,41 @@ export function ChatPanel({ sessionId, className, exampleBrands }: ChatPanelProp
             }
             renderAfterMessage={(message) => {
               const states = actionableBrowserCards.byMessageId.get(message.id);
-              if (!states || states.length === 0) {
+              const orch =
+                topologyOrchCard && topologyOrchCard.anchorMessageId === message.id
+                  ? topologyOrchCard
+                  : null;
+              if ((!states || states.length === 0) && !orch) {
                 return null;
               }
 
               return (
                 <div className="flex flex-col gap-3">
-                  {states.map((state) => {
+                  {orch ? (
+                    <TopologyOrchestrationCard
+                      kind={orch.kind}
+                      status={orch.status}
+                      entityId={orch.entityId}
+                      userText={orch.userText}
+                      error={orch.error}
+                      compile={orch.compile}
+                      recommendations={orch.recommendations}
+                      onApplyCompile={() => {
+                        void handleApplyTopologyCompile();
+                      }}
+                      onApplyRecipe={(recipeId) => {
+                        void handleApplyTopologyRecipe(recipeId);
+                      }}
+                      onDismiss={() => setTopologyOrchCard(null)}
+                      onSendAsNormalChat={() => {
+                        const text = orch.userText;
+                        setTopologyOrchCard(null);
+                        skipTopologyInterceptRef.current = true;
+                        handleSendMessage(text);
+                      }}
+                    />
+                  ) : null}
+                  {states?.map((state) => {
                     const takeoverId = state.takeover?.takeoverId;
                     const cardKey = getBrowserActionCardKey(state);
                     const isOpened = Boolean(

@@ -145,13 +145,24 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 | ID | 事项 | 状态 |
 |---|---|---|
 | C1 | 意图/情境 → 配方推荐（3b-2.2 v0）：确定性打分 + 可见理由 + 用户点击套用 | ✅ **Wave C PASS** |
-| C1.x | 主 Chat 入口接 compile/配方（原 C2） | ⏭ 下一波 |
+| C1.x | 主 Chat 入口接 compile/配方（原 C2） | 🔧 **Wave D**（见下） |
 | C3 | 节点级运行教训 annotation | ⏭ 后置 |
 | **C4** | **God 拆分 P2：设计稿 only** | ✅ `2026-07-22-orchestrator-p2-split-design.md` |
 | C5 | 审查残留（分支总时限等） | ⏭ 挂 P2 实现里程碑 |
 
 **裁决：** F1–F7 / E1–E6 / 非目标全过；功能 Bug 0。非阻断：套用中旧推荐短暂 disabled 后刷新（低优 UX）。  
 **不做：** 静默自动套用、黑盒学习、Orch 代码大拆、覆盖 Dialog。
+
+---
+
+### Wave D — 主 Chat → compile / 配方（验收：`2026-07-22-wave-d-acceptance.md`）
+
+| ID | 事项 | 状态 |
+|---|---|---|
+| D1–D7 | Chat 保守意图拦截；compile-nl / recommend 预览卡；确认后 apply；deep-link 生产线 | 🔧 本波实施中 |
+| — | Orch 巨石实现 / 节点 annotation / 自动开跑 | ⏭ 不做 |
+
+**纪律：** 复用 Console 已验证 API；不进 `user_message`；不改 orchestrator 语义。
 
 ---
 
@@ -186,7 +197,7 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 
 **现状：** 蓝图 3a→3b→3c 主工程路径已通；**配方 v0** 立住可见编排记忆；运行简化为一点即跑；**Canvas/API 拆分 P0–P1 已完成，P2 巨石未动**；校准复利与 Chat 主入口、推荐未做；视觉方向对但生产线新层偏工具化。
 
-**下一步：** Wave A/B/C **PASS**。后置：主 Chat 接 compile/配方、节点教训 annotation、Orch P2 **实现**（设计稿已齐）。
+**下一步：** Wave A/B/C **PASS**；Wave D = 主 Chat 接 compile/配方（薄竖切）。后置：节点教训 annotation、Orch P2 **实现**。
 
 ---
 

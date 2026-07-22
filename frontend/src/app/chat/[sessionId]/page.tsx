@@ -169,7 +169,11 @@ function ChatPageContent() {
       )}
       sidebarCollapsed={sidebarCollapsed}
     >
-      <ChatPanel key={sessionId} sessionId={sessionId} />
+      <ChatPanel
+        key={sessionId}
+        sessionId={sessionId}
+        entityId={queryEntityId ?? resolvedEntityId}
+      />
       <TaskNotificationPoller activeSessionId={sessionId} />
     </ChatLayout>
   );
