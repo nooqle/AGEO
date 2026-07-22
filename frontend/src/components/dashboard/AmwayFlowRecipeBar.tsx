@@ -23,12 +23,17 @@ export function AmwayFlowRecipeBar({
   setExpectedVersion,
   onTopologyApplied,
   disabled = false,
+  embedded = false,
+  suggestSaveAfterRun = false,
 }: {
   entityId: string;
   getExpectedVersion: () => number | null;
   setExpectedVersion: (version: number) => void;
   onTopologyApplied: (topology: AmwayFlowTopologyDoc, meta?: { recipeName?: string }) => void;
   disabled?: boolean;
+  /** When true, omit outer card chrome (parent OrchestrationPanel provides it). */
+  embedded?: boolean;
+  suggestSaveAfterRun?: boolean;
 }) {
   const [recipes, setRecipes] = useState<RecipeItem[]>([]);
   const [busy, setBusy] = useState(false);
@@ -36,6 +41,8 @@ export function AmwayFlowRecipeBar({
   const [notice, setNotice] = useState<string | null>(null);
   const [saveName, setSaveName] = useState('');
   const [saveScope, setSaveScope] = useState<'entity' | 'organization'>('entity');
+  const [activeRecipeName, setActiveRecipeName] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -50,13 +57,27 @@ export function AmwayFlowRecipeBar({
         })),
       );
     } catch {
-      // list may fail if offline; keep empty
+      // keep empty
+    } finally {
+      setLoaded(true);
     }
   }, [entityId]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!suggestSaveAfterRun) return;
+    setSaveName((current) => {
+      if (current.trim()) return current;
+      const stamp = new Date().toLocaleDateString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+      });
+      return `运行成功 ${stamp}`;
+    });
+  }, [suggestSaveAfterRun]);
 
   const applyRecipe = useCallback(
     async (recipeId: string) => {
@@ -72,6 +93,7 @@ export function AmwayFlowRecipeBar({
         );
         if (typeof resp.version === 'number') setExpectedVersion(resp.version);
         onTopologyApplied(resp.topology, { recipeName: resp.recipe_name });
+        setActiveRecipeName(resp.recipe_name);
         setNotice(`已切换配方「${resp.recipe_name}」（直接替换当前生产线）`);
       } catch (err) {
         const message = err instanceof Error ? err.message : '套用配方失败';
@@ -105,6 +127,7 @@ export function AmwayFlowRecipeBar({
         from_current: true,
       });
       setSaveName('');
+      setActiveRecipeName(created.name);
       setNotice(
         `已保存配方「${created.name}」（${created.scope === 'organization' ? '组织共享' : '本品牌'}）`,
       );
@@ -124,6 +147,7 @@ export function AmwayFlowRecipeBar({
       setError(null);
       try {
         await api.deleteAmwayFlowRecipe(recipeId, entityId);
+        if (activeRecipeName === name) setActiveRecipeName(null);
         setNotice(`已删除配方「${name}」`);
         await reload();
       } catch (err) {
@@ -132,26 +156,51 @@ export function AmwayFlowRecipeBar({
         setBusy(false);
       }
     },
-    [busy, disabled, entityId, reload],
+    [activeRecipeName, busy, disabled, entityId, reload],
   );
 
+  const shellClass = embedded
+    ? ''
+    : 'mt-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2.5';
+
   return (
-    <div className="mt-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2.5">
+    <div className={shellClass}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-tertiary)]">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-[var(--text-primary)]">
           <BookMarked size={13} className="text-[var(--brand-primary)]" aria-hidden />
           配方
-          <span className="font-normal">
-            组织共享 / 本品牌 · 切换即替换生产线 · 点运行即开跑
+          <span className="font-normal text-[var(--text-tertiary)]">
+            组织 / 本品牌 · 切换即替换
           </span>
+          {activeRecipeName ? (
+            <span className="rounded-full border border-[var(--brand-primary)]/30 bg-[var(--brand-bg)] px-2 py-0.5 text-[10px] font-medium text-[var(--brand-primary)]">
+              当前：{activeRecipeName}
+            </span>
+          ) : null}
         </div>
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {recipes.length === 0 ? (
-          <span className="text-[11px] text-[var(--text-tertiary)]">暂无配方，可将当前生产线另存</span>
-        ) : (
-          recipes.map((recipe) => (
+      {suggestSaveAfterRun ? (
+        <div className="mt-2 rounded-lg border border-[var(--brand-primary)]/30 bg-[var(--brand-bg)] px-3 py-2">
+          <p className="text-xs leading-5 text-[var(--text-secondary)]">
+            本轮运行已完成。可将当前生产线存为配方，供组织或本品牌下次一键套用。
+          </p>
+        </div>
+      ) : null}
+
+      {loaded && recipes.length === 0 ? (
+        <div className="mt-2 rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-secondary)] px-3 py-3">
+          <p className="text-sm font-medium text-[var(--text-primary)]">还没有配方</p>
+          <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
+            配方是可命名的生产线干法（像组织/项目级 skill）。先调好画布，再存一条，同事与下次可一键切换。
+          </p>
+          <p className="mt-2 text-[11px] text-[var(--text-tertiary)]">
+            在下方填写名称后点「存为配方」即可。
+          </p>
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {recipes.map((recipe) => (
             <div key={recipe.id} className="inline-flex items-center gap-0.5">
               <button
                 type="button"
@@ -160,10 +209,14 @@ export function AmwayFlowRecipeBar({
                 onClick={() => {
                   void applyRecipe(recipe.id);
                 }}
-                className="inline-flex h-8 items-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 text-xs font-medium text-[var(--text-secondary)] transition hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)] disabled:opacity-50"
+                className={`inline-flex h-8 items-center rounded-lg border px-2.5 text-xs font-medium transition disabled:opacity-50 ${
+                  activeRecipeName === recipe.name
+                    ? 'border-[var(--brand-primary)] bg-[var(--brand-bg)] text-[var(--brand-primary)]'
+                    : 'border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]'
+                }`}
               >
                 {recipe.name}
-                <span className="ml-1 text-[10px] text-[var(--text-tertiary)]">
+                <span className="ml-1 text-[10px] opacity-70">
                   {recipe.scope === 'organization' ? '组织' : '品牌'}
                 </span>
               </button>
@@ -179,9 +232,9 @@ export function AmwayFlowRecipeBar({
                 <Trash2 size={12} aria-hidden />
               </button>
             </div>
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <input
@@ -189,8 +242,8 @@ export function AmwayFlowRecipeBar({
           value={saveName}
           disabled={busy || disabled}
           onChange={(e) => setSaveName(e.target.value)}
-          placeholder="另存当前为配方名称"
-          className="h-8 min-w-[140px] flex-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 text-xs outline-none focus:border-[var(--brand-primary)] disabled:opacity-50"
+          placeholder="配方名称，例如：日常三平台监测"
+          className="h-8 min-w-[160px] flex-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 text-xs outline-none focus:border-[var(--brand-primary)] disabled:opacity-50"
         />
         <select
           value={saveScope}
@@ -209,7 +262,7 @@ export function AmwayFlowRecipeBar({
           }}
           className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
         >
-          另存
+          {recipes.length === 0 ? '存为配方' : '另存'}
         </button>
       </div>
 

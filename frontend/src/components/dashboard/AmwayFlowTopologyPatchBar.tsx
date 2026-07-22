@@ -47,6 +47,7 @@ export function AmwayFlowTopologyPatchBar({
   isAwaitingPlanConfirm = false,
   onRefreshFlowPlan,
   onTopologyApplied,
+  embedded = false,
 }: {
   entityId: string;
   getExpectedVersion: () => number | null;
@@ -55,6 +56,7 @@ export function AmwayFlowTopologyPatchBar({
   isAwaitingPlanConfirm?: boolean;
   onRefreshFlowPlan?: () => void | Promise<void>;
   onTopologyApplied: (topology: FlowTopologyDoc) => void;
+  embedded?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -207,11 +209,15 @@ export function AmwayFlowTopologyPatchBar({
     setExpectedVersion,
   ]);
 
+  const shellClass = embedded
+    ? ''
+    : 'mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2.5';
+
   return (
-    <div className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2.5">
+    <div className={shellClass}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs font-medium text-[var(--text-tertiary)]">
-          编排建议
+        <div className="text-xs font-medium text-[var(--text-primary)]">
+          调整当前生产线
           <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
             预设或自然语言 → 预览 → 确认写库 · 不自动开跑
           </span>

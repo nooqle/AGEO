@@ -48,15 +48,18 @@ export function flowNodeIcon(icon: string) {
   }
 }
 
-/** 节点图标底色：资产=品牌色，数据分析=紫色系，内容创作=橙色系，其余中性。 */
+/**
+ * 节点图标底色角色（Wave A 色表）：
+ * asset → brand teal soft；analysis → 石色/中性（禁止 violet）；content → 克制橙；其余中性。
+ */
 export function iconBadgeClass(variant: AmwayFlowNodeData['variant'] | CustomFlowNodeType): string {
   switch (variant) {
     case 'asset':
       return 'bg-[var(--brand-bg)] text-[var(--brand-primary)]';
     case 'analysis':
-      return 'bg-[rgba(139,92,246,0.14)] text-[rgb(124,58,237)] dark:text-[rgb(167,139,250)]';
+      return 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] ring-1 ring-inset ring-[var(--border-subtle)]';
     case 'content':
-      return 'bg-[rgba(249,115,22,0.14)] text-[rgb(234,88,12)] dark:text-[rgb(251,146,60)]';
+      return 'bg-[rgba(249,115,22,0.12)] text-[rgb(194,65,12)] dark:text-[rgb(251,146,60)]';
     default:
       return 'bg-[var(--bg-secondary)] text-[var(--text-secondary)]';
   }

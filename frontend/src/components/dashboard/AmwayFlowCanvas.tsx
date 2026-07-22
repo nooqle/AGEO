@@ -25,8 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/services/api';
-import { AmwayFlowTopologyPatchBar } from '@/components/dashboard/AmwayFlowTopologyPatchBar';
-import { AmwayFlowRecipeBar } from '@/components/dashboard/AmwayFlowRecipeBar';
+import { AmwayFlowOrchestrationPanel } from '@/components/dashboard/AmwayFlowOrchestrationPanel';
 import { useTheme } from '@/hooks/useTheme';
 import type { DashboardHomeData } from '@/types/dashboard';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
@@ -1071,21 +1070,7 @@ export function AmwayFlowCanvas({
                   已自定义编排 · 断开的连线在下次运行时生效（断开平台即跳过该平台采集）
                 </p>
               ) : null}
-              <AmwayFlowRecipeBar
-                entityId={entityId}
-                getExpectedVersion={() => topologyVersionRef.current}
-                setExpectedVersion={(version) => {
-                  topologyVersionRef.current = version;
-                }}
-                disabled={Boolean(runningCustomNodeId)}
-                onTopologyApplied={(remote) => {
-                  topologyDirtyRef.current = false;
-                  const next = parseFlowTopology(remote);
-                  setTopology(next);
-                  writeFlowTopology(entityId, next);
-                }}
-              />
-              <AmwayFlowTopologyPatchBar
+              <AmwayFlowOrchestrationPanel
                 entityId={entityId}
                 getExpectedVersion={() => topologyVersionRef.current}
                 setExpectedVersion={(version) => {
@@ -1094,6 +1079,10 @@ export function AmwayFlowCanvas({
                 disabled={Boolean(runningCustomNodeId)}
                 isAwaitingPlanConfirm={isAwaitingPlanConfirm}
                 onRefreshFlowPlan={onRefreshFlowPlan}
+                suggestSaveAfterRun={
+                  Boolean(activeRun)
+                  && String(activeRun?.status || '').toLowerCase() === 'completed'
+                }
                 onTopologyApplied={(remote) => {
                   topologyDirtyRef.current = false;
                   const next = parseFlowTopology(remote);
@@ -1133,10 +1122,10 @@ export function AmwayFlowCanvas({
                   type="button"
                   onClick={onQuickRun}
                   disabled={Boolean(isRunSubmitting)}
-                  className="amway-cta-glow inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
+                  className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] shadow-sm transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
                 >
                   <Play size={14} fill="currentColor" aria-hidden />
-                  {isRunSubmitting ? '准备计划…' : '开始运行'}
+                  {isRunSubmitting ? '启动中…' : '开始运行'}
                 </button>
               )}
             </div>

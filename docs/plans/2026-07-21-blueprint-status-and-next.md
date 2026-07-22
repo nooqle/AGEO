@@ -61,7 +61,7 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 | **P0** | 生产线 `AmwayFlowCanvas` → `amway-flow/*`（types/constants/topologyDoc/analysis/NodeCard/Panels） | ✅ 壳 ~1500 行 |
 | **P0 附** | 编排条 `AmwayFlowTopologyPatchBar`、配方条 `AmwayFlowRecipeBar` | ✅ 已外置 |
 | **P1** | `amwaychina` → common + flow_topology + flow_run + flow_recipes | ✅ 主文件 ~550 行 |
-| **P1.5（未写死、建议补）** | Wave A 视觉合并时：配方+编排合成组件，避免再把 UI 堆回 Canvas 壳 | ⬜ 与 A2.2 绑定 |
+| **P1.5** | 配方+编排合成 `AmwayFlowOrchestrationPanel` | ✅ Wave A |
 | **P2** | `orchestrator_node.py`（~7k）、a5 巨石、DashboardViews 等 | ⬜ **仅设计稿可开，大拆独立里程碑** |
 | **残留** | 分支总时限、God 级其它文件 | ⬜ 审查 P2 残留 |
 
