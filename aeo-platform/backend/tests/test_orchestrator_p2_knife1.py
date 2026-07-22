@@ -102,6 +102,56 @@ def test_reexport_identity_from_orchestrator_node():
     )
 
 
+def test_knife5_session_surface_and_reply_pins():
+    from app.workflow.orchestrator.prompt_evidence import (
+        _should_render_history_availability,
+    )
+    from app.workflow.orchestrator.reply_text import (
+        _build_ask_user_fallback_reply,
+        _build_knowledge_export_completion_reply,
+    )
+    from app.workflow.orchestrator.session_tool_surface import (
+        _get_contextual_hidden_tool_names,
+        _infer_current_session_followup_tool,
+    )
+    from app.workflow.orchestrator_node import (
+        _get_contextual_hidden_tool_names as node_hidden,
+        _infer_current_session_followup_tool as node_followup,
+        _build_knowledge_export_completion_reply as node_export,
+    )
+
+    assert node_followup is _infer_current_session_followup_tool
+    assert node_hidden is _get_contextual_hidden_tool_names
+    assert node_export is _build_knowledge_export_completion_reply
+
+    assert "ask_user" in _get_contextual_hidden_tool_names({"headless_mode": True})
+    followup = _infer_current_session_followup_tool(
+        {
+            "fetch_results": [{"x": 1}],
+            "report": {"a": 1},
+            "metrics": {"m": 1},
+            "orchestrator_history": [
+                {"role": "user", "content": "这份报告里 deepseek 怎么说"}
+            ],
+        }
+    )
+    assert followup is not None
+    assert followup[0] == "drill_down_analysis"
+    assert followup[1].get("focus_value") == "deepseek"
+
+    export = _build_knowledge_export_completion_reply(
+        {"item_count": 2, "title": "表A", "source_scope": "current_import_artifact"}
+    )
+    assert "导入" in export or "2" in export
+    ask = _build_ask_user_fallback_reply(
+        {"brand_name": "测试品牌", "baseline_metrics": {"m": 1}},
+        "brand_analysis",
+        "",
+    )
+    assert "测试品牌" in ask
+    assert _should_render_history_availability({"session_recalled": True}, set()) is False
+
+
 def test_knife4_feedback_and_misc_pure_behavior_pins():
     """Cautious knife: pin identities + pure behavior contracts."""
     from app.workflow.orchestrator.misc_pure import (

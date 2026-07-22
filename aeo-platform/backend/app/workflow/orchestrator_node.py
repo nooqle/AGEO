@@ -214,6 +214,26 @@ from app.workflow.orchestrator.misc_pure import (
     _infer_current_import_query,
     _normalize_sentiment_followup_value,
 )
+from app.workflow.orchestrator.session_tool_surface import (
+    _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES,
+    _KNOWLEDGE_TOOL_NAMES,
+    _SPECIFIC_DRILL_DOWN_HIDDEN_TOOL_NAMES,
+    _get_contextual_hidden_tool_names,
+    _infer_authoritative_history_refresh_tool,
+    _infer_current_session_followup_tool,
+    _should_force_fetch_recovery_confirmation,
+    _stable_tool_surface_enabled,
+)
+from app.workflow.orchestrator.reply_text import (
+    _build_ask_user_fallback_reply,
+    _build_knowledge_export_completion_reply,
+)
+from app.workflow.orchestrator.prompt_evidence import (
+    _RECENT_EVIDENCE_PROMPT_PRIORITY,
+    _render_recent_evidence_for_prompt,
+    _should_render_history_availability,
+    _should_render_instruction_defense,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -249,41 +269,6 @@ _VISIBLE_TOOL_NAME_LABELS: dict[str, str] = {
     "ask_user": "用户确认",
     "fast": "快速采集",
     "full": "完整采集",
-}
-
-
-_CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES = frozenset(
-    {
-        "knowledge_lookup",
-        "knowledge_aggregate",
-        "knowledge_compare",
-        "knowledge_export",
-    }
-)
-
-_SPECIFIC_DRILL_DOWN_HIDDEN_TOOL_NAMES = frozenset(
-    {
-        "post_analysis_skill",
-        "compare_snapshots",
-    }
-)
-
-_KNOWLEDGE_TOOL_NAMES = frozenset(
-    {
-        "knowledge_lookup",
-        "knowledge_aggregate",
-        "knowledge_compare",
-        "knowledge_export",
-    }
-)
-_RECENT_EVIDENCE_PROMPT_PRIORITY: dict[str, int] = {
-    "uploaded_input": 0,
-    "current_fetch": 1,
-    "current_artifact": 2,
-    "knowledge_lookup": 3,
-    "knowledge_compare": 4,
-    "knowledge_aggregate": 5,
-    "knowledge_export": 6,
 }
 
 
@@ -1067,135 +1052,6 @@ def _build_knowledge_planning_hint(state: AgentState) -> str:
     return ""
 
 
-def _infer_current_session_followup_tool(
-    state: AgentState,
-) -> tuple[str, dict[str, Any]] | None:
-    latest_user_message = _get_latest_user_message(state)
-    if not latest_user_message:
-        return None
-
-    if not state.get("fetch_results"):
-        return None
-
-    lowered = latest_user_message.lower()
-    history_keywords = [
-        "历史",
-        "上次",
-        "最近两次",
-        "变化",
-        "趋势",
-        "导出",
-        "汇总",
-        "按月",
-        "3月",
-        "4月",
-        "5月",
-    ]
-    if not _is_current_report_follow_up(state) and any(
-        keyword in latest_user_message for keyword in history_keywords
-    ):
-        return None
-
-    sentiment_value = _normalize_sentiment_followup_value(latest_user_message)
-    if sentiment_value is not None:
-        return (
-            "drill_down_analysis",
-            {
-                "focus_dimension": "sentiment",
-                "focus_value": sentiment_value,
-            },
-        )
-
-    platform_aliases = {
-        "deepseek": ["deepseek", "深度求索"],
-        "kimi": ["kimi"],
-        "doubao": ["豆包"],
-        "hunyuan": ["元宝", "hunyuan", "腾讯元宝"],
-    }
-    for platform_key, aliases in platform_aliases.items():
-        if any(alias.lower() in lowered for alias in aliases):
-            return (
-                "drill_down_analysis",
-                {
-                    "focus_dimension": "platform",
-                    "focus_value": platform_key,
-                },
-            )
-
-    return None
-
-
-def _infer_authoritative_history_refresh_tool(
-    state: AgentState,
-) -> tuple[str, dict[str, Any]] | None:
-    """Require a fresh history read for latest-run fetch stats before answering."""
-
-    latest_user_message = _get_latest_user_message(state)
-    if not latest_user_message:
-        return None
-    if _session_was_recalled(state) or _is_current_report_follow_up(state):
-        return None
-
-    if not _is_latest_run_history_stats_query(latest_user_message):
-        return None
-
-    manifest = state.get("knowledge_manifest") or {}
-    available_sources = manifest.get("available_sources") or {}
-    if not any(bool(value) for value in available_sources.values()):
-        return None
-
-    if _has_authoritative_history_refresh_result(state):
-        return None
-
-    lowered = latest_user_message.lower()
-    group_by = "source_type"
-    if any(
-        marker in latest_user_message
-        for marker in ("问题", "题目", "没有采集到答案", "没成功")
-    ):
-        group_by = "question"
-    elif any(
-        marker in lowered
-        for marker in ("平台", "deepseek", "kimi", "doubao", "元宝", "hunyuan")
-    ):
-        group_by = "platform"
-
-    limit = 50 if group_by == "question" else 20
-
-    return (
-        "knowledge_aggregate",
-        {
-            "query": latest_user_message,
-            "group_by": group_by,
-            "limit": limit,
-            "source_types": ["fetch_answer"],
-        },
-    )
-
-
-def _stable_tool_surface_enabled() -> bool:
-    return bool(
-        getattr(get_settings(), "ORCHESTRATOR_STABLE_TOOL_SURFACE_ENABLED", False)
-    )
-
-
-def _get_contextual_hidden_tool_names(state: AgentState | None) -> set[str]:
-    if not state:
-        return set()
-
-    hidden: set[str] = set()
-    if state.get("headless_mode"):
-        hidden.add("ask_user")
-    if _session_was_recalled(state):
-        hidden.update(_KNOWLEDGE_TOOL_NAMES)
-    preferred_followup_tool = _infer_current_session_followup_tool(state)
-    if preferred_followup_tool is not None:
-        hidden.update(_CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES)
-        if preferred_followup_tool[0] == "drill_down_analysis":
-            hidden.update(_SPECIFIC_DRILL_DOWN_HIDDEN_TOOL_NAMES)
-    return hidden
-
-
 def validate_tool_available_in_current_state(
     tool_name: str | None,
     state: AgentState | None,
@@ -1776,51 +1632,6 @@ def _build_contextual_tool_surface_note(state: AgentState) -> str | None:
     if not lines:
         return None
     return "\n".join(lines)
-
-
-def _render_recent_evidence_for_prompt(packet: RecentEvidencePacket) -> str:
-    if not packet.items:
-        return ""
-
-    ranked_items = sorted(
-        packet.items,
-        key=lambda item: (
-            _RECENT_EVIDENCE_PROMPT_PRIORITY.get(item.source, 99),
-            -int(item.relevance_score),
-            item.title,
-        ),
-    )
-    top_items = tuple(ranked_items[:3])
-    if not top_items:
-        return ""
-    return render_recent_evidence_packet(RecentEvidencePacket(items=top_items))
-
-
-def _should_render_history_availability(
-    state: AgentState,
-    hidden_tool_names: set[str],
-) -> bool:
-    if _session_was_recalled(state):
-        return False
-    if _KNOWLEDGE_TOOL_NAMES.issubset(hidden_tool_names):
-        return False
-    manifest = state.get("knowledge_manifest") or {}
-    available_sources = manifest.get("available_sources") or {}
-    return any(bool(value) for value in available_sources.values())
-
-
-def _should_render_instruction_defense(
-    state: AgentState,
-    recent_evidence_packet: RecentEvidencePacket,
-) -> bool:
-    defense_context = build_instruction_defense_context(state, recent_evidence_packet)
-    if (
-        defense_context.prompt_disclosure_request
-        or defense_context.suspicious_evidence_count
-    ):
-        return True
-    latest_user_message = _get_latest_user_message(state)
-    return detect_instruction_injection(latest_user_message)
 
 
 def build_orchestrator_prompt_assembly(state: AgentState) -> PromptAssembly:
@@ -2696,144 +2507,6 @@ async def _complete_standalone_skill_without_llm(
             "orchestrator_history": new_history,
         },
     )
-
-
-def _build_knowledge_export_completion_reply(result: dict[str, Any]) -> str:
-    """Build a deterministic close-out reply for successful knowledge exports."""
-
-    item_count = int(result.get("item_count") or 0)
-    period = str(result.get("analysis_period") or "").strip()
-    description = _normalize_public_knowledge_text(result.get("description") or "")
-    summary_metrics = result.get("summary_metrics") or {}
-    platform_count = summary_metrics.get("覆盖平台数")
-    source_type_count = summary_metrics.get("来源类型")
-
-    detail_parts: list[str] = []
-    if period:
-        detail_parts.append(f"范围覆盖 {period}")
-    if platform_count:
-        detail_parts.append(f"{platform_count} 个平台")
-    if source_type_count:
-        detail_parts.append(f"{source_type_count} 类材料")
-    detail_text = "，".join(detail_parts)
-
-    current_import_scope = (
-        str(result.get("source_scope") or "").strip() == "current_import_artifact"
-    )
-    title = str(result.get("title") or "").strip() or (
-        "当前导入问题表" if current_import_scope else "过往资料表"
-    )
-    if current_import_scope:
-        reply = f"已定位当前导入问题表，共整理 {item_count} 条记录。"
-    else:
-        reply = f"已完成导出，当前数据表共整理 {item_count} 条记录。"
-    if detail_text:
-        reply += f" 本次{detail_text}。"
-    if description:
-        reply += f" {description}"
-    if result.get("truncated"):
-        reply += (
-            f" 当前结果较多，仅展示前 {int(result.get('export_limit') or item_count)} 条记录，"
-            "如需完整导出请缩小筛选范围后重试。"
-        )
-    if current_import_scope:
-        reply += f" 当前结果标题为《{title}》，且只来自本次上传表格，不包含历史资料。"
-    reply += " 您可以直接在右侧继续导出为 md 或 pdf。"
-    return reply
-
-
-def _build_ask_user_fallback_reply(
-    state: AgentState,
-    tool_name: str | None,
-    message: str,
-) -> str:
-    """Build a deterministic user-facing reply when LLM omits natural language."""
-    if tool_name == "brand_analysis":
-        has_baseline = bool(state.get("baseline_metrics"))
-        brand_name = (
-            (state.get("brand_profile", {}) or {}).get("brand_name")
-            or state.get("brand_name")
-            or "该品牌"
-        )
-        if has_baseline:
-            return (
-                f"{brand_name}的品牌分析已完成，我已经整理出品牌画像和竞品格局。"
-                "接下来您可以先做一次引用内容置信度评估，"
-                "也可以继续生成用户画像做场景细化分析、重新运行品牌全景分析，"
-                "或者直接基于已有结果提问。"
-            )
-        return (
-            f"{brand_name}的品牌分析已完成，但当前还没有品牌全景分析结果。"
-            "建议先运行品牌全景分析，建立各 AI 平台对该品牌的整体认知参考，"
-            "后续再做画像和场景分析会更有对照价值。"
-        )
-
-    if tool_name == "persona_generation":
-        return (
-            "用户画像已生成并展示在右侧画布中。"
-            "请先在画布里勾选您想重点分析的画像，然后回复我继续；"
-            "如果不想限定画像，也可以直接告诉我走品牌全景分析。"
-        )
-
-    if tool_name == "question_simulation":
-        return (
-            "问题模拟已完成，相关问题已经展示在右侧画布中。"
-            "您现在可以告诉我选择快速采集、完整采集，或要求我重新生成问题。"
-        )
-
-    if tool_name == "table_intake_skill":
-        result = state.get("table_intake_result") or {}
-        summary = result.get("summary") or "表格理解完成。"
-        return f"{summary} 请确认是否按我识别的用途继续。"
-
-    if tool_name == "answer_fetch":
-        return (
-            "答案抓取已完成。"
-            "我会基于当前抓取结果立即继续生成分析报告，"
-            "报告出来后您再决定是否继续做引用内容置信度评估或进入后续分析。"
-        )
-
-    if tool_name in {"data_analytics", "analysis_report_skill"}:
-        return (
-            "分析报告已生成。"
-            "您现在可以选择继续做一次引用内容置信度评估，"
-            "或者基于当前报告进入下一步画像分析、深入分析或直接提问。"
-        )
-
-    if tool_name == "confidence_analysis_skill":
-        return (
-            "引用内容置信度评估已完成。"
-            "您现在可以继续基于这份评估追问具体来源问题，"
-            "或者回到主报告继续后续分析。"
-        )
-
-    return message or "请继续告诉我您的选择。"
-
-
-def _should_force_fetch_recovery_confirmation(state: AgentState) -> bool:
-    if not _is_latest_run_history_stats_query(_get_latest_user_message(state)):
-        return False
-    if state.get("awaiting_user") or state.get("pending_confirmation"):
-        return False
-    if not (state.get("a4_canonical_result") or state.get("fetch_results")):
-        return False
-
-    aggregate_result = state.get("knowledge_aggregate_result") or {}
-    if (
-        not isinstance(aggregate_result, dict)
-        or aggregate_result.get("status") != "hit"
-    ):
-        return False
-
-    fetch_status = aggregate_result.get("fetch_status_summary") or {}
-    if not isinstance(fetch_status, dict):
-        return False
-
-    failure_count = int(fetch_status.get("failure_count") or 0)
-    question_targets = normalize_question_targets(
-        fetch_status.get("failed_question_targets")
-    )
-    return failure_count > 0 and bool(question_targets)
 
 
 async def _force_fetch_recovery_confirmation(

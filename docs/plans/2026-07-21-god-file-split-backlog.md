@@ -93,8 +93,9 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 - [x] orchestrator_node **第一刀**（纯函数包）→ Wave F（~-257 行）  
 - [x] orchestrator_node **第二刀**（history/workflow/knowledge）→ Wave G（再 ~-566 行）  
 - [x] orchestrator_node **第三刀**（ontology 情报回复 / seed / prompt_bundle）→ Wave H（再 ~-923）  
-- [x] orchestrator_node **第四刀（谨慎）**（action feedback / misc pure）→ Wave I（再 ~-246；累计 ~-1993）  
-- [ ] 后续高耦合块（followup / hidden tools / context_summary / validate_tool / async）→ 更小步 + 更强钉死  
+- [x] orchestrator_node **第四刀（谨慎）** → Wave I（~-246）  
+- [x] orchestrator_node **第五刀（谨慎）** → Wave J session_tool_surface / reply_text / prompt_evidence（~-327；累计 ~-2320）  
+- [ ] 后续（context_summary / validate_tool / async）→ 继续小步 + 钉死  
 
 **与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`。  
 
