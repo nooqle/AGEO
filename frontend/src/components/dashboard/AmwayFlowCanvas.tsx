@@ -1178,7 +1178,7 @@ export function AmwayFlowCanvas({
                     ? '待确认'
                     : executionPlan.source === 'run_flow_plan'
                       ? '任务计划'
-                      : '拓扑预览'}
+                      : '当前图预览'}
                 </span>
               </div>
               <span className="text-[11px] text-[var(--text-tertiary)]">{executionPlan.summary}</span>
@@ -1219,8 +1219,8 @@ export function AmwayFlowCanvas({
               {isAwaitingPlanConfirm
                 ? '仍停在待确认的历史任务：可点「确认并执行」继续，或取消后重新开始。'
                 : executionPlan.source === 'run_flow_plan'
-                  ? '当前按已锁定的运行计划推进；高亮步骤会随 stage 变化。'
-                  : '计划由当前画布拓扑实时推导。点击「开始运行」后按该计划直接执行（运行即确认）。'}
+                  ? '当前按已锁定的运行计划推进；高亮步骤会随进度变化。'
+                  : '当前图 = 下次运行怎么干。点「开始运行」后按该计划直接执行（运行即确认）。'}
             </p>
             {topologySaveError ? (
               <p className="mt-2 rounded-lg border border-[rgba(220,38,38,0.25)] bg-[rgba(220,38,38,0.06)] px-3 py-2 text-[11px] leading-5 text-[var(--error)]">

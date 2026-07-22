@@ -7,6 +7,7 @@
 
 import Link from 'next/link';
 import { buildProductionLineHref } from '@/lib/chatTopologyIntent';
+import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
 
 export type TopologyCompilePreview = {
   summaryText: string;
@@ -52,7 +53,7 @@ export function TopologyOrchestrationCard({
   onSendAsNormalChat,
 }: TopologyOrchestrationCardProps) {
   const title =
-    kind === 'recipe_suggest' ? '配方建议' : '生产线编排预览';
+    kind === 'recipe_suggest' ? JOURNEY.chatRecipeTitle : JOURNEY.chatCompileTitle;
   const flowHref = entityId ? buildProductionLineHref(entityId) : '/amwaychina';
   const busy = status === 'loading' || status === 'applying';
 
@@ -66,7 +67,7 @@ export function TopologyOrchestrationCard({
         <div>
           <p className="text-sm font-medium text-[var(--text-primary)]">{title}</p>
           <p className="mt-0.5 text-[11px] leading-4 text-[var(--text-tertiary)]">
-            与生产线共用同一管道 · 不会自动套用或开跑
+            {JOURNEY.chatSharedPipe}
           </p>
         </div>
         {onDismiss ? (
@@ -92,13 +93,13 @@ export function TopologyOrchestrationCard({
         {status === 'no_entity' ? (
           <div className="rounded-md border border-dashed border-[var(--border-strong)] bg-[var(--bg-primary)] px-3 py-2">
             <p className="text-xs leading-5 text-[var(--text-secondary)]">
-              当前会话未绑定品牌，无法改生产线或套用配方。请从品牌看板进入 Chat，或打开生产线选择品牌。
+              {JOURNEY.chatNoEntity}
             </p>
             <Link
               href="/amwaychina"
               className="mt-2 inline-flex text-xs font-medium text-[var(--brand-primary)] hover:underline"
             >
-              打开生产线
+              {JOURNEY.chatOpenLine}
             </Link>
           </div>
         ) : null}
@@ -109,7 +110,7 @@ export function TopologyOrchestrationCard({
 
         {status === 'applied' ? (
           <p className="text-xs leading-5 text-[var(--brand-primary)]">
-            已应用到生产线。可在 Console 刷新查看；开跑请在生产线点击运行。
+            {JOURNEY.chatApplied}
           </p>
         ) : null}
 
@@ -176,7 +177,7 @@ export function TopologyOrchestrationCard({
                     onClick={() => onApplyRecipe?.(item.recipe_id)}
                     className="inline-flex h-7 shrink-0 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-bg)] px-2.5 text-[11px] font-semibold text-[var(--brand-primary)] transition hover:bg-[var(--brand-primary)] hover:text-[var(--brand-contrast)] disabled:opacity-50"
                   >
-                    套用
+                    {JOURNEY.chatApplyRecipe}
                   </button>
                 </li>
               ))}
@@ -195,7 +196,7 @@ export function TopologyOrchestrationCard({
               onClick={onApplyCompile}
               className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
             >
-              {status === 'applying' ? '应用中…' : '应用变更'}
+              {status === 'applying' ? '应用中…' : JOURNEY.chatApply}
             </button>
           ) : null}
 
@@ -204,7 +205,7 @@ export function TopologyOrchestrationCard({
               href={flowHref}
               className="inline-flex h-8 items-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs font-medium text-[var(--text-secondary)] transition hover:border-[var(--brand-primary)] hover:text-[var(--brand-primary)]"
             >
-              在生产线查看
+              {JOURNEY.chatViewLine}
             </Link>
           ) : null}
 
@@ -215,7 +216,7 @@ export function TopologyOrchestrationCard({
               onClick={onSendAsNormalChat}
               className="inline-flex h-8 items-center px-1 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] disabled:opacity-50"
             >
-              当作普通对话发送
+              {JOURNEY.chatAsNormal}
             </button>
           ) : null}
         </div>

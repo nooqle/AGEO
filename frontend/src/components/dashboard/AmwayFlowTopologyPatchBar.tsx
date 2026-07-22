@@ -12,6 +12,7 @@ import {
   type TopologyPatchIntentId,
 } from '@/lib/amwayFlowTopologyPatch';
 import type { AmwayFlowTopologyDoc } from '@/services/api';
+import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
 
 export type FlowTopologyDoc = AmwayFlowTopologyDoc;
 
@@ -78,7 +79,7 @@ export function AmwayFlowTopologyPatchBar({
       const ops = Array.isArray(resp.ops) ? resp.ops : [];
       if (!ops.length) {
         setPreview(null);
-        setError('预览未返回可应用的操作列表。');
+        setError(JOURNEY.chatCompileFail);
         return;
       }
       const planned = Array.isArray(resp.plan?.planned_platforms)
@@ -180,18 +181,18 @@ export function AmwayFlowTopologyPatchBar({
       if (isAwaitingPlanConfirm && onRefreshFlowPlan) {
         try {
           await Promise.resolve(onRefreshFlowPlan());
-          setNotice('拓扑已应用，并已刷新待确认任务的计划快照（仍未开跑）。');
+          setNotice('已写入生产线，并已刷新待确认任务的计划（仍未开跑）。');
         } catch {
-          setNotice('拓扑已应用，但刷新运行计划失败；请点「刷新计划」或重新发起。');
+          setNotice('已写入生产线，但刷新计划失败；请点「刷新计划」或重新发起。');
         }
       } else {
-        setNotice('拓扑已应用；点击「开始运行」将按新计划直接执行。');
+        setNotice('已写入生产线；点「开始运行」将按新计划直接执行。');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : '应用失败';
       setError(
         message.includes('版本冲突')
-          ? '拓扑版本冲突：请刷新页面后再应用。'
+          ? JOURNEY.conflictRefresh
           : message,
       );
     } finally {
@@ -217,9 +218,9 @@ export function AmwayFlowTopologyPatchBar({
     <div className={shellClass}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs font-medium text-[var(--text-primary)]">
-          调整当前生产线
+          {JOURNEY.patchTitle}
           <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">
-            预设或自然语言 → 预览 → 确认写库 · 不自动开跑
+            {JOURNEY.patchHint}
           </span>
         </div>
         <div className="flex flex-wrap gap-1.5">
@@ -302,7 +303,7 @@ export function AmwayFlowTopologyPatchBar({
               }}
               className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
             >
-              {busy ? '应用中…' : '确认应用'}
+              {busy ? '应用中…' : JOURNEY.chatApply}
             </button>
             <button
               type="button"

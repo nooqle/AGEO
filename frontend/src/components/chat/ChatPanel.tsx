@@ -47,6 +47,7 @@ import {
   classifyChatTopologyIntent,
   stripChatTopologyPrefix,
 } from '@/lib/chatTopologyIntent';
+import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
 import {
   TopologyOrchestrationCard,
   type TopologyCompilePreview,
@@ -2536,7 +2537,7 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
               userText,
               status: 'error',
               entityId,
-              error: '未能编译出可应用的变更。可改用生产线预设，或当作普通对话发送。',
+              error: JOURNEY.chatCompileFail,
               expectedVersion:
                 typeof resp.base?.version === 'number'
                   ? resp.base.version
@@ -2709,14 +2710,14 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
         status: 'applied',
         error: null,
       });
-      toast.success('已应用生产线变更');
+      toast.success(JOURNEY.chatApplied);
     } catch (err) {
       const message = err instanceof Error ? err.message : '应用失败';
       setTopologyOrchCard({
         ...card,
         status: 'error',
         error: message.includes('版本冲突')
-          ? '拓扑版本冲突：请打开生产线刷新后再试，或重新发送指令。'
+          ? JOURNEY.chatVersionConflict
           : message,
       });
     }
@@ -2744,7 +2745,7 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
           ...card,
           status: 'error',
           error: message.includes('版本冲突')
-            ? '拓扑版本冲突：请打开生产线刷新后再试。'
+            ? JOURNEY.chatVersionConflict
             : message,
         });
       }

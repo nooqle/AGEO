@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { BookMarked, Trash2 } from 'lucide-react';
 import { api, type AmwayFlowTopologyDoc } from '@/services/api';
+import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
 
 type RecipeItem = {
   id: string;
@@ -249,9 +250,9 @@ export function AmwayFlowRecipeBar({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-[var(--text-primary)]">
           <BookMarked size={13} className="text-[var(--brand-primary)]" aria-hidden />
-          配方
+          {JOURNEY.recipe}
           <span className="font-normal text-[var(--text-tertiary)]">
-            组织 / 本品牌 · 切换即替换
+            组织 / 本品牌 · {JOURNEY.recipeHint}
           </span>
           {badgeLabel ? (
             <span
@@ -280,9 +281,11 @@ export function AmwayFlowRecipeBar({
           className="mt-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2"
           data-testid="amway-recipe-suggestions"
         >
-          <p className="text-[11px] font-medium text-[var(--text-secondary)]">建议配方</p>
+          <p className="text-[11px] font-medium text-[var(--text-secondary)]">
+            {JOURNEY.recipeSuggestTitle}
+          </p>
           <p className="mt-0.5 text-[10px] leading-4 text-[var(--text-tertiary)]">
-            按结构相近、近期套用与品牌范围排序 · 不会自动套用
+            {JOURNEY.recipeSuggestHint}
           </p>
           <ul className="mt-2 space-y-2">
             {suggestions.map((item) => (

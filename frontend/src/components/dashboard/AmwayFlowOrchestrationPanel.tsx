@@ -14,6 +14,7 @@ import {
 } from '@/lib/amwayFlowActiveRecipe';
 import { AmwayFlowRecipeBar } from '@/components/dashboard/AmwayFlowRecipeBar';
 import { AmwayFlowTopologyPatchBar } from '@/components/dashboard/AmwayFlowTopologyPatchBar';
+import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
 
 export function AmwayFlowOrchestrationPanel({
   entityId,
@@ -130,9 +131,12 @@ export function AmwayFlowOrchestrationPanel({
     <section className="mt-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-sm">
       <header className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[var(--border-subtle)] px-3.5 py-2.5">
         <div>
-          <h2 className="text-sm font-semibold text-[var(--text-primary)]">编排</h2>
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">{JOURNEY.orchTitle}</h2>
           <p className="mt-0.5 text-[11px] leading-4 text-[var(--text-tertiary)]">
-            配方记住怎么干 · 预设/自然语言改当前生产线 · 点运行即开跑
+            {JOURNEY.orchSubtitle}
+          </p>
+          <p className="mt-1 text-[10px] leading-4 text-[var(--text-tertiary)]">
+            {JOURNEY.stepsOneLiner}
           </p>
         </div>
       </header>
@@ -182,7 +186,7 @@ export function AmwayFlowOrchestrationPanel({
           className="inline-flex items-center gap-1 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--brand-primary)]"
         >
           {eventsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          最近编排变更
+          {JOURNEY.recentChanges}
           {events.length ? (
             <span className="text-[10px] text-[var(--text-tertiary)]">({events.length})</span>
           ) : null}
@@ -190,7 +194,7 @@ export function AmwayFlowOrchestrationPanel({
         {eventsOpen ? (
           <ul className="mt-2 max-h-40 space-y-1.5 overflow-y-auto">
             {events.length === 0 ? (
-              <li className="text-[11px] text-[var(--text-tertiary)]">暂无记录</li>
+              <li className="text-[11px] text-[var(--text-tertiary)]">暂无变更记录</li>
             ) : (
               events.map((ev) => (
                 <li
