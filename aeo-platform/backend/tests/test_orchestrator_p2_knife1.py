@@ -102,6 +102,41 @@ def test_reexport_identity_from_orchestrator_node():
     )
 
 
+def test_knife6_tool_gate_and_prompt_context_pins():
+    from app.workflow.orchestrator.prompt_context import (
+        _build_context_summary,
+        _build_public_skill_index,
+    )
+    from app.workflow.orchestrator.tool_gate import (
+        validate_tool_available_in_current_state,
+    )
+    from app.workflow.orchestrator_node import (
+        _build_context_summary as node_summary,
+        validate_tool_available_in_current_state as node_gate,
+    )
+
+    assert node_gate is validate_tool_available_in_current_state
+    assert node_summary is _build_context_summary
+
+    blocked = validate_tool_available_in_current_state(
+        "ask_user", {"headless_mode": True}
+    )
+    assert blocked.blocked is True
+    assert "headless" in (blocked.reason or "") or "定时" in (blocked.reason or "")
+
+    open_gate = validate_tool_available_in_current_state(
+        "brand_analysis", {"headless_mode": False}
+    )
+    assert open_gate.blocked is False
+
+    empty = _build_context_summary({})
+    assert "尚无分析数据" in empty
+    with_entity = _build_context_summary({"entity_id": "e-1"})
+    assert "manage_monitoring_schedule" in with_entity
+    # skill index should be non-empty string for basic state
+    assert isinstance(_build_public_skill_index({}), str)
+
+
 def test_knife5_session_surface_and_reply_pins():
     from app.workflow.orchestrator.prompt_evidence import (
         _should_render_history_availability,
