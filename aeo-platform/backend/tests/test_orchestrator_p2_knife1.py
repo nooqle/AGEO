@@ -102,6 +102,53 @@ def test_reexport_identity_from_orchestrator_node():
     )
 
 
+def test_phase_b_close_prompt_assembly_and_tool_gate_command():
+    from langgraph.types import Command
+
+    from app.services.tool_capability_matrix import ToolAvailabilityConstraint
+    from app.workflow.orchestrator.prompt_assembly_builder import (
+        build_orchestrator_prompt_assembly,
+        build_orchestrator_system_prompt,
+    )
+    from app.workflow.orchestrator.tool_gate_command import (
+        _build_tool_gate_block_command,
+    )
+    from app.workflow.orchestrator_node import (
+        build_orchestrator_prompt_assembly as node_asm,
+        build_orchestrator_system_prompt as node_sys,
+        _build_tool_gate_block_command as node_block,
+    )
+
+    assert node_asm is build_orchestrator_prompt_assembly
+    assert node_sys is build_orchestrator_system_prompt
+    assert node_block is _build_tool_gate_block_command
+
+    asm = build_orchestrator_prompt_assembly({"brand_name": "测试品牌"})
+    assert len(asm.base_policy_sections) >= 1
+    rendered = build_orchestrator_system_prompt({})
+    assert "Specta" in rendered or "编排" in rendered
+
+    constraint = ToolAvailabilityConstraint(
+        tool_name="ask_user",
+        blocked=True,
+        reason="blocked for test",
+        suggested_next_actions=("next",),
+    )
+    tool_call = type("TC", (), {"id": "c1", "name": "ask_user"})()
+    cmd = _build_tool_gate_block_command(
+        state={"headless_mode": True},
+        tool_call=tool_call,
+        reply_text="r",
+        new_history=[],
+        current_retry_counts={},
+        constraint=constraint,
+    )
+    assert isinstance(cmd, Command)
+    assert cmd.goto == "orchestrator"
+    assert cmd.update is not None
+    assert cmd.update.get("last_validation_result", {}).get("passed") is False
+
+
 def test_knife8_agent_summary_gate_and_messages():
     from app.workflow.orchestrator.agent_result_summary import (
         DIRECTIVE_A1_NO_BASELINE,
