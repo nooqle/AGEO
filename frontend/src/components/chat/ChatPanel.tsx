@@ -2627,10 +2627,18 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
       skipTopologyInterceptRef.current = false;
     }
 
-    const intent =
-      !forceNormal && !hasAttachments
-        ? classifyChatTopologyIntent(trimmed)
-        : { kind: null as null, reason: 'skip' };
+    // Escape hatch from orchestration card: user bubble already exists locally.
+    // Only hand off to WS — do not addMessage again (avoids transient duplicate).
+    if (forceNormal) {
+      autoScrollEnabledRef.current = true;
+      startExecution();
+      sendMessage(trimmed, context, attachments, toolMode);
+      return;
+    }
+
+    const intent = !hasAttachments
+      ? classifyChatTopologyIntent(trimmed)
+      : { kind: null as null, reason: 'skip' };
 
     // Wave D: short-circuit topology/recipe intents to Console APIs (no WS agent run).
     if (intent.kind) {
