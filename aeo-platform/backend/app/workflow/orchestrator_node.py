@@ -91,6 +91,39 @@ from app.workflow.runtime_policy_executor import (
     summarize_alternative_actions,
 )
 from app.workflow.state import AgentState
+from app.workflow.orchestrator.message_builders import (
+    _build_orchestrator_assistant_message,
+    _inject_runtime_reminder_message,
+)
+from app.workflow.orchestrator.report_state import _is_completed_analysis_report_state
+from app.workflow.orchestrator.run_context import _get_latest_user_message
+from app.workflow.orchestrator.text_normalize import (
+    _compact_text,
+    _contains_non_negated_keyword,
+    _extract_exact_datetime_scope_text,
+    _is_english_dominant_text,
+    _normalize_internal_analysis_mode,
+    _normalize_public_knowledge_text,
+    _normalize_public_report_kind,
+)
+from app.workflow.orchestrator.ontology_format import (
+    ONTOLOGY_ACTION_INPUT_TOOL_ARG_ALIASES,
+    _action_readiness_label,
+    _normalize_ontology_action_feedback_type,
+    _ontology_brand_label,
+    _ontology_float,
+    _ontology_int,
+    _ontology_object_summaries,
+    _ontology_payload_has_value,
+    _ontology_status_label,
+    _ontology_tool_arg_key_for_input,
+    _relationship_is_core,
+    _source_domain_sort_key,
+)
+from app.workflow.orchestrator.thought_stream import (
+    _localize_visible_terms,
+    _normalize_thought_text_for_stream,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -153,23 +186,6 @@ ONTOLOGY_TOOL_ACTION_MAP: dict[str, str] = {
     "create_monitoring_schedule": "create_monitoring_plan",
 }
 
-ONTOLOGY_ACTION_INPUT_TOOL_ARG_ALIASES: dict[str, dict[str, str]] = {
-    "generate_question_set": {
-        "generation_mode": "mode",
-        "question_count": "question_count",
-    },
-    "generate_report": {
-        "report_kind": "report_type",
-    },
-    "create_monitoring_plan": {
-        "cadence": "cadence",
-        "question_ids": "question_ids",
-    },
-    "generate_official_website_evidence_plan": {
-        "official_domain": "root_url",
-    },
-}
-
 _CURRENT_SESSION_FOLLOWUP_HIDDEN_TOOL_NAMES = frozenset(
     {
         "knowledge_lookup",
@@ -203,23 +219,6 @@ _RECENT_EVIDENCE_PROMPT_PRIORITY: dict[str, int] = {
     "knowledge_aggregate": 5,
     "knowledge_export": 6,
 }
-
-
-def _normalize_public_report_kind(value: Any) -> str:
-    """Normalize external report kind names to canonical panorama/scenario."""
-    raw = str(value or "").strip().lower()
-    if raw in {"baseline", "panorama"}:
-        return "panorama"
-    if raw in {"persona", "scenario"}:
-        return "scenario"
-    return "scenario"
-
-
-def _normalize_internal_analysis_mode(value: Any) -> str:
-    """Keep workflow state compatible while public APIs move to canonical terms."""
-    return (
-        "baseline" if _normalize_public_report_kind(value) == "panorama" else "persona"
-    )
 
 
 # =============================================================================
@@ -810,13 +809,6 @@ async def build_agent_tools(state: AgentState | None = None) -> list[dict[str, A
 # =============================================================================
 
 
-def _compact_text(value: Any, limit: int = 140) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"
-
-
 def _build_panorama_step_intro(
     tool_name: str,
     tool_args: dict[str, Any],
@@ -890,37 +882,6 @@ def _format_knowledge_lookup_match(match: dict[str, Any]) -> str:
     snippet = _compact_text(_normalize_public_knowledge_text(match.get("snippet")), 120)
     title = _compact_text(_normalize_public_knowledge_text(match.get("title")), 48)
     return f"- {title}（{'，'.join(parts)}）: {snippet}"
-
-
-def _normalize_public_knowledge_text(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    text = re.sub(r"\[\]\(@mark_[^)]+\)", "", text)
-    text = re.sub(r"\bhunyuan\b", "元宝", text, flags=re.IGNORECASE)
-    return " ".join(text.split())
-
-
-def _extract_exact_datetime_scope_text(text: str) -> str | None:
-    match = re.search(
-        r"(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}(?:日)?\s+\d{1,2}:\d{2}(?::\d{2})?)",
-        str(text or ""),
-    )
-    if not match:
-        return None
-    return match.group(1).replace("年", "-").replace("月", "-").replace("日", "")
-
-
-def _contains_non_negated_keyword(text: str, keywords: list[str]) -> bool:
-    normalized = str(text or "")
-    negative_prefixes = ("不要", "别", "不需要", "无需", "不是")
-    for keyword in keywords:
-        if keyword not in normalized:
-            continue
-        if any(f"{prefix}{keyword}" in normalized for prefix in negative_prefixes):
-            continue
-        return True
-    return False
 
 
 def _contains_positive_continuation_marker(
@@ -1274,14 +1235,6 @@ def _build_recent_knowledge_context(state: AgentState) -> str:
                 + "\n".join(lines)
             )
 
-    return ""
-
-
-def _get_latest_user_message(state: AgentState) -> str:
-    history = state.get("orchestrator_history") or []
-    for item in reversed(history):
-        if item.get("role") == "user":
-            return str(item.get("content") or "")
     return ""
 
 
@@ -2221,37 +2174,6 @@ def _should_stream_thoughts(state: AgentState) -> bool:
     if fallback and fallback[0] == "knowledge_export":
         return False
     return True
-
-
-def _is_english_dominant_text(text: str) -> bool:
-    stripped = str(text or "").strip()
-    if not stripped:
-        return False
-    ascii_letters = sum(1 for ch in stripped if ch.isascii() and ch.isalpha())
-    cjk_chars = sum(1 for ch in stripped if "\u4e00" <= ch <= "\u9fff")
-    if ascii_letters >= 8 and cjk_chars == 0:
-        return True
-    return ascii_letters >= 12 and ascii_letters > max(1, cjk_chars * 2)
-
-
-def _localize_visible_terms(text: str) -> str:
-    localized = str(text or "")
-    for source, target in _VISIBLE_TOOL_NAME_LABELS.items():
-        localized = localized.replace(source, target)
-    return localized
-
-
-def _normalize_thought_text_for_stream(
-    text: str,
-    *,
-    placeholder_sent: bool,
-) -> tuple[str | None, bool]:
-    stripped = _localize_visible_terms(text).strip()
-    if not stripped:
-        return None, placeholder_sent
-    if _is_english_dominant_text(stripped):
-        return None, placeholder_sent
-    return stripped, placeholder_sent
 
 
 def _build_context_summary(state: AgentState) -> str:
@@ -3950,48 +3872,6 @@ async def _force_table_import_confirmation(
     )
 
 
-def _build_orchestrator_assistant_message(
-    *,
-    reply_text: str,
-    tool_call_result: Any | None,
-    raw_thinking_text: str,
-) -> dict[str, Any]:
-    assistant_msg: dict[str, Any] = {
-        "role": "assistant",
-        "content": reply_text,
-    }
-    if raw_thinking_text and tool_call_result:
-        assistant_msg["reasoning_content"] = raw_thinking_text
-    if tool_call_result:
-        assistant_msg["tool_calls"] = [
-            {
-                "id": tool_call_result.id or "call_1",
-                "type": "function",
-                "function": {
-                    "name": tool_call_result.name,
-                    "arguments": json.dumps(
-                        tool_call_result.arguments, ensure_ascii=False
-                    ),
-                },
-            }
-        ]
-    return assistant_msg
-
-
-def _inject_runtime_reminder_message(
-    messages: list[dict[str, Any]],
-    runtime_reminder_message: str | None,
-) -> list[dict[str, Any]]:
-    reminder = str(runtime_reminder_message or "").strip()
-    if not reminder:
-        return messages
-
-    reminder_message = {"role": "user", "content": reminder}
-    if messages and messages[-1].get("role") == "user":
-        return [*messages[:-1], reminder_message, messages[-1]]
-    return [*messages, reminder_message]
-
-
 def build_orchestrator_messages(
     state: AgentState,
     runtime_reminder_message: str | None = None,
@@ -4236,18 +4116,6 @@ CORE_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
 )
 
 
-def _relationship_is_core(item: dict[str, Any]) -> bool:
-    link_type = str(item.get("link_type") or "").strip()
-    visibility = str(item.get("visibility") or "").strip()
-    if visibility == "core":
-        return True
-    if visibility == "supporting":
-        return False
-    if "default_visible" in item:
-        return bool(item.get("default_visible"))
-    return link_type in CORE_RELATIONSHIP_TYPES
-
-
 def _format_relationships_for_reply(
     ontology_world: dict[str, Any],
     *,
@@ -4322,55 +4190,6 @@ def _format_relationships_for_reply(
     return "暂无可用辅助关联摘要。" if supporting_only else "暂无可用核心关系摘要。"
 
 
-def _ontology_status_label(status: str) -> str:
-    labels = {
-        "not_cited": "未被引用",
-        "active": "活跃",
-        "observed": "已观测",
-        "captured": "已采集",
-        "derived": "已归纳",
-        "published": "已发布",
-        "created": "已创建",
-        "suggested": "已建议",
-        "failed": "采集失败",
-    }
-    normalized = str(status or "").strip()
-    return labels.get(normalized, normalized or "未知")
-
-
-def _ontology_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _ontology_float(value: Any) -> float:
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _ontology_brand_label(
-    state: AgentState | dict[str, Any],
-    ontology_world: dict[str, Any],
-) -> str:
-    brand = ontology_world.get("brand") or {}
-    label = str(brand.get("label") or "").strip() if isinstance(brand, dict) else ""
-    return label or str(state.get("brand_name") or "该品牌").strip()
-
-
-def _ontology_object_summaries(
-    ontology_world: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
-    return {
-        str(item.get("object_type")): item
-        for item in list(ontology_world.get("object_summaries") or [])
-        if isinstance(item, dict)
-    }
-
-
 def _ontology_object_total(
     ontology_world: dict[str, Any],
     object_type: str,
@@ -4396,15 +4215,6 @@ def _ontology_object_total(
             ]
         )
     return 0
-
-
-def _source_domain_sort_key(item: dict[str, Any]) -> tuple[int, int, int, str]:
-    return (
-        _ontology_int(item.get("citation_count")),
-        _ontology_int(item.get("answer_count")),
-        _ontology_int(item.get("platform_count")),
-        str(item.get("domain") or ""),
-    )
 
 
 def _sorted_source_domains(
@@ -4521,18 +4331,6 @@ def _available_action_items(
     if not raw_actions:
         raw_actions = list(ontology_world.get("available_actions") or [])
     return [item for item in raw_actions if isinstance(item, dict)]
-
-
-def _action_readiness_label(value: Any) -> str:
-    labels = {
-        "ready": "可进入执行",
-        "ready_with_defaults": "可用默认值进入执行",
-        "needs_input": "需要补充信息",
-        "needs_confirmation": "需要人确认",
-        "blocked": "被阻塞",
-    }
-    normalized = str(value or "").strip()
-    return labels.get(normalized, normalized or "待判断")
 
 
 def _action_reply_line(item: dict[str, Any]) -> str:
@@ -5437,32 +5235,6 @@ async def _route_history_answer_export_completion_without_llm(
             "orchestrator_reply": reply_text,
             "orchestrator_history": history,
         },
-    )
-
-
-def _is_completed_analysis_report_state(state: AgentState) -> bool:
-    """Return True when A5 has produced a final report for this run."""
-
-    if str(state.get("execution_status") or "").lower() != "completed":
-        return False
-    if state.get("awaiting_user") or state.get("pending_confirmation"):
-        return False
-
-    current_step = str(state.get("current_step") or "").strip()
-    current_skill = str(state.get("current_skill") or "").strip()
-    next_action = str(state.get("next_action") or "").strip()
-    is_report_context = (
-        current_step == "A5"
-        or current_skill in {"analysis_report_skill", "data_analytics"}
-        or next_action in {"a5_analytics", "data_analytics"}
-    )
-    if not is_report_context:
-        return False
-
-    return bool(
-        state.get("report")
-        or state.get("baseline_report")
-        or (state.get("metrics") and state.get("fetch_results"))
     )
 
 
@@ -6410,19 +6182,6 @@ def _ontology_action_feedback_for_key(
     return feedback if isinstance(feedback, dict) else None
 
 
-def _normalize_ontology_action_feedback_type(value: Any) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized.startswith("action_queue_"):
-        normalized = normalized.removeprefix("action_queue_")
-    if normalized in {"confirm", "confirmed", "accept", "accepted"}:
-        return "confirm"
-    if normalized in {"provide_input", "input", "input_provided"}:
-        return "provide_input"
-    if normalized in {"defer", "deferred", "dismiss", "skip"}:
-        return "defer"
-    return normalized
-
-
 def _ontology_feedback_covers_missing_inputs(
     *,
     action_key: str,
@@ -6458,23 +6217,6 @@ def _ontology_feedback_provided_inputs(
         for key, value in provided_inputs.items()
         if str(key).strip() and _ontology_payload_has_value(value)
     }
-
-
-def _ontology_tool_arg_key_for_input(action_key: str, input_key: str) -> str:
-    return (
-        ONTOLOGY_ACTION_INPUT_TOOL_ARG_ALIASES.get(action_key, {}).get(input_key)
-        or input_key
-    )
-
-
-def _ontology_payload_has_value(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, (list, tuple, set, dict)):
-        return bool(value)
-    return True
 
 
 def _ontology_confirmed_action_for_tool(

@@ -1,8 +1,8 @@
 # Orchestrator P2 拆分设计稿（Wave C / C4 · 仅设计）
 
 日期：2026-07-22  
-状态：**设计稿 only — 本波不实现代码大拆**  
-关联：`docs/plans/2026-07-21-god-file-split-backlog.md`、`docs/plans/2026-07-22-wave-c-acceptance.md`
+状态：**第一刀已落地**（Wave F · 纯函数包；壳仍大，后续继续刀）  
+关联：`docs/plans/2026-07-21-god-file-split-backlog.md`、`docs/plans/2026-07-22-wave-f-orch-p2-knife1-acceptance.md`
 
 ---
 
@@ -79,4 +79,4 @@ C1 推荐只消费 recipes + events + topology，**不依赖**本拆分完成即
 
 ## 6. 结论
 
-Wave C 交付 **C4 设计稿** 即满足工程验收 E5；代码大拆排独立里程碑，勿与推荐/Chat 功能混做。
+Wave C 交付 **C4 设计稿**；**Wave F 第一刀**已落地 `app/workflow/orchestrator/*` 纯函数包，`orchestrator_node` 约 **-257 行**并保持 re-export 兼容。后续刀：继续抽 history/routing/prompt 大块 → effects → 薄壳。

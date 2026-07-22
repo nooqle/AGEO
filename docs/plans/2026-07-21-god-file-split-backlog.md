@@ -89,9 +89,10 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 - [x] Canvas P0：types/constants/topologyDoc/analysis/graphUtils/NodeCard/Panels  
 - [x] amwaychina 路由分包（P1）  
 - [x] **P1.5** 配方条+编排条合并为单一 Orchestration 面板（`AmwayFlowOrchestrationPanel`）  
-- [x] orchestrator_node 拆分设计稿（P2）→ `docs/plans/2026-07-22-orchestrator-p2-split-design.md`（Wave C / C4 · 仅设计）  
-- [ ] orchestrator_node 代码大拆（实现）→ **独立里程碑**，勿与推荐/Chat 混 PR  
+- [x] orchestrator_node 拆分设计稿（P2）→ `docs/plans/2026-07-22-orchestrator-p2-split-design.md`  
+- [x] orchestrator_node **第一刀**（纯函数包）→ `app/workflow/orchestrator/*` · Wave F（~-257 行）  
+- [ ] orchestrator_node 后续刀（routing/prompt/effects/薄壳）→ 独立波次，勿与功能混 PR  
 
-**与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`（四条线：配方 / 视觉 / 记忆 / **代码拆分**）。  
+**与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`。  
 
-**下次继续：** Wave C 产品竖切 = 配方推荐验收；P2 **实现**另开里程碑。
+**下次继续：** Orch P2 第二刀（更大纯块 / routing），或功能波 annotation。
