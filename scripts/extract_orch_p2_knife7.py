@@ -57,6 +57,7 @@ def main() -> None:
         "    _has_terminal_knowledge_result,\n"
         "    _is_current_report_follow_up,\n"
         "    _is_precise_history_query,\n"
+        "    _resolve_bounded_history_answer_query,\n"
         "    _session_was_recalled,\n"
         ")\n"
         "from app.workflow.orchestrator.knowledge_format import (\n"

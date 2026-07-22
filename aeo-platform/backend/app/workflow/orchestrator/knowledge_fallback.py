@@ -8,6 +8,7 @@ from app.workflow.orchestrator.history_query import (
     _has_terminal_knowledge_result,
     _is_current_report_follow_up,
     _is_precise_history_query,
+    _resolve_bounded_history_answer_query,
     _session_was_recalled,
 )
 from app.workflow.orchestrator.knowledge_format import (
