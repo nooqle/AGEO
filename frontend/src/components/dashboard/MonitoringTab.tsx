@@ -222,7 +222,7 @@ export function MonitoringTab({
 
   const handleOpenMonitoringSettings = useCallback(() => {
     if (!activeEntityId) {
-      router.push('/dashboard');
+      router.push('/amwaychina');
       return;
     }
     const params = new URLSearchParams();

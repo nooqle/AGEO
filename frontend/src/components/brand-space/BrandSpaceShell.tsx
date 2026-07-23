@@ -1282,11 +1282,11 @@ export function BrandSpaceShell({
                     </button>
                     <button
                       type="button"
-                      onClick={() => window.location.assign('/dashboard')}
+                      onClick={() => window.location.assign('/amwaychina')}
                       className="inline-flex h-10 items-center rounded-lg border px-4 text-sm font-medium text-[var(--text-secondary)]"
                       style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
                     >
-                      返回品牌情报
+                      返回品牌生产线
                     </button>
                   </div>
                 </div>
@@ -1324,11 +1324,11 @@ export function BrandSpaceShell({
                     </button>
                     <button
                       type="button"
-                      onClick={() => window.location.assign('/dashboard')}
+                      onClick={() => window.location.assign('/amwaychina')}
                       className="inline-flex h-10 items-center rounded-lg border px-4 text-sm font-medium text-[var(--text-secondary)]"
                       style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}
                     >
-                      返回品牌情报
+                      返回品牌生产线
                     </button>
                   </div>
                 </div>

@@ -1,9 +1,12 @@
 /**
- * Wave D + Q: conservative Chat → production-line orchestration intent probe.
- * Pure functions only. Prefer miss over false intercept of main analysis chat.
+ * Wave D + Q + Switch(M2): Chat → production-line orchestration intent probe.
+ * Pure functions only.
+ *
+ * M2 Chat demotion: main-analysis language routes to line_guide (not agent long-run),
+ * unless the user uses the escape hatch (send as normal chat).
  */
 
-export type ChatTopologyIntentKind = 'compile_nl' | 'recipe_suggest';
+export type ChatTopologyIntentKind = 'compile_nl' | 'recipe_suggest' | 'line_guide';
 
 export type ChatTopologyIntent = {
   kind: ChatTopologyIntentKind | null;
@@ -70,9 +73,14 @@ export function classifyChatTopologyIntent(raw: string): ChatTopologyIntent {
     return { kind: 'compile_nl', reason: 'prefix' };
   }
 
-  // Do not steal main analysis / report language unless recipe/compile signals dominate
-  if (MAIN_FLOW_RE.test(text) && !RECIPE_RE.test(text) && !COMPILE_STRONG_RE.test(text) && !FULL_LINE_RE.test(text)) {
-    return { kind: null, reason: 'main_flow' };
+  // M2: main analysis / report language → guide to production line (Chat demoted)
+  if (
+    MAIN_FLOW_RE.test(text)
+    && !RECIPE_RE.test(text)
+    && !COMPILE_STRONG_RE.test(text)
+    && !FULL_LINE_RE.test(text)
+  ) {
+    return { kind: 'line_guide', reason: 'main_flow_demote' };
   }
 
   if (RECIPE_RE.test(text)) {

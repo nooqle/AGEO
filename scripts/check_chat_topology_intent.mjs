@@ -1,5 +1,5 @@
 /**
- * Wave D + Q: lightweight node checks for chatTopologyIntent rules.
+ * Wave D + Q + Switch(M2): lightweight checks for chatTopologyIntent rules.
  * Keep in sync with frontend/src/lib/chatTopologyIntent.ts
  * Run: node scripts/check_chat_topology_intent.mjs
  */
@@ -35,13 +35,14 @@ function classify(raw) {
     }
     return { kind: 'compile_nl', reason: 'prefix' };
   }
+  // M2 demotion: main analysis → line_guide
   if (
     MAIN_FLOW_RE.test(text) &&
     !RECIPE_RE.test(text) &&
     !COMPILE_STRONG_RE.test(text) &&
     !FULL_LINE_RE.test(text)
   ) {
-    return { kind: null, reason: 'main_flow' };
+    return { kind: 'line_guide', reason: 'main_flow_demote' };
   }
   if (RECIPE_RE.test(text)) return { kind: 'recipe_suggest', reason: 'recipe_kw' };
   if (FULL_LINE_RE.test(text) && /配方|套用|推荐/.test(text)) {
@@ -65,10 +66,10 @@ const cases = [
   ['搭一条生产线', 'compile_nl'],
   ['生成整图只开 deepseek', 'compile_nl'],
   ['按配方重建生产线', 'recipe_suggest'],
-  ['帮我分析品牌可见度并生成报告', null],
+  // M2: demote main analysis off agent long-run
+  ['帮我分析品牌可见度并生成报告', 'line_guide'],
   ['今天天气怎么样', null],
   ['a'.repeat(200), null],
-  // prefixed long command within 200
   [`/编排 ${'跳过豆包 '.repeat(10).trim()}`, 'compile_nl'],
 ];
 

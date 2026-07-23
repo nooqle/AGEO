@@ -35,7 +35,7 @@ export function HomeBrandLink({
       return;
     }
 
-    window.location.assign('/dashboard');
+    window.location.assign('/amwaychina');
   };
 
   const handleClick = () => {
@@ -78,7 +78,7 @@ export function HomeBrandLink({
                 className="mt-0.5 whitespace-nowrap text-[10px] leading-3 tracking-normal sm:tracking-[0.12em]"
                 style={{ color: 'var(--text-tertiary)' }}
               >
-                品牌情报
+                品牌生产线
               </div>
             ) : null}
           </div>

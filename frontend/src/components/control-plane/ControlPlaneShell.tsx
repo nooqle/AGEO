@@ -158,7 +158,7 @@ export function ControlPlaneShell({
 
           <div className="mt-8 space-y-3">
             <Link
-              href="/dashboard"
+              href="/amwaychina"
               className="flex items-center gap-3 rounded-xl border px-3 py-3 text-sm"
               style={{
                 borderColor: palette.border,
@@ -167,7 +167,7 @@ export function ControlPlaneShell({
               }}
             >
               <RiDashboardLine className="h-4 w-4" />
-              回到平台 Dashboard
+              打开品牌生产线
             </Link>
             {asideMeta ? (
               <div

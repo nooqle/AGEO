@@ -26,7 +26,7 @@ export function DashboardTopBar({ onNewAnalysis }: DashboardTopBarProps) {
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={onNewAnalysis ?? (() => router.push('/dashboard'))}
+          onClick={onNewAnalysis ?? (() => router.push('/amwaychina'))}
           className="flex min-h-10 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-medium transition-opacity hover:opacity-90 sm:px-3.5"
           style={{
             background: 'var(--brand-primary)',

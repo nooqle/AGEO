@@ -30,7 +30,7 @@ export type TopologyRecipeSuggestion = {
 };
 
 export type TopologyOrchestrationCardProps = {
-  kind: 'compile_nl' | 'recipe_suggest';
+  kind: 'compile_nl' | 'recipe_suggest' | 'line_guide';
   status:
     | 'loading'
     | 'ready'
@@ -90,7 +90,11 @@ export function TopologyOrchestrationCard({
   onSendAsNormalChat,
 }: TopologyOrchestrationCardProps) {
   const title =
-    kind === 'recipe_suggest' ? JOURNEY.chatRecipeTitle : JOURNEY.chatCompileTitle;
+    kind === 'line_guide'
+      ? JOURNEY.chatLineGuideTitle
+      : kind === 'recipe_suggest'
+        ? JOURNEY.chatRecipeTitle
+        : JOURNEY.chatCompileTitle;
   const flowHref = entityId ? buildProductionLineHref(entityId) : '/amwaychina';
   const busy =
     status === 'loading' || status === 'applying' || status === 'run_starting';
@@ -101,12 +105,13 @@ export function TopologyOrchestrationCard({
       className="mt-2 max-w-xl rounded-lg border border-[var(--brand-border)] bg-[var(--brand-bg)]"
       data-testid="chat-topology-orchestration-card"
       data-status={status}
+      data-kind={kind}
     >
       <div className="flex items-center justify-between gap-2 border-b border-[var(--brand-border)] px-3.5 py-2.5">
         <div>
           <p className="text-sm font-medium text-[var(--text-primary)]">{title}</p>
           <p className="mt-0.5 text-[11px] leading-4 text-[var(--text-tertiary)]">
-            {JOURNEY.chatSharedPipe}
+            {kind === 'line_guide' ? JOURNEY.chatRoleHint : JOURNEY.chatSharedPipe}
           </p>
         </div>
         {onDismiss ? (
@@ -127,6 +132,17 @@ export function TopologyOrchestrationCard({
 
         {status === 'loading' ? (
           <p className="text-xs text-[var(--text-secondary)]">正在生成整图计划预览…</p>
+        ) : null}
+
+        {kind === 'line_guide' && status === 'ready' ? (
+          <div
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2"
+            data-testid="chat-line-guide"
+          >
+            <p className="text-xs leading-5 text-[var(--text-secondary)]">
+              {JOURNEY.chatLineGuideBody}
+            </p>
+          </div>
         ) : null}
 
         {status === 'no_entity' ? (
@@ -255,6 +271,15 @@ export function TopologyOrchestrationCard({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 pt-0.5">
+          {kind === 'line_guide' && status === 'ready' ? (
+            <Link
+              href={flowHref}
+              className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)]"
+            >
+              {JOURNEY.chatLineGuideCta}
+            </Link>
+          ) : null}
+
           {kind === 'compile_nl' &&
           (status === 'ready' || status === 'applying') &&
           compile &&

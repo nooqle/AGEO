@@ -31,13 +31,19 @@ export const JOURNEY = {
   chatCompileTitle: '改生产线 · 整图计划预览',
   chatRecipeTitle: '配方建议',
   chatSharedPipe: '与生产线同一结果 · 需你确认后才写入 · 不会自动开跑',
+  /** Wave Switch / M2: Chat demoted — not the main analysis stage */
+  chatRoleHint: 'Chat 是改生产线的编译器辅入口，不是主分析舞台',
+  chatLineGuideTitle: '请到生产线完成主分析',
+  chatLineGuideBody:
+    '品牌分析与报告生成已迁到「品牌生产线」：定干法 → 开始运行 → 看证据。Chat 只负责改图/配方预览与确认，不再作为默认主分析路径。',
+  chatLineGuideCta: '打开品牌生产线',
   chatNoEntity:
     '当前会话未绑定品牌，无法改生产线或套用配方。请从品牌进入，或打开生产线。',
   chatOpenLine: '打开生产线',
   chatApply: '应用变更',
   chatApplyRecipe: '套用',
   chatViewLine: '在生产线查看',
-  chatAsNormal: '当作普通对话发送',
+  chatAsNormal: '仍作为普通对话发送',
   chatCompileFail: '未能生成可应用的变更。可改用生产线预设，或当作普通对话发送。',
   chatVersionConflict: '生产线已在别处更新。请打开生产线刷新后再试，或重新发送指令。',
   chatApplied: '已写入生产线。可点下方「按此图开始运行」，或打开生产线查看。',

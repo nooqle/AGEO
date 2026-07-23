@@ -991,7 +991,7 @@ function SettingsPageContent() {
             <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
               <div className="max-w-2xl">
                 <Link
-                  href="/dashboard"
+                  href="/amwaychina"
                   className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
                   style={{
                     borderColor: 'var(--border-subtle)',
@@ -1000,7 +1000,7 @@ function SettingsPageContent() {
                   }}
                 >
                   <RiArrowLeftLine className="h-3.5 w-3.5" />
-                  返回概览
+                  返回生产线
                 </Link>
                 <h1 className="mt-5 text-[30px] font-semibold tracking-tight" style={{ color: 'var(--text-primary)' }}>
                   设置
@@ -1035,7 +1035,7 @@ function SettingsPageContent() {
                 请先创建品牌，再回来设置默认品牌和全景自动监测。
               </div>
               <div className="mt-5">
-                <Link href="/dashboard" className="inline-flex h-10 items-center rounded-full border px-4 text-sm font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}>
+                <Link href="/amwaychina" className="inline-flex h-10 items-center rounded-full border px-4 text-sm font-medium" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-primary)' }}>
                   去创建品牌
                 </Link>
               </div>

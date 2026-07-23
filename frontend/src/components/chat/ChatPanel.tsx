@@ -69,7 +69,7 @@ interface ChatPanelProps {
 
 type TopologyOrchCardState = {
   anchorMessageId: string;
-  kind: 'compile_nl' | 'recipe_suggest';
+  kind: 'compile_nl' | 'recipe_suggest' | 'line_guide';
   userText: string;
   status:
     | 'loading'
@@ -2500,12 +2500,25 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
 
   const runTopologyOrchestration = useCallback(
     async (args: {
-      kind: 'compile_nl' | 'recipe_suggest';
+      kind: 'compile_nl' | 'recipe_suggest' | 'line_guide';
       userText: string;
       anchorMessageId: string;
       entityId: string | null;
     }) => {
       const { kind, userText, anchorMessageId, entityId } = args;
+
+      // M2: main-analysis demotion — guide to production line, no agent long-run
+      if (kind === 'line_guide') {
+        setTopologyOrchCard({
+          anchorMessageId,
+          kind: 'line_guide',
+          userText,
+          status: entityId ? 'ready' : 'no_entity',
+          entityId,
+        });
+        return;
+      }
+
       if (!entityId) {
         setTopologyOrchCard({
           anchorMessageId,

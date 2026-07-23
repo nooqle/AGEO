@@ -21,7 +21,7 @@ export function RequireAuth({ children }: RequireAuthProps) {
     let cancelled = false;
     const token = getStoredAccessToken();
     const allowDevBypass = process.env.NODE_ENV === 'development';
-    const nextPath = pathname || '/dashboard';
+    const nextPath = pathname || '/amwaychina';
 
     if (!token && (!allowDevBypass || isControlPlanePath)) {
       redirectToLogin(nextPath);

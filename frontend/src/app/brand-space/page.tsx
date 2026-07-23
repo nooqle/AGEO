@@ -31,7 +31,7 @@ function BrandSpaceContent({ currentUser }: { currentUser: AuthUser }) {
 
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_BRAND_SPACE_ENABLED === 'false') {
-      router.replace('/dashboard');
+      router.replace('/amwaychina');
       return;
     }
     void fetchEntities();

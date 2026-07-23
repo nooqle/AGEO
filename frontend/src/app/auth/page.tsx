@@ -331,7 +331,7 @@ function AuthPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = useMemo(
-    () => resolveAuthNextPath(searchParams.get('next'), '/dashboard'),
+    () => resolveAuthNextPath(searchParams.get('next'), '/amwaychina'),
     [searchParams]
   );
   const requestedMode = useMemo<Mode>(
@@ -408,7 +408,7 @@ function AuthPageContent() {
   const changeMode = (next: Mode) => {
     const query = new URLSearchParams();
     query.set('mode', next);
-    if (nextPath && nextPath !== '/dashboard') {
+    if (nextPath && nextPath !== '/amwaychina' && nextPath !== '/dashboard') {
       query.set('next', nextPath);
     }
     router.replace(`/auth?${query.toString()}`);

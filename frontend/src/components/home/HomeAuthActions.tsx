@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useSyncExternalStore } from 'react';
 import { RiArrowRightUpLine } from '@remixicon/react';
 import { getStoredAccessToken } from '@/lib/auth-storage';
+import { PRODUCT_SHELL_HOME } from '@/lib/productShell';
 
 function subscribeToAuthChanges(onStoreChange: () => void) {
   window.addEventListener('storage', onStoreChange);
@@ -23,8 +24,8 @@ export function HomeAuthLink() {
 
   if (isSignedIn) {
     return (
-      <Link href="/dashboard" className="home-auth-link home-auth-link--signed-in">
-        进入
+      <Link href={PRODUCT_SHELL_HOME} className="home-auth-link home-auth-link--signed-in">
+        进入生产线
         <RiArrowRightUpLine className="h-4 w-4" />
       </Link>
     );

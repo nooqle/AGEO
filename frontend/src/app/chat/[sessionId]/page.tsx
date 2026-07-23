@@ -117,9 +117,9 @@ function ChatPageContent() {
     if (sessionId === 'new' && !isCreatingSessionRef.current) {
       const entityId = searchParams.get('entity_id') || undefined;
 
-      // If no entity_id, redirect to dashboard to use brand selection flow
+      // M2: no entity → production line (brand pick), not legacy Dashboard
       if (!entityId) {
-        router.replace('/dashboard');
+        router.replace('/amwaychina');
         return;
       }
 
@@ -134,7 +134,7 @@ function ChatPageContent() {
         .catch((error) => {
           console.error('[ChatPage] Failed to create session:', error);
           isCreatingSessionRef.current = false;
-          router.replace('/dashboard');
+          router.replace('/amwaychina');
         });
     }
   }, [sessionId, router, searchParams]);

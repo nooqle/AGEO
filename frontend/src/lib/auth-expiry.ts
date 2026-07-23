@@ -55,7 +55,8 @@ function buildLoginPath(nextPath?: string): string {
     nextPath
     || `${window.location.pathname}${window.location.search}${window.location.hash}`;
   const isControlPlane = currentPath.startsWith('/control-plane');
-  const fallback = isControlPlane ? '/control-plane' : '/dashboard';
+  // Wave Switch / M2: default product shell is production line, not Dashboard
+  const fallback = isControlPlane ? '/control-plane' : '/amwaychina';
   const resolvedNextPath = resolveAuthNextPath(currentPath, fallback);
   const basePath = isControlPlane ? '/control-plane/login' : '/auth';
   return `${basePath}?next=${encodeURIComponent(resolvedNextPath)}`;

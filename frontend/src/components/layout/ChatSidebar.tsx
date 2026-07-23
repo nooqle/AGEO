@@ -92,7 +92,7 @@ export function ChatSidebar({
       removeEntity(entityId);
       toast.success('品牌已删除');
       if (activeEntityId === entityId) {
-        router.push('/dashboard');
+        router.push('/amwaychina');
       }
     } catch (error) {
       toast.error(getDeleteBrandErrorMessage(error));
