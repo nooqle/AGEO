@@ -260,8 +260,9 @@ async def recommend_flow_recipes(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Wave C1: deterministic recipe suggestions with visible reasons (no auto-apply)."""
+    """Wave C1 + P: deterministic suggestions with visible calibration (no auto-apply)."""
     from app.services import flow_orchestration_event_service as orch_events
+    from app.services import flow_run_lesson_service as lessons
     from app.services import flow_topology_recipe_recommend as recommend
 
     entity = await require_amway_entity(db, current_user, entity_id)
@@ -289,15 +290,27 @@ async def recommend_flow_recipes(
     event_rows = await orch_events.list_events(db, entity_id=entity.id, limit=50)
     events = [orch_events.event_to_dict(e) for e in event_rows]
 
+    lesson_payload = await lessons.load_lessons_for_entity(db, entity_id=entity.id)
+    lesson_items = (
+        lesson_payload.get("lessons")
+        if isinstance(lesson_payload, dict)
+        else []
+    )
+    if not isinstance(lesson_items, list):
+        lesson_items = []
+
     items = recommend.rank_recommendations(
         recipes=recipe_dicts,
         current_topology=current_topology,
         events=events,
+        lessons=lesson_items,
         intent=intent,
         active_recipe_id=active_recipe_id,
         limit=limit,
     )
-    return recommend.build_recommendation_payload(items)
+    return recommend.build_recommendation_payload(
+        items, events=events, lessons=lesson_items
+    )
 
 
 @router.post("/entities/{entity_id}/flow-recipes/{recipe_id}/apply")

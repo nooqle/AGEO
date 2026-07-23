@@ -1,21 +1,25 @@
 'use client';
 
 /**
- * Wave D: Chat-side preview for topology compile / recipe suggestions.
- * Applies only on explicit user click; deep-links to production-line Console.
+ * Wave D + P + Q: Chat-side full-plan preview for topology compile / recipe suggestions.
+ * Applies only on explicit user click; optional start-run after apply; deep-links Console.
  */
 
 import Link from 'next/link';
 import { buildProductionLineHref } from '@/lib/chatTopologyIntent';
 import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
+import type { ChatCalibrationMeta, ChatPlanStep } from '@/lib/chatTopologyOrchestration';
 
 export type TopologyCompilePreview = {
   summaryText: string;
   planSummary?: string;
   plannedPlatforms: string[];
+  planSteps?: ChatPlanStep[];
+  opsSummary?: string[];
   compileMatched?: string;
   compileMode?: string;
   opsCount: number;
+  calibration?: ChatCalibrationMeta | null;
 };
 
 export type TopologyRecipeSuggestion = {
@@ -27,17 +31,48 @@ export type TopologyRecipeSuggestion = {
 
 export type TopologyOrchestrationCardProps = {
   kind: 'compile_nl' | 'recipe_suggest';
-  status: 'loading' | 'ready' | 'applying' | 'applied' | 'error' | 'no_entity';
+  status:
+    | 'loading'
+    | 'ready'
+    | 'applying'
+    | 'applied'
+    | 'run_starting'
+    | 'run_started'
+    | 'error'
+    | 'no_entity';
   entityId: string | null;
   userText: string;
   error?: string | null;
   compile?: TopologyCompilePreview | null;
   recommendations?: TopologyRecipeSuggestion[];
+  calibration?: ChatCalibrationMeta | null;
   onApplyCompile?: () => void;
   onApplyRecipe?: (recipeId: string) => void;
+  onStartRun?: () => void;
   onDismiss?: () => void;
   onSendAsNormalChat?: () => void;
 };
+
+function CalibrationStrip({ meta }: { meta?: ChatCalibrationMeta | null }) {
+  if (!meta) return null;
+  const signals = Array.isArray(meta.signals) ? meta.signals.slice(0, 4) : [];
+  const parts: string[] = [];
+  if (typeof meta.events_considered === 'number' && meta.events_considered > 0) {
+    parts.push(`近期变更 ${meta.events_considered}`);
+  }
+  if (typeof meta.lessons_considered === 'number' && meta.lessons_considered > 0) {
+    parts.push(`教训 ${meta.lessons_considered}`);
+  }
+  if (meta.memory_injected) parts.push('已注入编译上下文');
+  if (!parts.length && !signals.length) return null;
+  return (
+    <p className="text-[10px] leading-4 text-[var(--text-tertiary)]" data-testid="chat-calibration-hint">
+      {JOURNEY.calibrationHint}
+      {parts.length ? `：${parts.join(' · ')}` : ''}
+      {signals.length ? ` · ${signals.join(' · ')}` : ''}
+    </p>
+  );
+}
 
 export function TopologyOrchestrationCard({
   kind,
@@ -47,15 +82,19 @@ export function TopologyOrchestrationCard({
   error,
   compile,
   recommendations,
+  calibration,
   onApplyCompile,
   onApplyRecipe,
+  onStartRun,
   onDismiss,
   onSendAsNormalChat,
 }: TopologyOrchestrationCardProps) {
   const title =
     kind === 'recipe_suggest' ? JOURNEY.chatRecipeTitle : JOURNEY.chatCompileTitle;
   const flowHref = entityId ? buildProductionLineHref(entityId) : '/amwaychina';
-  const busy = status === 'loading' || status === 'applying';
+  const busy =
+    status === 'loading' || status === 'applying' || status === 'run_starting';
+  const cal = calibration || compile?.calibration || null;
 
   return (
     <div
@@ -87,7 +126,7 @@ export function TopologyOrchestrationCard({
         </p>
 
         {status === 'loading' ? (
-          <p className="text-xs text-[var(--text-secondary)]">正在生成预览…</p>
+          <p className="text-xs text-[var(--text-secondary)]">正在生成整图计划预览…</p>
         ) : null}
 
         {status === 'no_entity' ? (
@@ -108,13 +147,19 @@ export function TopologyOrchestrationCard({
           <p className="text-xs leading-5 text-[var(--error)]">{error}</p>
         ) : null}
 
-        {status === 'applied' ? (
+        {status === 'applied' || status === 'run_starting' || status === 'run_started' ? (
           <p className="text-xs leading-5 text-[var(--brand-primary)]">
-            {JOURNEY.chatApplied}
+            {status === 'run_started'
+              ? JOURNEY.chatRunStarted
+              : status === 'run_starting'
+                ? JOURNEY.chatRunStarting
+                : JOURNEY.chatApplied}
           </p>
         ) : null}
 
-        {kind === 'compile_nl' && compile && (status === 'ready' || status === 'applying') ? (
+        {kind === 'compile_nl' &&
+        compile &&
+        (status === 'ready' || status === 'applying') ? (
           <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
             <p className="text-xs font-medium text-[var(--text-primary)]">
               {compile.summaryText || '无实质变更'}
@@ -129,60 +174,84 @@ export function TopologyOrchestrationCard({
                 计划平台：{compile.plannedPlatforms.join(' · ')}
               </p>
             ) : null}
+            {compile.planSteps && compile.planSteps.length > 0 ? (
+              <ul className="mt-1.5 space-y-0.5" data-testid="chat-plan-steps">
+                {compile.planSteps.map((step, idx) => (
+                  <li
+                    key={`${step.node_id || step.label || idx}`}
+                    className="text-[10px] leading-4 text-[var(--text-tertiary)]"
+                  >
+                    · {step.label || step.node_id || `步骤 ${idx + 1}`}
+                    {step.status ? `（${step.status}）` : ''}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {compile.opsSummary && compile.opsSummary.length > 0 ? (
+              <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">
+                变更：{compile.opsSummary.join(' · ')}
+              </p>
+            ) : null}
             <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">
               ops {compile.opsCount}
               {compile.compileMode ? ` · ${compile.compileMode}` : ''}
               {compile.compileMatched ? ` · ${compile.compileMatched}` : ''}
             </p>
+            <CalibrationStrip meta={cal} />
           </div>
         ) : null}
 
         {kind === 'recipe_suggest' &&
         (status === 'ready' || status === 'applying') &&
         recommendations ? (
-          recommendations.length === 0 ? (
-            <p className="text-xs text-[var(--text-secondary)]">
-              暂无推荐配方。可先在生产线另存配方。
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {recommendations.map((item) => (
-                <li
-                  key={item.recipe_id}
-                  className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 py-2"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-xs font-medium text-[var(--text-primary)]">
-                        {item.name}
-                      </span>
-                      <span className="text-[10px] text-[var(--text-tertiary)]">
-                        {item.scope === 'organization' ? '组织' : '品牌'}
-                      </span>
-                    </div>
-                    <ul className="mt-1 space-y-0.5">
-                      {(item.reasons.length ? item.reasons : ['可见配方池候选']).map((reason) => (
-                        <li
-                          key={`${item.recipe_id}-${reason}`}
-                          className="text-[10px] leading-4 text-[var(--text-tertiary)]"
-                        >
-                          · {reason}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onApplyRecipe?.(item.recipe_id)}
-                    className="inline-flex h-7 shrink-0 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-bg)] px-2.5 text-[11px] font-semibold text-[var(--brand-primary)] transition hover:bg-[var(--brand-primary)] hover:text-[var(--brand-contrast)] disabled:opacity-50"
+          <>
+            <CalibrationStrip meta={cal} />
+            {recommendations.length === 0 ? (
+              <p className="text-xs text-[var(--text-secondary)]">
+                暂无推荐配方。可先在生产线另存配方。
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {recommendations.map((item) => (
+                  <li
+                    key={item.recipe_id}
+                    className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2.5 py-2"
                   >
-                    {JOURNEY.chatApplyRecipe}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs font-medium text-[var(--text-primary)]">
+                          {item.name}
+                        </span>
+                        <span className="text-[10px] text-[var(--text-tertiary)]">
+                          {item.scope === 'organization' ? '组织' : '品牌'}
+                        </span>
+                      </div>
+                      <ul className="mt-1 space-y-0.5">
+                        {(item.reasons.length ? item.reasons : ['可见配方池候选']).map(
+                          (reason) => (
+                            <li
+                              key={`${item.recipe_id}-${reason}`}
+                              className="text-[10px] leading-4 text-[var(--text-tertiary)]"
+                            >
+                              · {reason}
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onApplyRecipe?.(item.recipe_id)}
+                      className="inline-flex h-7 shrink-0 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-bg)] px-2.5 text-[11px] font-semibold text-[var(--brand-primary)] transition hover:bg-[var(--brand-primary)] hover:text-[var(--brand-contrast)] disabled:opacity-50"
+                    >
+                      {JOURNEY.chatApplyRecipe}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 pt-0.5">
@@ -200,6 +269,18 @@ export function TopologyOrchestrationCard({
             </button>
           ) : null}
 
+          {(status === 'applied' || status === 'run_starting') && onStartRun ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onStartRun}
+              className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:opacity-60"
+              data-testid="chat-start-flow-run"
+            >
+              {status === 'run_starting' ? JOURNEY.chatRunStarting : JOURNEY.chatStartRun}
+            </button>
+          ) : null}
+
           {entityId ? (
             <Link
               href={flowHref}
@@ -209,7 +290,8 @@ export function TopologyOrchestrationCard({
             </Link>
           ) : null}
 
-          {onSendAsNormalChat && (status === 'error' || status === 'no_entity' || status === 'ready') ? (
+          {onSendAsNormalChat &&
+          (status === 'error' || status === 'no_entity' || status === 'ready') ? (
             <button
               type="button"
               disabled={busy}

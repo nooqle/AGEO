@@ -268,10 +268,17 @@ async def compile_flow_topology_nl(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """3c-C1/C2: NL → ops → preview shape (no write).
+    """3c-C1/C2 + Wave P: NL → ops → preview (no write).
 
     Rule compiler first; optional LLM with stable ``topology_ops_compiler`` prompt.
+    Visible orchestration memory is injected only into the LLM user payload.
     """
+    from app.services import flow_orchestration_event_service as orch_events
+    from app.services import flow_run_lesson_service as lessons
+    from app.services.flow_calibration_memory import (
+        build_calibration_meta,
+        build_visible_memory_block,
+    )
     from app.workflow.topology_nl_llm import compile_nl_auto
 
     entity = await require_amway_entity(db, current_user, entity_id)
@@ -289,11 +296,26 @@ async def compile_flow_topology_nl(
                 f"当前 version={base_version}。请重新加载后再编译。"
             ),
         )
+
+    event_rows = await orch_events.list_events(db, entity_id=entity.id, limit=15)
+    events = [orch_events.event_to_dict(e) for e in event_rows]
+    lesson_payload = await lessons.load_lessons_for_entity(db, entity_id=entity.id)
+    lesson_items = (
+        lesson_payload.get("lessons") if isinstance(lesson_payload, dict) else []
+    )
+    if not isinstance(lesson_items, list):
+        lesson_items = []
+    visible_memory = build_visible_memory_block(events=events, lessons=lesson_items)
+    memory_nonempty = bool(
+        visible_memory.get("recent_changes") or visible_memory.get("lessons")
+    )
+
     try:
         compiled = await compile_nl_auto(
             body.text,
             base_topology,
             allow_llm=bool(body.allow_llm),
+            visible_memory=visible_memory if memory_nonempty else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -303,6 +325,10 @@ async def compile_flow_topology_nl(
         base_version=base_version,
         body=FlowTopologyPatchRequest(ops=list(compiled.ops)),
     )
+    calibration = build_calibration_meta(events=events, lessons=lesson_items)
+    calibration["memory_injected"] = bool(
+        compiled.mode == "llm" and memory_nonempty
+    )
     return {
         **result,
         "compile": {
@@ -310,6 +336,7 @@ async def compile_flow_topology_nl(
             "matched": compiled.matched,
             "intent_id": compiled.intent_id,
             "confidence": compiled.confidence,
+            "calibration": calibration,
         },
     }
 
@@ -377,14 +404,22 @@ async def apply_flow_topology_patch(
         summary_text = ""
         if isinstance(result.get("summary"), dict):
             summary_text = str(result["summary"].get("text") or "")
+        from app.services.flow_calibration_memory import (
+            ops_preview,
+            platforms_touched_from_ops,
+        )
+
+        ops_list = list(result.get("ops") or body.ops or [])
         await orch_events.append_event(
             db,
             entity_id=entity.id,
             event_type="apply_patch",
             summary=summary_text or "应用了拓扑编排变更",
             payload={
-                "ops_count": len(result.get("ops") or []),
+                "ops_count": len(ops_list),
                 "intent_id": body.intent_id,
+                "ops_preview": ops_preview(ops_list),
+                "platforms_touched": platforms_touched_from_ops(ops_list),
             },
             created_by_user_id=user_id,
         )

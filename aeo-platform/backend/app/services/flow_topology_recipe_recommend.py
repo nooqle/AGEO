@@ -1,17 +1,22 @@
-"""Deterministic recipe recommendations with visible reasons (Wave C / 3b-2.2 v0).
+"""Deterministic recipe recommendations with visible reasons (Wave C / Wave P).
 
 No LLM, no silent apply, no black-box learning. Ranking uses:
 - entity vs organization scope
 - recent apply_recipe orchestration events
 - structural similarity of topology (fetch platforms / removed edges)
 - optional intent keyword match on name/description
+- Wave P: visible lessons + soft apply_patch signals (calibration, not auto-apply)
 """
 
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID
 
+from app.services.flow_calibration_memory import (
+    build_calibration_meta,
+    lesson_alignment_for_recipe,
+    patch_event_soft_signals,
+)
 from app.workflow.topology_resolver import CANVAS_PLATFORM_IDS, platform_edge_id
 
 # Scoring weights (absolute points; sorted descending)
@@ -25,6 +30,7 @@ W_UPDATED_RECENCY_SOFT = 5  # tiny tie-break via updated_at presence only in cal
 
 DEFAULT_LIMIT = 3
 MAX_LIMIT = 5
+MAX_REASONS = 6
 
 
 def _as_dict(topology: Any) -> dict[str, Any]:
@@ -106,6 +112,10 @@ def score_recipe_candidate(
     last_applied_recipe_id: str | None,
     intent: str | None = None,
     active_recipe_id: str | None = None,
+    lessons: list[dict[str, Any]] | None = None,
+    current_topology: dict[str, Any] | None = None,
+    patch_pts: float = 0.0,
+    patch_reasons: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """
     Score one recipe. Returns None if it should be excluded from suggestions
@@ -152,6 +162,25 @@ def score_recipe_candidate(
     if intent_reason:
         reasons.append(intent_reason)
 
+    # Wave P: lesson alignment (visible calibration)
+    lesson_pts, lesson_reasons = lesson_alignment_for_recipe(
+        recipe_topology=recipe.get("topology")
+        if isinstance(recipe.get("topology"), dict)
+        else {},
+        lessons=lessons,
+        current_topology=current_topology,
+    )
+    score += lesson_pts
+    reasons.extend(lesson_reasons)
+
+    # Soft global patch signal (same for all candidates; mild tie-break via presence)
+    if patch_pts > 0:
+        score += patch_pts * 0.25  # keep mild; avoid drowning structure
+        for r in patch_reasons or []:
+            if r not in reasons and len(reasons) < MAX_REASONS:
+                reasons.append(r)
+                break
+
     # Ensure at least one concrete reason
     if not reasons:
         reasons.append("可见配方池候选")
@@ -163,7 +192,7 @@ def score_recipe_candidate(
         "description": recipe.get("description"),
         "version": int(recipe.get("version") or 1),
         "score": round(score, 2),
-        "reasons": reasons,
+        "reasons": reasons[:MAX_REASONS],
     }
 
 
@@ -172,11 +201,12 @@ def rank_recommendations(
     recipes: list[dict[str, Any]],
     current_topology: dict[str, Any] | None,
     events: list[dict[str, Any]] | None = None,
+    lessons: list[dict[str, Any]] | None = None,
     intent: str | None = None,
     active_recipe_id: str | None = None,
     limit: int = DEFAULT_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Pure ranking over already-serialized recipe dicts + event dicts."""
+    """Pure ranking over already-serialized recipe dicts + event/lesson dicts."""
     lim = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
     current_sig = topology_structure_signature(current_topology)
 
@@ -195,6 +225,8 @@ def rank_recommendations(
         if last_applied is None:
             last_applied = rid  # events assumed newest-first
 
+    patch_pts, patch_reasons = patch_event_soft_signals(events)
+
     scored: list[dict[str, Any]] = []
     for r in recipes:
         if not isinstance(r, dict):
@@ -206,6 +238,10 @@ def rank_recommendations(
             last_applied_recipe_id=last_applied,
             intent=intent,
             active_recipe_id=active_recipe_id,
+            lessons=lessons,
+            current_topology=current_topology,
+            patch_pts=patch_pts,
+            patch_reasons=patch_reasons,
         )
         if item is not None and item["score"] > 0:
             scored.append(item)
@@ -216,9 +252,13 @@ def rank_recommendations(
 
 def build_recommendation_payload(
     items: list[dict[str, Any]],
+    *,
+    events: list[dict[str, Any]] | None = None,
+    lessons: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "recommendations": items,
-        "engine": "deterministic_v0",
+        "engine": "deterministic_v1",
         "auto_applied": False,
+        "calibration": build_calibration_meta(events=events, lessons=lessons),
     }

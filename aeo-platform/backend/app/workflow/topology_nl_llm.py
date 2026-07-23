@@ -105,6 +105,8 @@ def _filter_ops(raw_ops: Any) -> list[dict[str, Any]]:
 async def compile_nl_with_llm(
     text: str,
     base: dict[str, Any] | None = None,
+    *,
+    visible_memory: dict[str, Any] | None = None,
 ) -> CompileResult:
     """Call LLM with stable system + trailing user payload; validate ops."""
     from app.core.llm import get_llm_model
@@ -114,7 +116,7 @@ async def compile_nl_with_llm(
         raise ValueError("请输入编排指令")
 
     system = _load_stable_system_prompt()
-    user_payload = {
+    user_payload: dict[str, Any] = {
         "instruction": raw,
         "topology": compact_topology_for_compiler(base),
         "hint": (
@@ -122,6 +124,11 @@ async def compile_nl_with_llm(
             "If unclear return {\"ops\":[],\"error\":\"cannot_compile\"}."
         ),
     }
+    # Wave P: dynamic memory only in trailing user message (never system)
+    if isinstance(visible_memory, dict) and (
+        visible_memory.get("recent_changes") or visible_memory.get("lessons")
+    ):
+        user_payload["visible_memory"] = visible_memory
     response = await get_llm_model().async_call(
         messages=[
             {"role": "system", "content": system},
@@ -166,6 +173,7 @@ async def compile_nl_auto(
     base: dict[str, Any] | None = None,
     *,
     allow_llm: bool = True,
+    visible_memory: dict[str, Any] | None = None,
 ) -> CompileResult:
     """Rule-first, then LLM when rules miss (C2 hybrid)."""
     try:
@@ -174,7 +182,9 @@ async def compile_nl_auto(
         if not allow_llm:
             raise
         try:
-            return await compile_nl_with_llm(text, base)
+            return await compile_nl_with_llm(
+                text, base, visible_memory=visible_memory
+            )
         except Exception as llm_exc:
             logger.info(
                 "[topology-nl] rule miss + llm fail rule=%s llm=%s",

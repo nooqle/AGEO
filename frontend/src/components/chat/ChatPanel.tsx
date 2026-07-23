@@ -49,6 +49,7 @@ import {
   applyChatCompilePatch,
   applyChatRecipe,
   loadChatCompilePreview,
+  startChatFlowRun,
   loadChatRecipeSuggestions,
 } from '@/lib/chatTopologyOrchestration';
 import {
@@ -70,13 +71,22 @@ type TopologyOrchCardState = {
   anchorMessageId: string;
   kind: 'compile_nl' | 'recipe_suggest';
   userText: string;
-  status: 'loading' | 'ready' | 'applying' | 'applied' | 'error' | 'no_entity';
+  status:
+    | 'loading'
+    | 'ready'
+    | 'applying'
+    | 'applied'
+    | 'run_starting'
+    | 'run_started'
+    | 'error'
+    | 'no_entity';
   entityId: string | null;
   error?: string | null;
   ops?: Array<Record<string, unknown>>;
   expectedVersion?: number | null;
   compile?: TopologyCompilePreview | null;
   recommendations?: TopologyRecipeSuggestion[];
+  calibration?: import('@/lib/chatTopologyOrchestration').ChatCalibrationMeta | null;
 };
 
 interface DashboardHandoffView {
@@ -2551,6 +2561,7 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
           status: 'ready',
           entityId,
           recommendations: result.recommendations as TopologyRecipeSuggestion[],
+          calibration: result.calibration || null,
         });
       } catch (err) {
         setTopologyOrchCard({
@@ -2694,6 +2705,28 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
     },
     [topologyOrchCard],
   );
+
+  /** Wave Q: explicit second click after apply — never auto-run. */
+  const handleStartTopologyRun = useCallback(async () => {
+    const card = topologyOrchCard;
+    if (!card || !card.entityId) return;
+    if (card.status !== 'applied' && card.status !== 'run_starting') return;
+    if (card.status === 'run_starting') return;
+    setTopologyOrchCard({ ...card, status: 'run_starting', error: null });
+    try {
+      await startChatFlowRun(card.entityId);
+      setTopologyOrchCard({ ...card, status: 'run_started', error: null });
+      toast.success(JOURNEY.chatRunStarted);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : JOURNEY.chatRunFail;
+      setTopologyOrchCard({
+        ...card,
+        status: 'applied',
+        error: message || JOURNEY.chatRunFail,
+      });
+      toast.error(message || JOURNEY.chatRunFail);
+    }
+  }, [topologyOrchCard]);
 
   // Auto-send brand name when navigating from Dashboard with ?brand= param
   useEffect(() => {
@@ -3183,11 +3216,15 @@ export function ChatPanel({ sessionId, entityId: entityIdProp, className, exampl
                       error={orch.error}
                       compile={orch.compile}
                       recommendations={orch.recommendations}
+                      calibration={orch.calibration}
                       onApplyCompile={() => {
                         void handleApplyTopologyCompile();
                       }}
                       onApplyRecipe={(recipeId) => {
                         void handleApplyTopologyRecipe(recipeId);
+                      }}
+                      onStartRun={() => {
+                        void handleStartTopologyRun();
                       }}
                       onDismiss={() => setTopologyOrchCard(null)}
                       onSendAsNormalChat={() => {

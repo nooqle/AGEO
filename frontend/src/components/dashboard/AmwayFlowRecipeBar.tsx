@@ -32,6 +32,13 @@ type RecipeSuggestion = {
   score: number;
 };
 
+type CalibrationMeta = {
+  events_considered?: number;
+  lessons_considered?: number;
+  signals?: string[];
+  auto_applied?: boolean;
+};
+
 export function AmwayFlowRecipeBar({
   entityId,
   getExpectedVersion,
@@ -64,6 +71,7 @@ export function AmwayFlowRecipeBar({
 }) {
   const [recipes, setRecipes] = useState<RecipeItem[]>([]);
   const [suggestions, setSuggestions] = useState<RecipeSuggestion[]>([]);
+  const [calibration, setCalibration] = useState<CalibrationMeta | null>(null);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,8 +109,10 @@ export function AmwayFlowRecipeBar({
           score: item.score,
         })),
       );
+      setCalibration(resp.calibration || null);
     } catch {
       setSuggestions([]);
+      setCalibration(null);
     } finally {
       setSuggestionsLoading(false);
     }
@@ -317,6 +327,27 @@ export function AmwayFlowRecipeBar({
           <p className="mt-0.5 text-[10px] leading-4 text-[var(--text-tertiary)]">
             {JOURNEY.recipeSuggestHint}
           </p>
+          {calibration &&
+          ((calibration.lessons_considered || 0) > 0 ||
+            (calibration.events_considered || 0) > 0) ? (
+            <p
+              className="mt-1 text-[10px] leading-4 text-[var(--text-tertiary)]"
+              data-testid="recipe-calibration-hint"
+            >
+              {JOURNEY.calibrationHint}
+              {typeof calibration.lessons_considered === 'number' &&
+              calibration.lessons_considered > 0
+                ? ` · 教训 ${calibration.lessons_considered}`
+                : ''}
+              {typeof calibration.events_considered === 'number' &&
+              calibration.events_considered > 0
+                ? ` · 变更 ${calibration.events_considered}`
+                : ''}
+              {Array.isArray(calibration.signals) && calibration.signals.length
+                ? ` · ${calibration.signals.slice(0, 3).join(' · ')}`
+                : ''}
+            </p>
+          ) : null}
           {suggestionsLoading && suggestions.length === 0 ? (
             <p className="mt-2 text-[11px] text-[var(--text-tertiary)]">正在加载建议…</p>
           ) : null}

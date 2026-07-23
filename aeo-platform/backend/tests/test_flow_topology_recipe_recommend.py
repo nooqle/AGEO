@@ -110,5 +110,37 @@ def test_rank_uses_apply_events_and_excludes_active():
 def test_payload_never_auto_applied():
     payload = build_recommendation_payload([])
     assert payload["auto_applied"] is False
-    assert payload["engine"] == "deterministic_v0"
+    assert payload["engine"] == "deterministic_v1"
     assert payload["recommendations"] == []
+    assert payload["calibration"]["auto_applied"] is False
+
+
+def test_rank_lesson_alignment_prefers_matching_skip():
+    """Wave P: recipe that also skips doubao gets lesson alignment reason."""
+    recipes = [
+        _recipe("full", "全平台", entity=True),
+        _recipe("skip", "跳过豆包版", entity=True, removed=["e-fetch-doubao"]),
+    ]
+    current = {**EMPTY_TOPOLOGY, "removedEdgeIds": ["e-fetch-doubao"]}
+    lessons = [
+        {
+            "id": "topology:skip:doubao",
+            "node_id": "platform-doubao",
+            "kind": "skipped_platform",
+            "headline": "当前生产线未连接豆包，运行将跳过该平台采集。",
+            "source": "topology",
+        }
+    ]
+    ranked = rank_recommendations(
+        recipes=recipes,
+        current_topology=current,
+        events=[],
+        lessons=lessons,
+        limit=3,
+    )
+    assert ranked
+    assert ranked[0]["recipe_id"] == "skip"
+    assert any("教训" in r or "跳过" in r for r in ranked[0]["reasons"])
+    payload = build_recommendation_payload(ranked, events=[], lessons=lessons)
+    assert payload["calibration"]["lessons_considered"] == 1
+    assert payload["calibration"]["auto_applied"] is False

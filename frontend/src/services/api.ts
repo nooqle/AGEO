@@ -1968,6 +1968,12 @@ class ApiService {
     }>;
     engine?: string;
     auto_applied?: boolean;
+    calibration?: {
+      events_considered?: number;
+      lessons_considered?: number;
+      signals?: string[];
+      auto_applied?: boolean;
+    };
   }> {
     const qs = new URLSearchParams();
     if (opts?.intent?.trim()) qs.set('intent', opts.intent.trim());
@@ -1993,12 +1999,24 @@ class ApiService {
     proposed: { topology: AmwayFlowTopologyDoc };
     ops: Array<Record<string, unknown>>;
     summary: { text: string; [key: string]: unknown };
-    plan: { planned_platforms?: string[]; summary?: string; [key: string]: unknown };
+    plan: {
+      planned_platforms?: string[];
+      summary?: string;
+      steps?: Array<Record<string, unknown>>;
+      [key: string]: unknown;
+    };
     compile: {
       mode: string;
       matched: string;
       intent_id?: string | null;
       confidence?: number;
+      calibration?: {
+        events_considered?: number;
+        lessons_considered?: number;
+        signals?: string[];
+        memory_injected?: boolean;
+        auto_applied?: boolean;
+      };
     };
   }> {
     return this.request(`/amwaychina/entities/${entityId}/flow-topology/compile-nl`, {
