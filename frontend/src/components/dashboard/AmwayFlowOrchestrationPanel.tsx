@@ -31,6 +31,8 @@ export function AmwayFlowOrchestrationPanel({
   entityId,
   /** Live canvas gates — topology lessons update instantly (no PUT race). */
   removedEdgeIds = [],
+  /** Increments after topology PUT / apply so recipe suggestions re-rank. */
+  topologySaveEpoch = 0,
   getExpectedVersion,
   setExpectedVersion,
   onTopologyApplied,
@@ -42,6 +44,7 @@ export function AmwayFlowOrchestrationPanel({
 }: {
   entityId: string;
   removedEdgeIds?: string[];
+  topologySaveEpoch?: number;
   getExpectedVersion: () => number | null;
   setExpectedVersion: (version: number) => void;
   onTopologyApplied: (topology: AmwayFlowTopologyDoc, meta?: { recipeName?: string }) => void;
@@ -214,6 +217,8 @@ export function AmwayFlowOrchestrationPanel({
         <AmwayFlowRecipeBar
           embedded
           entityId={entityId}
+          removedEdgeIds={removedEdgeIds}
+          topologySaveEpoch={topologySaveEpoch}
           getExpectedVersion={getExpectedVersion}
           setExpectedVersion={setExpectedVersion}
           onTopologyApplied={(topology, meta) => {

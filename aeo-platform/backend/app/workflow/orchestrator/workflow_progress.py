@@ -7,6 +7,7 @@ from typing import Any, Mapping
 from app.workflow.orchestrator.history_query import (
     _is_question_generation_only_state,
 )
+from app.workflow.orchestrator.tool_node_map import TOOL_TO_NODE
 
 WORKFLOW_STEPS = [
     ("A1", "品牌信息采集", "brand_profile"),

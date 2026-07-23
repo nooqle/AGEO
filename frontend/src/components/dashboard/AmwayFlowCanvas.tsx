@@ -192,6 +192,8 @@ export function AmwayFlowCanvas({
   // id 生成等不纯逻辑在调用处完成；持久化副作用统一收敛到下方 useEffect。
   const topologyDirtyRef = useRef(false);
   const topologyVersionRef = useRef<number | null>(null);
+  /** Bumps after successful topology PUT so recipe suggest reloads post-persist (P-F1 race). */
+  const [topologySaveEpoch, setTopologySaveEpoch] = useState(0);
   const [topologySaveError, setTopologySaveError] = useState<string | null>(null);
   /**
    * Wave O UX: topology lessons are synthesized locally (instant).
@@ -231,6 +233,8 @@ export function AmwayFlowCanvas({
           topologyVersionRef.current = resp.version;
         }
         setTopologySaveError(null);
+        // Server is authoritative for recommend/lessons ranking — re-fetch after PUT lands.
+        setTopologySaveEpoch((n) => n + 1);
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : '拓扑保存失败';
@@ -1166,6 +1170,7 @@ export function AmwayFlowCanvas({
               <AmwayFlowOrchestrationPanel
                 entityId={entityId}
                 removedEdgeIds={topology.removedEdgeIds}
+                topologySaveEpoch={topologySaveEpoch}
                 getExpectedVersion={() => topologyVersionRef.current}
                 setExpectedVersion={(version) => {
                   topologyVersionRef.current = version;
@@ -1183,6 +1188,7 @@ export function AmwayFlowCanvas({
                   setTopology(next);
                   writeFlowTopology(entityId, next);
                   setEnabledPlatforms(syncPlatformStorageFromTopology(entityId, next));
+                  setTopologySaveEpoch((n) => n + 1);
                 }}
               />
             </div>

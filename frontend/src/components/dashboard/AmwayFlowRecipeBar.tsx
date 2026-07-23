@@ -15,6 +15,7 @@ import {
   getOrLoadFlowCache,
   invalidateFlowEntityCache,
 } from '@/lib/amwayFlowEntityCache';
+import { removedEdgeIdsKey } from '@/components/dashboard/amway-flow/lessons';
 
 type RecipeItem = {
   id: string;
@@ -41,6 +42,9 @@ type CalibrationMeta = {
 
 export function AmwayFlowRecipeBar({
   entityId,
+  /** Wave P fix: reload suggestions when canvas gates change (not only full page refresh). */
+  removedEdgeIds = [],
+  topologySaveEpoch = 0,
   getExpectedVersion,
   setExpectedVersion,
   onTopologyApplied,
@@ -54,6 +58,8 @@ export function AmwayFlowRecipeBar({
   onActiveRecipeCleared,
 }: {
   entityId: string;
+  removedEdgeIds?: string[];
+  topologySaveEpoch?: number;
   getExpectedVersion: () => number | null;
   setExpectedVersion: (version: number) => void;
   onTopologyApplied: (
@@ -69,6 +75,7 @@ export function AmwayFlowRecipeBar({
   activeRecipeId?: string | null;
   onActiveRecipeCleared?: () => void;
 }) {
+  const topologyGateKey = `${removedEdgeIdsKey(removedEdgeIds)}|e${topologySaveEpoch}`;
   const [recipes, setRecipes] = useState<RecipeItem[]>([]);
   const [suggestions, setSuggestions] = useState<RecipeSuggestion[]>([]);
   const [calibration, setCalibration] = useState<CalibrationMeta | null>(null);
@@ -92,13 +99,16 @@ export function AmwayFlowRecipeBar({
     setSuggestionsLoading(true);
     try {
       const activeKey = activeRecipeDirty ? '' : activeRecipeId || '';
+      // Cache key must include topology gates — otherwise post-edge-disconnect
+      // returns pre-change reasons until full page refresh (P-F1).
       const resp = await getOrLoadFlowCache(
-        flowCacheKey([entityId, 'recommend', activeKey]),
+        flowCacheKey([entityId, 'recommend', activeKey, topologyGateKey]),
         () =>
           api.recommendAmwayFlowRecipes(entityId, {
             activeRecipeId: activeRecipeDirty ? null : activeRecipeId,
             limit: 3,
           }),
+        4_000,
       );
       setSuggestions(
         (resp.recommendations || []).map((item) => ({
@@ -116,7 +126,7 @@ export function AmwayFlowRecipeBar({
     } finally {
       setSuggestionsLoading(false);
     }
-  }, [activeRecipeDirty, activeRecipeId, entityId]);
+  }, [activeRecipeDirty, activeRecipeId, entityId, topologyGateKey]);
 
   const reload = useCallback(async () => {
     try {
