@@ -1918,6 +1918,7 @@ class ApiService {
       kind: string;
       headline: string;
       source?: string;
+      dismissible?: boolean;
       auto_applied?: boolean;
     }>;
     engine?: string;

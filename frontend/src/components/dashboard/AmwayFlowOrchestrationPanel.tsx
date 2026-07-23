@@ -5,7 +5,7 @@
  * Keeps AmwayFlowCanvas free of dual stacked tool chrome.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { api, type AmwayFlowTopologyDoc } from '@/services/api';
 import {
@@ -20,9 +20,17 @@ import {
   getOrLoadFlowCache,
   invalidateFlowEntityCache,
 } from '@/lib/amwayFlowEntityCache';
+import {
+  lessonsFromTopologyRemovedEdges,
+  mergeFlowLessons,
+  removedEdgeIdsKey,
+  type FlowLessonItem,
+} from '@/components/dashboard/amway-flow/lessons';
 
 export function AmwayFlowOrchestrationPanel({
   entityId,
+  /** Live canvas gates — topology lessons update instantly (no PUT race). */
+  removedEdgeIds = [],
   getExpectedVersion,
   setExpectedVersion,
   onTopologyApplied,
@@ -33,6 +41,7 @@ export function AmwayFlowOrchestrationPanel({
   activeRunCompleted = false,
 }: {
   entityId: string;
+  removedEdgeIds?: string[];
   getExpectedVersion: () => number | null;
   setExpectedVersion: (version: number) => void;
   onTopologyApplied: (topology: AmwayFlowTopologyDoc, meta?: { recipeName?: string }) => void;
@@ -51,9 +60,19 @@ export function AmwayFlowOrchestrationPanel({
     Array<{ id: string; summary: string; created_at?: string | null; event_type: string }>
   >([]);
   const [lessonsOpen, setLessonsOpen] = useState(true);
-  const [lessons, setLessons] = useState<
-    Array<{ id: string; node_id: string; headline: string; kind: string }>
-  >([]);
+  const [remoteLessons, setRemoteLessons] = useState<FlowLessonItem[]>([]);
+  const topologyRemovedKey = useMemo(
+    () => removedEdgeIdsKey(removedEdgeIds),
+    [removedEdgeIds],
+  );
+  const localTopologyLessons = useMemo(
+    () => lessonsFromTopologyRemovedEdges(removedEdgeIds),
+    [topologyRemovedKey, removedEdgeIds],
+  );
+  const lessons = useMemo(
+    () => mergeFlowLessons(localTopologyLessons, remoteLessons),
+    [localTopologyLessons, remoteLessons],
+  );
 
   const persistRecipeSession = useCallback(
     (next: { id: string; name: string; dirty: boolean } | null) => {
@@ -87,16 +106,19 @@ export function AmwayFlowOrchestrationPanel({
   const reloadLessons = useCallback(async () => {
     try {
       const resp = await api.listAmwayFlowLessons(entityId);
-      setLessons(
-        (resp.lessons || []).map((item) => ({
-          id: item.id,
-          node_id: item.node_id,
-          headline: item.headline,
-          kind: item.kind,
-        })),
+      setRemoteLessons(
+        (resp.lessons || [])
+          .filter((item) => item?.node_id && item?.headline)
+          .map((item) => ({
+            id: item.id,
+            node_id: item.node_id,
+            kind: item.kind,
+            headline: item.headline,
+            source: item.source,
+          })),
       );
     } catch {
-      setLessons([]);
+      setRemoteLessons([]);
     }
   }, [entityId]);
 
@@ -123,7 +145,7 @@ export function AmwayFlowOrchestrationPanel({
 
   useEffect(() => {
     void reloadLessons();
-  }, [reloadLessons, activeRunCompleted, latestCompleted]);
+  }, [reloadLessons, activeRunCompleted, latestCompleted, topologyRemovedKey]);
 
   const suggestSaveAfterRun = activeRunCompleted || latestCompleted;
 

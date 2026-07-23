@@ -215,7 +215,7 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 
 **现状：** 蓝图 3a→3b→3c 主工程路径已通；**配方 v0** 立住可见编排记忆；运行简化为一点即跑；**Canvas/API 拆分 P0–P1 已完成，P2 巨石未动**；校准复利与 Chat 主入口、推荐未做；视觉方向对但生产线新层偏工具化。
 
-**下一步：** Orch **阶段 A+B 已收口**。**Wave O 节点运行教训 annotation v0 PASS**（验收：`2026-07-22-wave-o-flow-lessons-annotation-v0-acceptance.md`，手测 3/3）。非阻断：教训刷新有数秒延迟，可作体验优化。阶段 C 薄壳 / Chat 终局另立项；不做黑盒自学。
+**下一步：** Orch **阶段 A+B 已收口**。**Wave O 节点运行教训 annotation v0 PASS**（验收：`2026-07-22-wave-o-flow-lessons-annotation-v0-acceptance.md`，手测 3/3；断边即时刷新已用 FE 本地合成收口）。阶段 C 薄壳 / Chat 终局另立项；不做黑盒自学。
 
 ---
 

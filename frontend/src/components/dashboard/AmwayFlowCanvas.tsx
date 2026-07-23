@@ -94,6 +94,13 @@ import {
   writeEnabledFlowPlatforms,
   writeFlowTopology,
 } from './amway-flow/topologyDoc';
+import {
+  lessonsFromTopologyRemovedEdges,
+  lessonsToNodeHeadlineMap,
+  mergeFlowLessons,
+  removedEdgeIdsKey,
+  type FlowLessonItem,
+} from './amway-flow/lessons';
 import { runFlowAnalysis } from './amway-flow/analysis';
 import {
   buildDefaultPositions,
@@ -186,8 +193,23 @@ export function AmwayFlowCanvas({
   const topologyDirtyRef = useRef(false);
   const topologyVersionRef = useRef<number | null>(null);
   const [topologySaveError, setTopologySaveError] = useState<string | null>(null);
-  /** Wave O: node_id → lesson headline */
-  const [lessonsByNodeId, setLessonsByNodeId] = useState<Record<string, string>>({});
+  /**
+   * Wave O UX: topology lessons are synthesized locally (instant).
+   * Remote API only supplements run/event lessons (ignores stale topology rows).
+   */
+  const [remoteLessons, setRemoteLessons] = useState<FlowLessonItem[]>([]);
+  const topologyRemovedKey = useMemo(
+    () => removedEdgeIdsKey(topology.removedEdgeIds),
+    [topology.removedEdgeIds],
+  );
+  const localTopologyLessons = useMemo(
+    () => lessonsFromTopologyRemovedEdges(topology.removedEdgeIds),
+    [topologyRemovedKey, topology.removedEdgeIds],
+  );
+  const lessonsByNodeId = useMemo(
+    () => lessonsToNodeHeadlineMap(mergeFlowLessons(localTopologyLessons, remoteLessons)),
+    [localTopologyLessons, remoteLessons],
+  );
   const updateTopology = useCallback(
     (updater: (current: FlowTopology) => FlowTopology) => {
       topologyDirtyRef.current = true;
@@ -259,28 +281,32 @@ export function AmwayFlowCanvas({
     };
   }, [entityId]);
 
-  // Wave O: visible lessons (topology + last run + orchestration events)
+  // Wave O: remote run/event lessons (topology rows discarded in merge — local wins)
   useEffect(() => {
     let cancelled = false;
     void api
       .listAmwayFlowLessons(entityId)
       .then((resp) => {
         if (cancelled) return;
-        const map: Record<string, string> = {};
-        for (const item of resp.lessons || []) {
-          if (!item?.node_id || !item?.headline) continue;
-          // First headline wins (backend already prioritizes topology/run)
-          if (!map[item.node_id]) map[item.node_id] = item.headline;
-        }
-        setLessonsByNodeId(map);
+        setRemoteLessons(
+          (resp.lessons || [])
+            .filter((item) => item?.node_id && item?.headline)
+            .map((item) => ({
+              id: item.id,
+              node_id: item.node_id,
+              kind: item.kind,
+              headline: item.headline,
+              source: item.source,
+            })),
+        );
       })
       .catch(() => {
-        if (!cancelled) setLessonsByNodeId({});
+        if (!cancelled) setRemoteLessons([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [entityId, topology.removedEdgeIds, activeRun?.id, activeRun?.status]);
+  }, [entityId, topologyRemovedKey, activeRun?.id, activeRun?.status]);
 
   // Keep localStorage platform switches aligned with topology gates (B3)
   useEffect(() => {
@@ -1139,6 +1165,7 @@ export function AmwayFlowCanvas({
               ) : null}
               <AmwayFlowOrchestrationPanel
                 entityId={entityId}
+                removedEdgeIds={topology.removedEdgeIds}
                 getExpectedVersion={() => topologyVersionRef.current}
                 setExpectedVersion={(version) => {
                   topologyVersionRef.current = version;
