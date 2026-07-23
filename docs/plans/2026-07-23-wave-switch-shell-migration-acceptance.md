@@ -70,24 +70,34 @@
 | F1 | 登录后默认进生产线，不经旧 Dashboard 能开始工作 | **PASS**（首轮） |
 | F2 | 直接访问 `/dashboard` 被带到 `/amwaychina` | **PASS**（首轮） |
 | F3 | Chat「帮我分析品牌…生成报告」出现生产线引导卡，不直接进 agent 长跑 | **PASS**（首轮） |
-| F4 | Chat「跳过豆包」等编排仍可用（compile） | ❌ 首轮 FAIL（Failed to fetch / 鉴权 MemoryError）→ **已修** · ⬜ 复测 |
-| F5 | 逃生口「仍作为普通对话发送」可走 WS | 部分（WS/API 证据；浏览器手点未完成）· ⬜ 补手点 |
-| F6 | 生产线起跑/M1 能力不回退 | 部分（API run→A4；按钮手点未完成）· ⬜ 补手点 |
+| F4 | Chat「跳过豆包」等编排仍可用（compile） | **PASS**（复测：完整预览，无 Failed to fetch） |
+| F5 | 逃生口「仍作为普通对话发送」可走 WS | **PASS**（复测：进入普通 WS 分析） |
+| F6 | 生产线起跑/M1 能力不回退 | **PASS**（复测：正在运行 → A4；未立刻 failed） |
 | E1 | intent 脚本绿；中文无 `???` | ✓ 工程 |
 | E2 | 无静默改图/auto-run 回潮 | ✓ 代码纪律 |
 | E3 | 鉴权轻量加载单测 | ✓ `test_user_auth_lightweight_load` |
+| **P1** | 打开生产线不重复创建安利实体；run 绑原 entity | ❌ 复测发现 → **已修** · ⬜ 复验 |
 
-| **总裁决** | **暂不 PASS · F4 阻塞已修 · 请复测 F4 + 补 F5/F6 手点** |
+| **总裁决** | **暂不 PASS · P1 实体重复已修 · 请按三条复验** |
 |---|---|
 
-### F4 根因与修复（2026-07-23）
+### F4 根因与修复（鉴权 OOM）
 
 | 项 | 内容 |
 |---|---|
 | 信号 | 前端 Failed to fetch；后端 asyncpg 解码 messages **MemoryError** |
 | 根因 | `get_current_user` → User 关系 `selectin` 级联：org → entities → sessions → **全部 messages** |
-| 修复 | User/Entity/Session/Organization 大集合改 `lazy=select`；`_lightweight_user_select` 对 sessions/owned_entities **noload**，org 下 users/entities **noload**；`require_amway_entity` 不再 selectin sessions |
-| 旁证 | 重启后直打 compile 曾 200 + rule/skip_doubao（引擎本身正常） |
+| 修复 | 大集合改 `lazy=select`；auth `noload(sessions/owned_entities/organization)`；`require_amway_entity` 不 selectin sessions |
+| 复测 | PASS |
+
+### P1 根因与修复（安利实体重复 · 鉴权 noload 污染）
+
+| 项 | 内容 |
+|---|---|
+| 信号 | 三次加载新增 6 条「安利」；F6 run 绑到新 entity 而非 `18e1597a-…` |
+| 根因 | `_lightweight_user_select` 对 `Organization.entities` **noload** → 同一 Session 内后续 `selectinload` 仍见空集合 → `feature_entitlements` 误创建 |
+| 修复 | auth **不再** load/noload org.entities；只 `noload(organization)`；entitlement/`ensure_*` 一律 **查 Entity 表**，不信 `organization.entities` |
+| 复验 | ① 并发两次 `/feature-entitlements/amwaychina` 同 `entity_id` ② 组织实体数不增 ③ 开始运行绑原安利实体 |
 
 ---
 

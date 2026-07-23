@@ -2,28 +2,30 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import noload, selectinload
+from sqlalchemy.orm import noload
 
 from app.core.security import hash_password, verify_password
-from app.models.organization import Organization
 from app.models.user import User, UserRole, UserStatus
 from app.services.identity_normalization_service import normalize_email, normalize_phone
 
 
 def _lightweight_user_select():
-    """Auth / identity lookup: never hydrate sessions, messages, or full brand graphs.
+    """Auth / identity lookup: never hydrate chat graphs or brand collections.
 
-    Historical bug: User.organization used selectin, and Organization.entities /
-    Entity.sessions / Session.messages were also selectin → one get_current_user
-    could load every message for every brand (MemoryError / Failed to fetch).
+    Rules:
+    - noload User.sessions / owned_entities (prevents message OOM on auth).
+    - Do NOT load User.organization in this query. Callers that need org must
+      ``select(Organization)`` by ``user.organization_id``.
+
+    Why not ``selectinload(org).noload(entities)``:
+    that marks Organization.entities empty in the identity map; a later
+    ``selectinload(Organization.entities)`` in the same Session can still see
+    the empty collection and skip real brands (duplicate 安利 create regression).
     """
     return select(User).options(
         noload(User.sessions),
         noload(User.owned_entities),
-        selectinload(User.organization).options(
-            noload(Organization.users),
-            noload(Organization.entities),
-        ),
+        noload(User.organization),
     )
 
 

@@ -1,4 +1,7 @@
-"""Auth path must not hydrate session/message graphs (Wave Switch F4 / MemoryError)."""
+"""Auth path must not hydrate session/message graphs (Wave Switch F4 / MemoryError).
+
+Also: must not noload Organization.entities onto the identity map (entity-dup P1).
+"""
 
 from __future__ import annotations
 
@@ -16,11 +19,11 @@ def test_lightweight_user_select_guards_heavy_paths():
     assert "User.owned_entities" in joined
     assert "User.organization" in joined
 
-    # Nested noload on Organization.users / entities (third option's context)
-    org_opt = next(o for o in opts if "organization" in str(getattr(o, "path", "")))
-    org_ctx = getattr(org_opt, "context", ()) or ()
-    # parent selectin + two noloads for users/entities
-    assert len(org_ctx) >= 3
+    # Must noload organization entirely — never selectinload+noload(entities)
+    # (that poisons later Organization.entities loads in the same Session).
+    org_paths = [p for p in paths if "User.organization" in p]
+    assert org_paths
+    assert not any("Organization.entities" in p for p in paths)
 
 
 def test_session_messages_not_eager_default():

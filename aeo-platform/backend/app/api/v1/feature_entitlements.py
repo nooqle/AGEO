@@ -6,7 +6,6 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, get_db
 from app.models.entity import Entity, EntityStatus
@@ -14,12 +13,12 @@ from app.models.organization import Organization, OrganizationStatus
 from app.services.brand_association_circle_variant import (
     AMWAY_ASSOCIATION_DASHBOARD_VARIANT,
     build_amway_association_context,
-    is_amway_association_entity,
 )
 from app.services.organization_feature_service import (
     FEATURE_AMWAYCHINA_CONSOLE,
     ensure_amwaychina_console_entity,
     feature_enabled_for_account,
+    find_amway_association_entities,
 )
 
 router = APIRouter(prefix="/feature-entitlements", tags=["feature-entitlements"])
@@ -54,10 +53,10 @@ async def get_amwaychina_entitlement(
     if current_user.organization_id is None:
         return _disabled_payload("organization_required")
 
+    # Query Organization alone — do not depend on relationship collections that
+    # may have been noload'd on the same Session during get_current_user.
     result = await db.execute(
-        select(Organization)
-        .options(selectinload(Organization.entities))
-        .where(Organization.id == current_user.organization_id)
+        select(Organization).where(Organization.id == current_user.organization_id)
     )
     organization = result.scalar_one_or_none()
     if organization is None or organization.status != OrganizationStatus.ACTIVE:
@@ -70,18 +69,13 @@ async def get_amwaychina_entitlement(
     ):
         return _disabled_payload("feature_not_enabled")
 
-    amway_entities = []
-    for entity in organization.entities:
-        aliases = _entity_aliases(entity)
-        if (
-            entity.status == EntityStatus.ACTIVE
-            and is_amway_association_entity(
-                name=entity.name,
-                domain=entity.domain,
-                aliases=aliases,
-            )
-        ):
-            amway_entities.append((entity, aliases))
+    # Always list entities via Entity table (idempotent; survives identity-map noload).
+    matched = await find_amway_association_entities(db, organization.id)
+    amway_entities: list[tuple[Entity, list[Any]]] = []
+    for entity in matched:
+        if entity.status != EntityStatus.ACTIVE:
+            continue
+        amway_entities.append((entity, _entity_aliases(entity)))
 
     if not amway_entities:
         entity = await ensure_amwaychina_console_entity(db, organization)
