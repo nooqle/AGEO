@@ -97,18 +97,18 @@ class Entity(Base):
 
     # Relationships
     sessions: Mapped[list["Session"]] = relationship(
-        "Session", back_populates="entity", lazy="selectin"
+        "Session", back_populates="entity", lazy="select"
     )
     owner: Mapped["User | None"] = relationship(
         "User",
         back_populates="owned_entities",
-        lazy="selectin",
+        lazy="select",
         foreign_keys=[owner_user_id],
     )
     organization: Mapped["Organization | None"] = relationship(
         "Organization",
         back_populates="entities",
-        lazy="selectin",
+        lazy="select",
     )
 
     def __repr__(self) -> str:

@@ -80,21 +80,22 @@ class User(Base):
         nullable=False,
     )
 
+    # lazy="select": do NOT selectin-load chat history on every User fetch (auth path).
     sessions: Mapped[list["Session"]] = relationship(
         "Session",
         back_populates="user",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )
     organization: Mapped["Organization | None"] = relationship(
         "Organization",
         back_populates="users",
-        lazy="selectin",
+        lazy="select",
     )
     owned_entities: Mapped[list["Entity"]] = relationship(
         "Entity",
         back_populates="owner",
-        lazy="selectin",
+        lazy="select",
         foreign_keys="Entity.owner_user_id",
     )
 

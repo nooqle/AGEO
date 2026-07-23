@@ -2,18 +2,28 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import lazyload, selectinload
+from sqlalchemy.orm import noload, selectinload
 
 from app.core.security import hash_password, verify_password
+from app.models.organization import Organization
 from app.models.user import User, UserRole, UserStatus
 from app.services.identity_normalization_service import normalize_email, normalize_phone
 
 
 def _lightweight_user_select():
+    """Auth / identity lookup: never hydrate sessions, messages, or full brand graphs.
+
+    Historical bug: User.organization used selectin, and Organization.entities /
+    Entity.sessions / Session.messages were also selectin → one get_current_user
+    could load every message for every brand (MemoryError / Failed to fetch).
+    """
     return select(User).options(
-        lazyload(User.sessions),
-        lazyload(User.owned_entities),
-        selectinload(User.organization),
+        noload(User.sessions),
+        noload(User.owned_entities),
+        selectinload(User.organization).options(
+            noload(Organization.users),
+            noload(Organization.entities),
+        ),
     )
 
 

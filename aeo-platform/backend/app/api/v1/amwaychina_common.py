@@ -70,9 +70,10 @@ async def require_amway_entity(
     manage: bool = False,
 ) -> Entity:
     entity_uuid = parse_uuid(entity_id, "entity_id")
+    # Only org for access/feature checks — never selectin sessions/messages (auth OOM path).
     result = await db.execute(
         select(Entity)
-        .options(selectinload(Entity.organization), selectinload(Entity.sessions))
+        .options(selectinload(Entity.organization))
         .where(Entity.id == entity_uuid)
     )
     entity = result.scalar_one_or_none()

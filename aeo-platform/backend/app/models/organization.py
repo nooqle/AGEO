@@ -57,13 +57,14 @@ class Organization(Base):
         nullable=False,
     )
 
+    # Avoid selectin cascades into all brands/sessions/messages when loading org on auth.
     users: Mapped[list["User"]] = relationship(
         "User",
         back_populates="organization",
-        lazy="selectin",
+        lazy="select",
     )
     entities: Mapped[list["Entity"]] = relationship(
         "Entity",
         back_populates="organization",
-        lazy="selectin",
+        lazy="select",
     )

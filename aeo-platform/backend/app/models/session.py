@@ -78,11 +78,12 @@ class Session(Base):
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="sessions")
     entity: Mapped["Entity | None"] = relationship("Entity", back_populates="sessions")
+    # Never selectin-load all messages with a session (OOM on auth/entity graphs).
     messages: Mapped[list["Message"]] = relationship(
         "Message",
         back_populates="session",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )
 
     def __repr__(self) -> str:
