@@ -1,8 +1,8 @@
 # 蓝图进度对照 + 下一步（含配方 v0 增强与视觉交互）
 
-日期：2026-07-21（**2026-07-23 增补 M1/M2 双必达**）  
-分支：`codex/amwaychina-mainline`  
-对照：`docs/specta-agentic-infrastructure-blueprint-2026-07-21.md`  
+日期：2026-07-21（**2026-07-23 增补 M1/M2 双必达**；**2026-07-24 增补圈层 FE 拆分 Sprint GO**）
+分支：`codex/amwaychina-mainline`
+对照：`docs/specta-agentic-infrastructure-blueprint-2026-07-21.md`
 产品定案：配方 = 组织/品牌可见 SOP；切换即替换；运行即确认；不做黑盒自我学习。
 
 ### 0. 双必达（2026-07-23 锁死）
@@ -67,10 +67,10 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
         ↑ 编译/断边/切换              ↑ 成功/失败（未来事件）
 ```
 
-- **Topology**：`flow_topologies`  
-- **Recipe**：`flow_topology_recipes`（v0）  
-- **Run**：`brand_intelligence_runs` + 资产  
-- **编译**：`topology_patch` / `nl_compiler` / `nl_llm` + 稳定 prompt  
+- **Topology**：`flow_topologies`
+- **Recipe**：`flow_topology_recipes`（v0）
+- **Run**：`brand_intelligence_runs` + 资产
+- **编译**：`topology_patch` / `nl_compiler` / `nl_llm` + 稳定 prompt
 
 ### 1.4 已知产品/体验缺口 → **完善轨优先**（见 `2026-07-22-craft-journey-completion-track.md`）
 
@@ -92,10 +92,11 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 | **P0 附** | 编排条 `AmwayFlowTopologyPatchBar`、配方条 `AmwayFlowRecipeBar` | ✅ 已外置 |
 | **P1** | `amwaychina` → common + flow_topology + flow_run + flow_recipes | ✅ 主文件 ~550 行 |
 | **P1.5** | 配方+编排合成 `AmwayFlowOrchestrationPanel` | ✅ Wave A |
-| **P2** | `orchestrator_node.py`（~7k）、a5 巨石、DashboardViews 等 | ⬜ **仅设计稿可开，大拆独立里程碑** |
+| **圈层 FE** | `AmwayAssociationCircleDashboardViews` → `amway-circle/*`（pure + map UI + report UI） | ✅ **Sprint GO**（壳 ~16 行；`2026-07-24-circle-split-sprint-acceptance.md`） |
+| **P2 残留** | `orchestrator_node` 薄壳 C、**a5 `association_circle.py`**、其它 God | ⬜ **另轨**；**BE 圈层未拆** |
 | **残留** | 分支总时限、God 级其它文件 | ⬜ 审查 P2 残留 |
 
-**结论：** 和 3c 强相关的拆分（Canvas / amwaychina API）**已做完**；**整仓 God 文件拆分并未做完**——P2 仍在，必须进总路线，但不要和配方/视觉 Wave A 抢同一迭代的大改。
+**结论：** 和 3c 强相关的拆分（Canvas / amwaychina API）**已做完**；**圈层 FE God-file 拆分 Sprint 已 GO**（工程债下降，无产品行为增量）。**整仓 God 文件拆分仍未做完**——尤其后端 `association_circle.py` 与 Orch 薄壳 C，必须另轨，勿与平台化 2.4 / 部署混做。
 
 ---
 
@@ -165,7 +166,7 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 | B4 | 配方「覆盖」= from_current | ✅（原生 confirm，可后续 Dialog） |
 | B5 | Console 轻拆 | ⏭ 本波未做 |
 
-**不做：** 自动改默认拓扑、静默推荐且不展示理由；不做 Orch 大拆。  
+**不做：** 自动改默认拓扑、静默推荐且不展示理由；不做 Orch 大拆。
 **迁移：** 需 **040**（`flow_orchestration_events`）。
 
 ---
@@ -182,7 +183,7 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 | **P** | 记忆/校准加深（教训+事件→推荐/编译） | ✅ **Wave P PASS**（`2026-07-23-wave-p-calibration-memory-acceptance.md`） |
 | **Q** | Chat 终局（整图计划→确认→可选运行） | ✅ **Wave Q PASS**（`2026-07-23-wave-q-chat-endgame-acceptance.md`） |
 
-**裁决：** F1–F7 / E1–E6 / 非目标全过；功能 Bug 0。非阻断：套用中旧推荐短暂 disabled 后刷新（低优 UX）。  
+**裁决：** F1–F7 / E1–E6 / 非目标全过；功能 Bug 0。非阻断：套用中旧推荐短暂 disabled 后刷新（低优 UX）。
 **不做：** 静默自动套用、黑盒学习、Orch 代码大拆、覆盖 Dialog。
 
 ---
@@ -194,8 +195,8 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 | D1–D7 | Chat 保守意图拦截；compile-nl / recommend 预览卡；确认后 apply；deep-link 生产线 | ✅ **Wave D PASS** |
 | — | Orch 巨石实现 / 节点 annotation / 自动开跑 | ⏭ 不做 |
 
-**裁决：** F1–F7 / E1–E6 / 非目标全过；阻断功能 Bug 0。  
-**非阻断：** 逃生口双气泡已修；Console 首进偶发 Failed to fetch 记档。  
+**裁决：** F1–F7 / E1–E6 / 非目标全过；阻断功能 Bug 0。
+**非阻断：** 逃生口双气泡已修；Console 首进偶发 Failed to fetch 记档。
 **纪律：** 复用 Console 已验证 API；不进 `user_message`；不改 orchestrator 语义。
 
 ---
@@ -211,7 +212,7 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 | **E3** | 请求缓存 + 首屏稳健 | ✅ **PASS** |
 | **E4** | 代码拆分第一刀（Chat 编排外提） | ✅ **PASS** |
 
-**裁决：** 2026-07-22 统一手测 PASS；阻断 Bug 0。缓存 6 并发 1 loader；Chat 跳过豆包应用写库正常。  
+**裁决：** 2026-07-22 统一手测 PASS；阻断 Bug 0。缓存 6 并发 1 loader；Chat 跳过豆包应用写库正常。
 **与「蓝图 50%」关系：** E 轨抬高「可托付」完成感；整本蓝图功能 % 仍约 ~55%。详见完善轨 §0.0 / §3。
 
 ---
@@ -234,20 +235,20 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 
 ## 4. 建议执行顺序（给执行用）
 
-1. **A2.1 去紫**（小、见效快）  
-2. **A2.2 + A4.1** 配方+编排**视觉与组件**一并合并（结构 + 防拆分回潮）  
-3. **A1.1 空态 + A1.2 跑完存配方**（心智）  
-4. **A2.3–A2.5 微调 + A3 手点 + A4.2 行数护栏**  
-5. Wave B（记忆挂点）  
-6. Wave C 时再开 **C4 巨石拆分设计稿**（不要提前和大功能混做）  
+1. **A2.1 去紫**（小、见效快）
+2. **A2.2 + A4.1** 配方+编排**视觉与组件**一并合并（结构 + 防拆分回潮）
+3. **A1.1 空态 + A1.2 跑完存配方**（心智）
+4. **A2.3–A2.5 微调 + A3 手点 + A4.2 行数护栏**
+5. Wave B（记忆挂点）
+6. Wave C 时再开 **C4 巨石拆分设计稿**（不要提前和大功能混做）
 
 ---
 
 ## 5. 一句话现状与下一步
 
-**现状：** **M1 + M2 均 PASS。** amwaychina 竖切/校准/Chat 编译能力成立；**Wave Switch** 兑现蓝图 §1.3——默认生产线、Dashboard redirect、Chat 降级为编译器辅入口（F1–F6 + P1 复验过）。
+**现状：** **M1 + M2 均 PASS。** amwaychina 竖切/校准/Chat 编译能力成立；**Wave Switch** 兑现蓝图 §1.3——默认生产线、Dashboard redirect、Chat 降级为编译器辅入口（F1–F6 + P1 复验过）。**圈层 FE God-file 拆分 Sprint GO**（`c4b01fa`；Views 壳 ~16 行；独立静态 + 浏览器 + 导出验收过）。
 
-**下一步：** 双必达已收口。**圈层 FE 拆分刀 1 已落地**（`amway-circle/*` pure helpers）。续：orbit layout / map / report 外提；BE `association_circle.py` 另轨。后置：Orch C、平台化 2.4、采集稳健、`?legacy=1` 收紧。不做黑盒自学。
+**下一步（建议，未启动本 Sprint）：** 双必达与圈层 FE 拆分均已收口。**下一工程债优先建议：** 后端 `association_circle.py` 另轨。后置：Orch C、平台化 2.4、采集稳健、`?legacy=1` 收紧。不做黑盒自学。**未声称部署完成。**
 
 ---
 

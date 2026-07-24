@@ -1,7 +1,7 @@
 # Backlog：超大文件分拆进度
 
-日期：2026-07-21  
-状态：**进行中**（本批只完成与 3c 触达相关的拆分；其余登记后续）
+日期：2026-07-21（**2026-07-24 增补：圈层 FE Sprint GO**）
+状态：**圈层 FE God-file 拆分 Sprint 已完成并验收**；其它巨石仍按里程碑排队
 
 目标：把「稳定契约 / 纯算法 / 易变 UI」切开，降低改动冲突面，并让提示词/模块边界利于 LLM prompt cache。
 
@@ -12,8 +12,8 @@
 | 文件 | 约行数 | 风险 | 状态 |
 |---|---:|---|---|
 | `app/workflow/orchestrator_node.py` | ~7058 | 主 Orch 巨石；改一处牵全身 | ⬜ 未开（独立里程碑） |
-| `app/workflow/a5/association_circle.py` | ~6347 | A5 安利圈层内核 | ⬜ 不碰 3c |
-| `AmwayAssociationCircleDashboardViews.tsx` | ~5915（刀1 后） | 圈层视图 God | 🔧 刀1 pure helpers 已外提 |
+| `app/workflow/a5/association_circle.py` | ~6347 | A5 安利圈层内核 | ⬜ **另轨 · 未做** |
+| `AmwayAssociationCircleDashboardViews.tsx` | **~16**（壳） | 圈层视图 | ✅ **FE Sprint GO**（`2026-07-24-circle-split-sprint-acceptance.md`） |
 | `app/workflow/a5/canonical.py` | ~4453 | 分析内核 | ⬜ 不碰 |
 | `app/workflow/nodes_a4.py` | ~4354 | 采集节点 | ⬜ 不碰（门控已外置） |
 | `websocket_langgraph.py` | ~3160 | 通信层 | ⬜ 后续 |
@@ -50,7 +50,7 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 
 ### P0 — `AmwayFlowCanvas.tsx` — ✅ 已完成（2026-07-21）
 
-壳内保留：ReactFlow 状态、运行计划条、与 PatchBar/Panels 接线。  
+壳内保留：ReactFlow 状态、运行计划条、与 PatchBar/Panels 接线。
 目录：`frontend/src/components/dashboard/amway-flow/`
 
 ### P1 — `amwaychina.py` 路由分包 — ✅ 已完成（2026-07-21）
@@ -64,9 +64,9 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 
 ### P2 — 巨石（单独里程碑，勿与 3c 混做）
 
-1. `orchestrator_node.py`：按 tool dispatch / confirm / context 切模块  
-2. `nodes_a4.py`：gate 已在 resolver；可继续抽 platform client 装配  
-3. `AmwayAssociationCircleDashboardViews.tsx`：按 map / lexicon / report 分文件  
+1. `orchestrator_node.py`：按 tool dispatch / confirm / context 切模块
+2. `nodes_a4.py`：gate 已在 resolver；可继续抽 platform client 装配
+3. `AmwayAssociationCircleDashboardViews.tsx`：按 map / report 分文件 → ✅ **FE 已完成**（见下节勾选；BE 圈层内核仍另轨）
 
 ---
 
@@ -83,28 +83,29 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 
 ## 5. 进度勾选
 
-- [x] 扫描并登记超大文件  
-- [x] 3c 编排条从 Canvas 拆出  
-- [x] NL 规则 / LLM 编译独立模块 + 稳定 prompt  
-- [x] Canvas P0：types/constants/topologyDoc/analysis/graphUtils/NodeCard/Panels  
-- [x] amwaychina 路由分包（P1）  
-- [x] **P1.5** 配方条+编排条合并为单一 Orchestration 面板（`AmwayFlowOrchestrationPanel`）  
-- [x] orchestrator_node 拆分设计稿（P2）→ `docs/plans/2026-07-22-orchestrator-p2-split-design.md`  
-- [x] orchestrator_node **第一刀**（纯函数包）→ Wave F（~-257 行）  
-- [x] orchestrator_node **第二刀**（history/workflow/knowledge）→ Wave G（再 ~-566 行）  
-- [x] orchestrator_node **第三刀**（ontology 情报回复 / seed / prompt_bundle）→ Wave H（再 ~-923）  
-- [x] orchestrator_node **第四刀（谨慎）** → Wave I（~-246）  
-- [x] orchestrator_node **第五刀（谨慎）** → Wave J（~-327）  
-- [x] orchestrator_node **第六刀（谨慎）** → Wave K（~-310）  
-- [x] orchestrator_node **第七刀（谨慎）** → Wave L（~-425）  
-- [x] orchestrator_node **第八刀** → Wave M（~-571）  
-- [x] orchestrator_node **阶段 B 收口** → Wave N prompt_assembly / tool_gate_command（~-477；累计 ~-4103）  
-- [x] **阶段 A+B 完成** — 见 `2026-07-22-orch-p2-split-enough-criteria.md`  
-- [ ] 阶段 C 薄壳（async 路由）→ **另立项，不阻塞产品主线**  
-- [x] 圈层 FE **第一刀** pure helpers → `amway-circle/*`（`2026-07-23-circle-split-knife1-acceptance.md`）  
-- [ ] 圈层 FE 刀 2–4（orbit / map / report）  
-- [ ] 圈层 BE `association_circle.py` 另轨  
+- [x] 扫描并登记超大文件
+- [x] 3c 编排条从 Canvas 拆出
+- [x] NL 规则 / LLM 编译独立模块 + 稳定 prompt
+- [x] Canvas P0：types/constants/topologyDoc/analysis/graphUtils/NodeCard/Panels
+- [x] amwaychina 路由分包（P1）
+- [x] **P1.5** 配方条+编排条合并为单一 Orchestration 面板（`AmwayFlowOrchestrationPanel`）
+- [x] orchestrator_node 拆分设计稿（P2）→ `docs/plans/2026-07-22-orchestrator-p2-split-design.md`
+- [x] orchestrator_node **第一刀**（纯函数包）→ Wave F（~-257 行）
+- [x] orchestrator_node **第二刀**（history/workflow/knowledge）→ Wave G（再 ~-566 行）
+- [x] orchestrator_node **第三刀**（ontology 情报回复 / seed / prompt_bundle）→ Wave H（再 ~-923）
+- [x] orchestrator_node **第四刀（谨慎）** → Wave I（~-246）
+- [x] orchestrator_node **第五刀（谨慎）** → Wave J（~-327）
+- [x] orchestrator_node **第六刀（谨慎）** → Wave K（~-310）
+- [x] orchestrator_node **第七刀（谨慎）** → Wave L（~-425）
+- [x] orchestrator_node **第八刀** → Wave M（~-571）
+- [x] orchestrator_node **阶段 B 收口** → Wave N prompt_assembly / tool_gate_command（~-477；累计 ~-4103）
+- [x] **阶段 A+B 完成** — 见 `2026-07-22-orch-p2-split-enough-criteria.md`
+- [ ] 阶段 C 薄壳（async 路由）→ **另立项，不阻塞产品主线**
+- [x] 圈层 FE **第一刀** pure helpers → `amway-circle/*`（`2026-07-23-circle-split-knife1-acceptance.md`）
+- [x] 圈层 FE **刀 2–6** orbit / map evidence / map UI / report pure / report UI（+ export 与面板同拆）
+- [x] 圈层 FE **Sprint 收口验收 GO** → `docs/plans/2026-07-24-circle-split-sprint-acceptance.md`（终点实现 `c4b01fa`；壳 ~16 行）
+- [ ] 圈层 BE `association_circle.py` 另轨（**未做**）
 
-**与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`。  
+**与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`。
 
-**下次继续：** 圈层 FE 刀 2（orbit layout）或 BE 另开。
+**下次继续（建议，未启动）：** 后端 `association_circle.py` 另轨；Orch 阶段 C / 平台化 2.4 后置。不做黑盒自学。
