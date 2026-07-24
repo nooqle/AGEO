@@ -3,7 +3,11 @@
  * Shared by map grouping pure helpers and DashboardViews shell.
  */
 
-import type { OntologyAssociationCircleNode } from '@/types/ontology';
+import type {
+  OntologyAssociationCircleNode,
+  OntologyAssociationCircleQuestion,
+  OntologyAssociationCircleStrategyValidation,
+} from '@/types/ontology';
 
 export type AssociationMapGroupKey = 'strong' | 'growth' | 'story' | 'risk';
 export type AssociationMapMode = 'associations' | 'risk';
@@ -64,4 +68,45 @@ export interface AssociationNodeFilterOption {
   hint: string;
   count: number;
   tone: 'strong' | 'growth' | 'story';
+}
+
+export type ReportNarrativeSection = {
+  sectionId?: string;
+  title: string;
+  text: string;
+  readerQuestion?: string;
+  takeaway?: string;
+  claims?: string[];
+  soWhat?: string;
+  supportingFacts?: string[];
+  evidenceRefs?: string[];
+  nextProbe?: string;
+};
+
+export interface StrategyValidationRow {
+  term: string;
+  status: 'validated' | 'partial' | 'risk' | 'missing';
+  statusLabel: string;
+  validationLabel?: string;
+  decisionTier?: string;
+  stanceSummary?: OntologyAssociationCircleStrategyValidation['stance_summary'];
+  intent: string;
+  questionCount: number;
+  relatedQuestions: OntologyAssociationCircleQuestion[];
+  relatedNodes: OntologyAssociationCircleNode[];
+  platformNames: string[];
+  platformMentions: string[];
+  answerResult: string;
+  graphPerformance: string;
+  implication: string;
+  actionRecommendation?: string;
+  evidenceRefs: string[];
+}
+
+export interface NodeFrequencyBarItem {
+  label: string;
+  value: number;
+  tone: 'strong' | 'growth' | 'story' | 'risk';
+  countMode: 'answers' | 'lower_bound' | 'mentions';
+  valueLabel: string;
 }
