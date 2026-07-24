@@ -445,3 +445,28 @@ export function cleanEvidenceExcerpt(value?: string, maxLength = 180) {
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}...`;
 }
+
+export function commercialReportCopy(value?: string | null) {
+  return String(value || '')
+    .trim()
+    .replace(new RegExp('强' + '关联轨', 'g'), '已绑定资产')
+    .replace(new RegExp('弱' + '关联轨', 'g'), '待观察')
+    .replace(new RegExp('可' + '争夺轨', 'g'), '近端机会')
+    .replace(new RegExp('风险' + '阴影', 'g'), '风险关系')
+    .replace(/监管信息/g, '监管合规质疑')
+    .replace(/腾讯元宝|元宝/g, '腾讯元宝')
+    .replace(/\b(?:yuanbao|hunyuan)\b/gi, '腾讯元宝')
+    .replace(new RegExp('不' + '是把战略愿望直接画进图谱', 'g'), '战略愿望需要先变成回答证据，再进入图谱')
+    .replace(new RegExp('不' + '是把战略词直接写进图谱', 'g'), '战略词需要先经过回答证据验证，再进入图谱')
+    .replace(new RegExp('不' + '是漂亮但不可复核的图', 'g'), '需要成为可复核的图')
+    .replace(new RegExp('贴' + '近度', 'g'), '图谱贴近值')
+    .replace(new RegExp('疏' + '远度', 'g'), '证据缺口')
+    .replace(new RegExp('证据' + '编号', 'g'), '回答证据')
+    .replace('下一轮先恢复失败平台的抓取，再按战略词比较各平台的提及方式、原文摘录和图谱位置。', '下一轮沿用同一批题库，按战略词比较各平台的提及方式、原文摘录和图谱位置。')
+    .replace(new RegExp('更贴' + '近中心品牌', 'g'), '更稳定地回到中心品牌')
+    .replace(new RegExp('更贴' + '近品牌', 'g'), '更稳定地回到品牌')
+    .replace(new RegExp('贴' + '近中心品牌', 'g'), '稳定回到中心品牌')
+    .replace(new RegExp('贴' + '近品牌', 'g'), '稳定回到品牌')
+    .replace(/A5/g, '圈层解析')
+    .replace(new RegExp('G/' + 'D/E/P|G' + 'DE', 'g'), '工程读数');
+}

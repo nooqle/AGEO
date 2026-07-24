@@ -1,5 +1,5 @@
 /**
- * Amway association-circle FE package (split knife 1-3).
+ * Amway association-circle FE package (split knife 1-4).
  */
 
 export * from './types';
@@ -10,3 +10,5 @@ export * from './projection';
 export * from './orbitLayout';
 export * from './evidenceHelpers';
 export * from './nodeInsightCopy';
+export * from './orbitMapVisual';
+export * from './orbitMapChrome';
