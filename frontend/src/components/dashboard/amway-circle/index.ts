@@ -12,3 +12,5 @@ export * from './evidenceHelpers';
 export * from './nodeInsightCopy';
 export * from './orbitMapVisual';
 export * from './orbitMapChrome';
+export * from './OrbitNodeInsightPanel';
+export * from './CommercialOrbitMap';
