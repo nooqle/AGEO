@@ -14,3 +14,4 @@ export * from './orbitMapVisual';
 export * from './orbitMapChrome';
 export * from './OrbitNodeInsightPanel';
 export * from './CommercialOrbitMap';
+export * from './CommercialOrbitView';

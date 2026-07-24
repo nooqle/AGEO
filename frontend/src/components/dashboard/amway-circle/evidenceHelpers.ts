@@ -470,3 +470,15 @@ export function commercialReportCopy(value?: string | null) {
     .replace(/A5/g, '圈层解析')
     .replace(new RegExp('G/' + 'D/E/P|G' + 'DE', 'g'), '工程读数');
 }
+
+export function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
