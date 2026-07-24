@@ -247,7 +247,7 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 
 **现状：** **M1 + M2 均 PASS。** amwaychina 竖切/校准/Chat 编译能力成立；**Wave Switch** 兑现蓝图 §1.3——默认生产线、Dashboard redirect、Chat 降级为编译器辅入口（F1–F6 + P1 复验过）。
 
-**下一步：** 双必达已收口。可选：Orch 阶段 C 薄壳、圈层 God、平台化 2.4、采集稳健、收紧 `?legacy=1`。不做黑盒自学。
+**下一步：** 双必达已收口。**圈层 FE 拆分刀 1 已落地**（`amway-circle/*` pure helpers）。续：orbit layout / map / report 外提；BE `association_circle.py` 另轨。后置：Orch C、平台化 2.4、采集稳健、`?legacy=1` 收紧。不做黑盒自学。
 
 ---
 

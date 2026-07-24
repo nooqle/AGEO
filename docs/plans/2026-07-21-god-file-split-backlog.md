@@ -13,7 +13,7 @@
 |---|---:|---|---|
 | `app/workflow/orchestrator_node.py` | ~7058 | 主 Orch 巨石；改一处牵全身 | ⬜ 未开（独立里程碑） |
 | `app/workflow/a5/association_circle.py` | ~6347 | A5 安利圈层内核 | ⬜ 不碰 3c |
-| `AmwayAssociationCircleDashboardViews.tsx` | ~5941 | 圈层视图 God | ⬜ 后续 |
+| `AmwayAssociationCircleDashboardViews.tsx` | ~5915（刀1 后） | 圈层视图 God | 🔧 刀1 pure helpers 已外提 |
 | `app/workflow/a5/canonical.py` | ~4453 | 分析内核 | ⬜ 不碰 |
 | `app/workflow/nodes_a4.py` | ~4354 | 采集节点 | ⬜ 不碰（门控已外置） |
 | `websocket_langgraph.py` | ~3160 | 通信层 | ⬜ 后续 |
@@ -101,7 +101,10 @@ Canvas 行数：**~2768 → ~2590（编排条）→ ~1547（P0 全拆）**，已
 - [x] orchestrator_node **阶段 B 收口** → Wave N prompt_assembly / tool_gate_command（~-477；累计 ~-4103）  
 - [x] **阶段 A+B 完成** — 见 `2026-07-22-orch-p2-split-enough-criteria.md`  
 - [ ] 阶段 C 薄壳（async 路由）→ **另立项，不阻塞产品主线**  
+- [x] 圈层 FE **第一刀** pure helpers → `amway-circle/*`（`2026-07-23-circle-split-knife1-acceptance.md`）  
+- [ ] 圈层 FE 刀 2–4（orbit / map / report）  
+- [ ] 圈层 BE `association_circle.py` 另轨  
 
 **与总路线对齐：** 见 `docs/plans/2026-07-21-blueprint-status-and-next.md`。  
 
-**下次继续：** Orch P2 第二刀（更大纯块 / routing），或功能波 annotation。
+**下次继续：** 圈层 FE 刀 2（orbit layout）或 BE 另开。

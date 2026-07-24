@@ -1,4 +1,4 @@
-﻿import { useState, type CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import {
   ArrowLeft,
@@ -34,12 +34,50 @@ import type {
   OntologyWorldSummary,
 } from '@/types/ontology';
 
-type AssociationMapGroupKey = 'strong' | 'growth' | 'story' | 'risk';
-type AssociationMapMode = 'associations' | 'risk';
-type OrbitDistanceBand = 'near' | 'bridge' | 'far' | 'risk';
-type AssociationNodeFilterKey = 'stable' | 'opportunity' | 'watch';
-const DEFAULT_OVERVIEW_HIGHLIGHT_LIMIT = 28;
-const FOCUSED_TRACK_LABEL_LIMIT = 10;
+import {
+  DEFAULT_CENTER_TERMS,
+  DEFAULT_OVERVIEW_HIGHLIGHT_LIMIT,
+  FOCUSED_TRACK_LABEL_LIMIT,
+  buildAssociationMapGroups,
+  buildAssociationProjection,
+  classifyAssociationNode,
+  isCompetitorNode,
+  isProtectedEvidenceAssetNode,
+  isRiskNodeForMap,
+  nodeClosenessValue,
+  nodeCountMetricLabel,
+  nodeCountMode,
+  nodeCountPhrase,
+  nodeCountShortUnit,
+  nodeDistanceValue,
+  nodeEvidenceCount,
+  nodePlatformCount,
+  normalizeAssociationNodeDisplay,
+  normalizeCenterTerms,
+  platformLabel,
+  readLiveExtractionStats,
+  sampleAnswerCount,
+  samplePlatformCount,
+  sampleQuestionCount,
+  scoreNumber,
+  firstSampleNumber,
+  toNumber,
+  type AssociationMapGroup,
+  type AssociationMapGroupKey,
+  type AssociationMapMode,
+  type AssociationNodeFilterKey,
+  type OrbitDistanceBand,
+} from './amway-circle';
+
+// Re-export pure helpers for existing importers of this shell file.
+export {
+  buildAssociationMapGroups,
+  buildAssociationProjection,
+  normalizeCenterTerms,
+  sampleAnswerCount,
+};
+
+
 type ReportNarrativeSection = {
   sectionId?: string;
   title: string;
@@ -75,7 +113,6 @@ type PlatformEvidenceSummary = {
   samples: OrbitEvidenceItem[];
 };
 
-const DEFAULT_CENTER_TERMS = ['安利', '安利中国', '纽崔莱'];
 
 export function AssociationProjectionLoadingPanel({ centerTerm }: { centerTerm: string }) {
   return (
@@ -115,14 +152,6 @@ export function InfoPill({
   );
 }
 
-interface AssociationMapGroup {
-  key: AssociationMapGroupKey;
-  title: string;
-  subtitle: string;
-  emptyText: string;
-  tone: 'brand' | 'opportunity' | 'story' | 'risk';
-  nodes: OntologyAssociationCircleNode[];
-}
 
 interface AssociationNodeFilterOption {
   key: AssociationNodeFilterKey;
@@ -2862,82 +2891,10 @@ function nodePlatformNames(
   )).slice(0, 4);
 }
 
-function nodeClosenessValue(node: OntologyAssociationCircleNode) {
-  return scoreNumber(node.gravity_score ?? node.closeness_score ?? node.association_score);
-}
-
-function nodeDistanceValue(node: OntologyAssociationCircleNode) {
-  const distance = scoreNumber(node.distance_score);
-  if (distance > 0) return distance;
-  const closeness = nodeClosenessValue(node);
-  return closeness > 0 ? 100 - closeness : 0;
-}
-
-function nodeEvidenceCount(node: OntologyAssociationCircleNode) {
-  return scoreNumber(node.answer_count ?? node.evidence_count ?? node.evidence_samples?.length);
-}
-
 type NodeCountSource = Pick<
   OntologyAssociationCircleNode,
   'answer_refs' | 'answer_count_is_exact' | 'count_semantics'
 >;
-
-function nodeCountMode(node: NodeCountSource): 'answers' | 'lower_bound' | 'mentions' {
-  if (node.answer_count_is_exact === true) return 'answers';
-  if (node.answer_count_is_exact === false) {
-    return node.count_semantics === 'known_answer_refs_lower_bound' ? 'lower_bound' : 'mentions';
-  }
-  if (node.count_semantics === 'distinct_answer_refs') return 'answers';
-  if (node.count_semantics === 'known_answer_refs_lower_bound') return 'lower_bound';
-  if (node.count_semantics === 'legacy_summed_mentions') return 'mentions';
-  return Array.isArray(node.answer_refs) ? 'answers' : 'mentions';
-}
-
-function nodeCountPhrase(node: NodeCountSource, count: number): string {
-  const mode = nodeCountMode(node);
-  if (mode === 'answers') return `${count} 条回答`;
-  if (mode === 'lower_bound') return `至少 ${count} 条可确认回答`;
-  return `${count} 次节点提及`;
-}
-
-function nodeCountMetricLabel(node: NodeCountSource): string {
-  const mode = nodeCountMode(node);
-  if (mode === 'answers') return '提及回答';
-  if (mode === 'lower_bound') return '可确认回答';
-  return '节点提及';
-}
-
-function nodeCountShortUnit(node: NodeCountSource): '答' | '答+' | '次' {
-  const mode = nodeCountMode(node);
-  if (mode === 'answers') return '答';
-  if (mode === 'lower_bound') return '答+';
-  return '次';
-}
-
-function nodePlatformCount(node: OntologyAssociationCircleNode) {
-  const explicitCount = scoreNumber(node.platform_count);
-  if (explicitCount > 0) return explicitCount;
-  return node.platform_distribution ? Object.keys(node.platform_distribution).length : 0;
-}
-
-function isCompetitorNode(node: OntologyAssociationCircleNode) {
-  return String(node.entity_type || '').toLowerCase() === 'competitor';
-}
-
-function isProtectedEvidenceAssetNode(node: OntologyAssociationCircleNode) {
-  const entityType = String(node.entity_type || '').toLowerCase();
-  const entityId = String(node.entity_id || '').toLowerCase();
-  return entityType === 'evidenceasset' && entityId !== 'evidence_regulation';
-}
-
-function isRiskNodeForMap(node: OntologyAssociationCircleNode) {
-  if (isProtectedEvidenceAssetNode(node)) return false;
-  const entityType = String(node.entity_type || '').toLowerCase();
-  if (entityType === 'risklabel' || entityType === 'competitor') return true;
-  if (node.orbit === 'risk_shadow' || node.is_risk_term) return true;
-  const text = `${node.term || ''} ${node.business_tag || ''} ${node.semantic_direction || ''} ${node.orbit_label || ''} ${node.maturity_label || ''}`;
-  return /风险|竞争|竞品|传销|智商税|夸大|压力|负面/.test(text);
-}
 
 function answerPresenceText(node: OntologyAssociationCircleNode) {
   const evidence = nodeEvidenceCount(node);
@@ -3752,127 +3709,6 @@ export function AssociationReportPanel({
   );
 }
 
-export function buildAssociationMapGroups(nodes: OntologyAssociationCircleNode[]): AssociationMapGroup[] {
-  const grouped: Record<AssociationMapGroupKey, OntologyAssociationCircleNode[]> = {
-    strong: [],
-    growth: [],
-    story: [],
-    risk: [],
-  };
-
-  nodes.forEach((rawNode) => {
-    const node = normalizeAssociationNodeDisplay(rawNode);
-    grouped[classifyAssociationNode(node)].push(node);
-  });
-
-  Object.values(grouped).forEach((groupNodes) => {
-    groupNodes.sort(compareAssociationNodesForPriority);
-  });
-
-  return [
-    {
-      key: 'strong',
-      title: '已绑定资产',
-      subtitle: '平台回答已经稳定绑定的第一反应',
-      emptyText: '本轮还没有稳定强联想。',
-      tone: 'brand',
-      nodes: grouped.strong,
-    },
-    {
-      key: 'growth',
-      title: '近端机会',
-      subtitle: '已有回答证据，下一步补直接证据',
-      emptyText: '本轮还没有明显近端机会。',
-      tone: 'opportunity',
-      nodes: grouped.growth,
-    },
-    {
-      key: 'story',
-      title: '远端机会 / 待观察',
-      subtitle: '战略上重要，仍需补样本和场景',
-      emptyText: '本轮还没有识别到远端机会。',
-      tone: 'story',
-      nodes: grouped.story,
-    },
-    {
-      key: 'risk',
-      title: '风险关系',
-      subtitle: '单独观察是否干扰品牌解释',
-      emptyText: '本轮没有明显风险认知。',
-      tone: 'risk',
-      nodes: grouped.risk,
-    },
-  ];
-}
-
-function compareAssociationNodesForPriority(
-  left: OntologyAssociationCircleNode,
-  right: OntologyAssociationCircleNode,
-) {
-  const leftPriority = typeof left.priority_rank === 'number' ? left.priority_rank : 99;
-  const rightPriority = typeof right.priority_rank === 'number' ? right.priority_rank : 99;
-  if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-  const leftEvidence = nodeEvidenceCount(left);
-  const rightEvidence = nodeEvidenceCount(right);
-  if (leftEvidence !== rightEvidence) return rightEvidence - leftEvidence;
-  const leftPlatform = nodePlatformCount(left);
-  const rightPlatform = nodePlatformCount(right);
-  if (leftPlatform !== rightPlatform) return rightPlatform - leftPlatform;
-  return scoreNumber(right.gravity_score ?? right.closeness_score ?? right.association_score)
-    - scoreNumber(left.gravity_score ?? left.closeness_score ?? left.association_score);
-}
-
-
-function normalizeAssociationNodeDisplay(node: OntologyAssociationCircleNode): OntologyAssociationCircleNode {
-  if (
-    node.entity_id === 'evidence_regulation'
-    && isRiskNodeForMap(node)
-    && node.term === '监管信息'
-  ) {
-    return { ...node, term: '监管合规质疑' };
-  }
-  return node;
-}
-
-
-function classifyAssociationNode(node: OntologyAssociationCircleNode): AssociationMapGroupKey {
-  const text = `${node.term || ''} ${node.business_tag || ''} ${node.semantic_direction || ''} ${node.orbit_label || ''} ${node.maturity_label || ''}`;
-  if (isRiskNodeForMap(node)) {
-    return 'risk';
-  }
-  if (node.orbit === 'core_near' || node.orbit === 'strong' || node.orbit === 'R1') {
-    return 'strong';
-  }
-  if (
-    node.orbit === 'near_opportunity'
-    || node.orbit === 'contestable'
-    || node.orbit === 'far_opportunity'
-    || node.orbit === 'R2'
-    || node.maturity_tier === 'near_opportunity'
-    || node.maturity_tier === 'far_opportunity'
-    || /近端机会|远端机会/.test(text)
-  ) {
-    return 'growth';
-  }
-  if (
-    node.orbit === 'weak'
-    || node.orbit === 'R3'
-    || node.orbit === 'blank'
-    || node.maturity_tier === 'watch_signal'
-    || node.maturity_tier === 'evidence_gap'
-    || /待观察|待验证|长寿|人生再出发|被需要|价值感|新叙事/.test(text)
-  ) {
-    return 'story';
-  }
-  const distance = nodeDistanceValue(node);
-  if (distance > 0) {
-    if (distance <= 40) return 'strong';
-    if (distance <= 65) return 'growth';
-    return 'story';
-  }
-  return 'growth';
-}
-
 function cleanEvidenceExcerpt(value?: string, maxLength = 180) {
   const text = String(value || '证据摘录待补充。')
     .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
@@ -3886,10 +3722,6 @@ function cleanEvidenceExcerpt(value?: string, maxLength = 180) {
     .trim();
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}...`;
-}
-
-function scoreNumber(value?: number) {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
 }
 
 function readTrackingProjection(projection: OntologyAssociationCircleProjection) {
@@ -6081,123 +5913,3 @@ function renderExportParagraphHtml(text: string, entities: string[]): string {
   return parts.join('');
 }
 
-export function buildAssociationProjection(
-  world?: OntologyWorldSummary | null,
-  home?: DashboardHomeData | null,
-): OntologyAssociationCircleProjection {
-  if (world?.association_circle_projection) {
-    return {
-      ...world.association_circle_projection,
-      center_terms: normalizeCenterTerms(world.association_circle_projection.center_terms),
-      nodes: Array.isArray(world.association_circle_projection.nodes)
-        ? world.association_circle_projection.nodes
-        : [],
-      question_bank: Array.isArray(world.association_circle_projection.question_bank)
-        ? world.association_circle_projection.question_bank
-        : [],
-      evidence_samples: Array.isArray(world.association_circle_projection.evidence_samples)
-        ? world.association_circle_projection.evidence_samples
-        : [],
-      platform_comparison: Array.isArray(world.association_circle_projection.platform_comparison)
-        ? world.association_circle_projection.platform_comparison
-        : [],
-      association_actions: Array.isArray(world.association_circle_projection.association_actions)
-        ? world.association_circle_projection.association_actions
-        : [],
-      report_narrative_sections: Array.isArray(world.association_circle_projection.report_narrative_sections)
-        ? world.association_circle_projection.report_narrative_sections
-        : [],
-      evidence_findings: Array.isArray(world.association_circle_projection.evidence_findings)
-        ? world.association_circle_projection.evidence_findings
-        : [],
-      analysis_tool_trace: Array.isArray(world.association_circle_projection.analysis_tool_trace)
-        ? world.association_circle_projection.analysis_tool_trace
-        : [],
-      report_outline: Array.isArray(world.association_circle_projection.report_outline)
-        ? world.association_circle_projection.report_outline
-        : [],
-      strategy_validation: Array.isArray(world.association_circle_projection.strategy_validation)
-        ? world.association_circle_projection.strategy_validation
-        : [],
-      source_appendix: Array.isArray(world.association_circle_projection.source_appendix)
-        ? world.association_circle_projection.source_appendix
-        : [],
-    };
-  }
-  return {
-    dashboard_variant: 'amway_association_circle',
-    analysis_mode: 'brand_association_circle',
-    report_kind: 'brand_association_circle',
-    status: 'not_generated',
-    center_terms: normalizeCenterTerms(home?.center_terms),
-    nodes: [],
-    question_bank: [],
-    evidence_samples: [],
-    platform_comparison: [],
-    association_actions: [],
-    report_narrative_sections: [],
-    evidence_findings: [],
-    analysis_tool_trace: [],
-    report_outline: [],
-    strategy_validation: [],
-    source_appendix: [],
-    sample_scope: {},
-    executive_summary: {},
-  };
-}
-
-export function normalizeCenterTerms(value?: unknown): string[] {
-  if (!Array.isArray(value)) return DEFAULT_CENTER_TERMS;
-  const result = value.map((item) => String(item || '').trim()).filter(Boolean);
-  return result.length ? Array.from(new Set(result)).slice(0, 3) : DEFAULT_CENTER_TERMS;
-}
-
-function sampleQuestionCount(sampleScope: Record<string, unknown>) {
-  return firstSampleNumber(sampleScope.question_count, sampleScope.total_question_count);
-}
-
-export function sampleAnswerCount(sampleScope: Record<string, unknown>) {
-  return firstSampleNumber(
-    sampleScope.answer_count,
-    sampleScope.valid_answer_count,
-    sampleScope.total_answer_count,
-  );
-}
-
-function samplePlatformCount(sampleScope: Record<string, unknown>) {
-  const platforms = Array.isArray(sampleScope.platforms) ? sampleScope.platforms.length : 0;
-  return firstSampleNumber(
-    sampleScope.platform_count,
-    sampleScope.valid_platform_count,
-    platforms,
-  );
-}
-
-function readLiveExtractionStats(sampleScope: Record<string, unknown>) {
-  return {
-    answerCount: sampleAnswerCount(sampleScope),
-    signalCount: firstSampleNumber(sampleScope.signal_count),
-    eventCount: firstSampleNumber(sampleScope.extraction_event_count),
-  };
-}
-
-function firstSampleNumber(...values: unknown[]) {
-  for (const value of values) {
-    const numericValue = toNumber(value);
-    if (numericValue > 0) return numericValue;
-  }
-  return 0;
-}
-
-function toNumber(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
-}
-
-function platformLabel(platform: string) {
-  const normalized = platform.toLowerCase();
-  if (normalized.includes('doubao')) return '豆包';
-  if (normalized.includes('yuanbao') || normalized.includes('hunyuan') || normalized.includes('元宝')) return '腾讯元宝';
-  if (normalized.includes('kimi') || normalized.includes('moonshot')) return 'Kimi';
-  if (normalized.includes('deepseek')) return 'DeepSeek';
-  return platform || '未知平台';
-}
