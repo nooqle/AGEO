@@ -1,5 +1,5 @@
 /**
- * Amway association-circle FE package (split knife 1-5).
+ * Amway association-circle FE package (split knife 1-6).
  */
 
 export * from './types';
@@ -18,3 +18,4 @@ export * from './CommercialOrbitView';
 export * from './reportNarrative';
 export * from './strategyValidation';
 export * from './reportCopy';
+export * from './reportSections';
