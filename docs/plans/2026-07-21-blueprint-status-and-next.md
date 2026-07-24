@@ -10,7 +10,7 @@
 | ID | 必须完成 | 状态 | 含义 |
 |---|---|---|---|
 | **M1** | **amwaychina OK** | ✅ 形态成立 · 守与磨 | 生产线 + 配方 + 可见校准 + 跑证据可托付；竖切 ~88% |
-| **M2** | **抛弃 Dashboard+Chat 外壳，全切新设计** | 🔧 **Wave Switch 工程已落地 · 待手测** | 默认路径 = 新壳；Dashboard redirect；**Chat 降级** |
+| **M2** | **抛弃 Dashboard+Chat 外壳，全切新设计** | ✅ **Wave Switch PASS**（`2026-07-23-wave-switch-shell-migration-acceptance.md`） | 默认 `/amwaychina`；Dashboard redirect；**Chat 降级** |
 
 **M2 · Chat 角色（已定：降级，不是「并行主舞台」）**
 
@@ -58,7 +58,7 @@
 
 **Chat（降级后）：** 编译改图 / 配方建议 / 可选确认开跑 / 辅聊与证据问答——**不**再承担「默认主分析路径」。
 
-现状：新壳能力已 PASS；**默认入口与旧 Dashboard+Chat 外壳仍双轨** → 属 M2 缺口，非 M1 能力缺口。
+现状：**M1 + M2 均 PASS**——默认主路径为生产线；Chat 为编译器辅入口；旧 Dashboard 默认 redirect。
 
 ### 1.3 工程骨架（后续建设应围着转）
 
@@ -245,10 +245,9 @@ Topology（当前生产线）  ←→  Recipe（配方）  ←→  Run（运行�
 
 ## 5. 一句话现状与下一步
 
-**现状：** **M1（amwaychina 形态）成立**——3a→3c 竖切 + 配方/推荐 + 可见校准 P + Chat 编译/终局 Q + 完善轨 E 均 PASS。**M2 未完成**——Dashboard+Chat 外壳仍可达，Chat 尚未在产品层完成降级。
+**现状：** **M1 + M2 均 PASS。** amwaychina 竖切/校准/Chat 编译能力成立；**Wave Switch** 兑现蓝图 §1.3——默认生产线、Dashboard redirect、Chat 降级为编译器辅入口（F1–F6 + P1 复验过）。
 
-**下一步：** **Wave Switch（M2）工程已合入**——默认 `/amwaychina`、Dashboard 默认 redirect、Chat 主分析 → 生产线引导卡。**待手测 F1–F6** 后标 PASS。详见 `2026-07-23-wave-switch-shell-migration-acceptance.md`。  
-后置：Orch 薄壳、圈层 God、平台化、采集稳健。不做黑盒自学。
+**下一步：** 双必达已收口。可选：Orch 阶段 C 薄壳、圈层 God、平台化 2.4、采集稳健、收紧 `?legacy=1`。不做黑盒自学。
 
 ---
 
