@@ -23,3 +23,15 @@ export type NodeCountSource = Pick<
   OntologyAssociationCircleNode,
   'answer_refs' | 'answer_count_is_exact' | 'count_semantics'
 >;
+
+export interface CommercialOrbitEntry {
+  node: OntologyAssociationCircleNode;
+  groupKey: AssociationMapGroupKey;
+  distanceBand: OrbitDistanceBand;
+  left: number;
+  top: number;
+  angle: number;
+  radius: number;
+  size: number;
+  labelPriority: boolean;
+}
