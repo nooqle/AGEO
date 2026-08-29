@@ -1,7 +1,7 @@
 """add flow topology recipes table
 
-Revision ID: 039
-Revises: 038
+Revision ID: 037
+Revises: 036
 Create Date: 2026-07-21
 """
 
@@ -13,8 +13,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "039"
-down_revision: str | None = "038"
+revision: str = "037"
+down_revision: str | None = "036"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

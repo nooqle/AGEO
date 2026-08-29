@@ -1089,6 +1089,22 @@ class ApiService {
     return resp.task;
   }
 
+  async getTaskFetchPlatformStates(sessionId: string, taskId: string): Promise<{
+    task_id: string;
+    task_run_id: string | null;
+    platform_states: import('@/types/task').FetchRunPlatformStateRecord[];
+  }> {
+    return this.request<{
+      task_id: string;
+      task_run_id: string | null;
+      platform_states: import('@/types/task').FetchRunPlatformStateRecord[];
+    }>(`/sessions/${sessionId}/tasks/${taskId}/fetch-platform-states`).catch(() => ({
+      task_id: taskId,
+      task_run_id: null,
+      platform_states: [],
+    }));
+  }
+
   async getTaskRuns(
     sessionId: string,
     taskId: string,

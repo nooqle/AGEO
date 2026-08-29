@@ -181,12 +181,25 @@ class Settings(BaseSettings):
         "accurately and cite sources when available."
     )
     DOUBAO_APP_API_FALLBACK_TO_WEB_SEARCH: bool = True
+    DOUBAO_LITE_PRICE_INPUT_CACHE_MISS_PER_MTOKENS: float = 0.6
+    DOUBAO_LITE_PRICE_INPUT_CACHE_HIT_PER_MTOKENS: float = 0.12
+    DOUBAO_LITE_PRICE_OUTPUT_PER_MTOKENS: float = 3.6
+    DOUBAO_MINI_PRICE_INPUT_CACHE_MISS_PER_MTOKENS: float = 0.2
+    DOUBAO_MINI_PRICE_INPUT_CACHE_HIT_PER_MTOKENS: float = 0.04
+    DOUBAO_MINI_PRICE_OUTPUT_PER_MTOKENS: float = 2.0
 
     # Hunyuan API
     HUNYUAN_API_KEY: str | None = None
-    HUNYUAN_MODEL: str = "hunyuan-2.0-instruct-20251111"
+    HUNYUAN_MODEL: str = "hy3"
     HUNYUAN_FAST_MODEL: str | None = None
-    HUNYUAN_BASE_URL: str = "https://api.hunyuan.cloud.tencent.com/v1"
+    HUNYUAN_BASE_URL: str = "https://tokenhub.tencentmaas.com/v1"
+    HUNYUAN_2_INSTRUCT_PRICE_INPUT_PER_MTOKENS: float = 4.505
+    HUNYUAN_2_INSTRUCT_PRICE_OUTPUT_PER_MTOKENS: float = 11.13
+
+    # Moonshot / Kimi API
+    MOONSHOT_PRICE_INPUT_CACHE_MISS_PER_MTOKENS: float = 4.0
+    MOONSHOT_PRICE_INPUT_CACHE_HIT_PER_MTOKENS: float = 0.7
+    MOONSHOT_PRICE_OUTPUT_PER_MTOKENS: float = 21.0
 
     # A4 fast fetch tuning
     A4_DOUBAO_API_DELAY_SECONDS: float = 3.0

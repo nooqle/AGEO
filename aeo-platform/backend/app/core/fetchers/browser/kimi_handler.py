@@ -8,6 +8,7 @@ pattern for web scraping, not Python's built-in eval().
 import asyncio
 import json
 import logging
+import re
 from typing import AsyncGenerator
 
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
@@ -15,8 +16,15 @@ from app.core.fetchers.browser.browser_executor import (
     BrowserAnswerExecutionPlan,
     execute_post_submit_capture_flow,
 )
-from app.core.fetchers.browser.parsers.base import BaseResponseParser
-from app.core.fetchers.browser.parsers.connect import KimiConnectParser
+from app.core.fetchers.browser.parsers.base import (
+    BaseResponseParser,
+    InterceptConfig,
+    ParsedResponse,
+)
+from app.core.fetchers.browser.parsers.connect import (
+    KimiConnectParser,
+    decode_binary_frames,
+)
 from app.schemas.fetch import (
     BrowserState,
     Platform,
@@ -99,6 +107,80 @@ class KimiHandler(BaseBrowserHandler):
 
     def _get_response_parser(self) -> BaseResponseParser | None:
         return KimiConnectParser()
+
+    async def _intercept_and_wait(
+        self,
+        config: InterceptConfig,
+        parser: BaseResponseParser,
+    ) -> ParsedResponse | None:
+        """Capture one Kimi Connect response with cancellation-safe ownership.
+
+        Kimi can keep a successful Connect response open after the answer is
+        already visible. A directly awaited response task can be cancelled by
+        the DOM race; unlike a detached page event callback, this does not leave
+        one pending ``response.body()`` coroutine behind per question.
+        """
+
+        page = self.client.page
+        if page is None:
+            return None
+        url_pattern = re.compile(config.url_pattern)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + config.timeout
+
+        def _matches(response) -> bool:
+            request = response.request
+            if request.method.upper() != config.method.upper():
+                return False
+            if not url_pattern.search(response.url):
+                return False
+            content_type = response.headers.get("content-type", "")
+            return not config.content_type_contains or (
+                config.content_type_contains in content_type
+            )
+
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return None
+                response = await page.wait_for_event(
+                    "response",
+                    predicate=_matches,
+                    timeout=remaining * 1000,
+                )
+                logger.info(
+                    "[Kimi] Intercepted Connect response: %s (%s)",
+                    response.url[:100],
+                    response.headers.get("content-type", ""),
+                )
+                body_bytes = await asyncio.wait_for(
+                    response.body(),
+                    timeout=max(deadline - loop.time(), 0.1),
+                )
+                frames = decode_binary_frames(body_bytes)
+                parsed = parser.validate(
+                    parser.parse("\n".join(frames), url=response.url)
+                )
+                if (
+                    config.continue_on_invalid_parse
+                    and not parsed.parse_ok
+                    and not parsed.error_type
+                ):
+                    continue
+                return parsed
+        except asyncio.CancelledError:
+            logger.info("[Kimi] Connect capture cancelled after DOM answer won")
+            raise
+        except asyncio.TimeoutError:
+            logger.info(
+                "[Kimi] Connect capture timed out after %ss; using DOM result",
+                config.timeout,
+            )
+            return None
+        except Exception as exc:
+            logger.warning("[Kimi] Connect capture failed: %s", exc)
+            return None
 
     def _dismiss_popups_js(self) -> str:
         """Build popup dismissal JS for Kimi."""
@@ -309,6 +391,7 @@ class KimiHandler(BaseBrowserHandler):
                     stable_rounds=2,
                     blocker_check_after_seconds=12,
                     dump_keywords=["segment", "bubble", "text", "response"],
+                    race_intercept_with_dom=True,
                 ),
             )
             for event in events:

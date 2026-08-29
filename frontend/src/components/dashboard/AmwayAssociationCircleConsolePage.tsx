@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Orbit, Settings, Workflow } from 'lucide-react';
 import {
   AmwayAssociationCircleDashboard,
+  amwayCircleRunStatusLabel,
   hasReportContent,
   reportQualityPassed,
   type AssociationCircleStartPayload,
@@ -16,6 +17,7 @@ import { useEntityStore } from '@/stores/entityStore';
 import { useIntelligenceRunStore } from '@/stores/intelligenceRunStore';
 import { useOntologyStore } from '@/stores/ontologyStore';
 import { api } from '@/services/api';
+import { buildBrowserState } from '@/hooks/websocket/execution';
 import { toast } from '@/components/ui/toast';
 import {
   associationCenterOptionsForEntity,
@@ -29,10 +31,14 @@ import {
   isExecutingBrandIntelligenceRun,
 } from '@/types/intelligenceRun';
 import type { Entity } from '@/types/entity';
+import type { BrowserState } from '@/types/agent';
 import type { AnalysisTask } from '@/types/task';
 import type { StageResult } from '@/types/snapshot';
+import type { WebSocketEventData } from '@/types/websocket';
+import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
 import type { OntologyWorldSummary } from '@/types/ontology';
 import type {
+  AmwayCircleRunSummary,
   AmwayCirclePeriodType,
   AmwayCirclePeriodViewResponse,
 } from '@/types/amwayChina';
@@ -154,6 +160,38 @@ function parseAssociationStageResult(raw: string): StageResult | null {
   }
 }
 
+function parseBrowserActionState(raw: string): BrowserState | null {
+  try {
+    const message = JSON.parse(raw) as {
+      event?: string;
+      data?: Record<string, unknown>;
+    };
+    if (message.event !== 'browser_state' && message.event !== 'browser_user_action') {
+      return null;
+    }
+    const data = message.data || {};
+    const state = buildBrowserState(data as WebSocketEventData);
+    if (!state.requestId && !state.takeover?.takeoverId) return null;
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+function parseBrowserActionAck(raw: string): string | null {
+  try {
+    const message = JSON.parse(raw) as {
+      event?: string;
+      data?: Record<string, unknown>;
+    };
+    if (message.event !== 'browser_user_action_ack') return null;
+    const requestId = message.data?.request_id;
+    return typeof requestId === 'string' && requestId.trim() ? requestId : null;
+  } catch {
+    return null;
+  }
+}
+
 function appendUniqueStageResult(
   current: StageResult[],
   next: StageResult,
@@ -220,6 +258,9 @@ export function AmwayAssociationCircleConsolePage({
   const [homeLoadedEntityId, setHomeLoadedEntityId] = useState<string | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
   const [activeTask, setActiveTask] = useState<AnalysisTask | null>(null);
+  const [latestIntelligenceRun, setLatestIntelligenceRun] = useState<BrandIntelligenceRun | null>(null);
+  const flowSocketRef = useRef<WebSocket | null>(null);
+  const [browserActionStates, setBrowserActionStates] = useState<BrowserState[]>([]);
   const [directEntity, setDirectEntity] = useState<Entity | null>(null);
   const [directEntityError, setDirectEntityError] = useState<string | null>(null);
   const [allowEntityFallback, setAllowEntityFallback] = useState(false);
@@ -235,6 +276,9 @@ export function AmwayAssociationCircleConsolePage({
   const [isPeriodReportGenerating, setIsPeriodReportGenerating] = useState(false);
   const [periodError, setPeriodError] = useState<string | null>(null);
   const [periodReportError, setPeriodReportError] = useState<string | null>(null);
+  const [latestCircleRun, setLatestCircleRun] = useState<AmwayCircleRunSummary | null>(null);
+  const [latestCircleRunLoadedEntityId, setLatestCircleRunLoadedEntityId] = useState<string | null>(null);
+  const [latestCircleRunError, setLatestCircleRunError] = useState(false);
 
   useEffect(() => {
     void fetchEntities();
@@ -333,10 +377,15 @@ export function AmwayAssociationCircleConsolePage({
   const selectedWorld = selectedEntityId
     ? worldsByEntity[selectedEntityId] || (directWorldEntityId === selectedEntityId ? directWorld : null)
     : null;
-  const selectedRun = selectedEntityId ? runsByEntity[selectedEntityId] : null;
+  const liveSelectedRun = selectedEntityId ? runsByEntity[selectedEntityId] : null;
+  const selectedRun = liveSelectedRun || latestIntelligenceRun;
   const isSelectedRunActive = isActiveBrandIntelligenceRun(selectedRun);
   const isAwaitingPlanConfirm = isAwaitingFlowPlanConfirmation(selectedRun);
   const isSelectedRunExecuting = isExecutingBrandIntelligenceRun(selectedRun);
+  const isSelectedRunTerminal = Boolean(
+    selectedRun
+      && ['completed', 'failed', 'cancelled'].includes(String(selectedRun.status || '').toLowerCase()),
+  );
   const isWorldLoading = selectedEntityId ? Boolean(loadingByEntity[selectedEntityId]) : false;
   const hasHomeLoadedForSelectedEntity = Boolean(
     selectedEntityId && homeLoadedEntityId === selectedEntityId,
@@ -395,6 +444,81 @@ export function AmwayAssociationCircleConsolePage({
       cancelled = true;
     };
   }, [fetchActiveRun, fetchWorld, selectedEntityId]);
+
+  useEffect(() => {
+    if (!selectedEntityId) {
+      setLatestIntelligenceRun(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setLatestIntelligenceRun(null);
+    const refreshLatestRun = () => {
+      void api.getLatestBrandIntelligenceRun(selectedEntityId)
+        .then((run) => {
+          if (!cancelled) setLatestIntelligenceRun(run);
+        })
+        .catch(() => undefined);
+    };
+
+    refreshLatestRun();
+    const timer = isSelectedRunActive
+      ? window.setInterval(refreshLatestRun, 2000)
+      : null;
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [isSelectedRunActive, selectedEntityId, liveSelectedRun?.id, liveSelectedRun?.status]);
+
+  useEffect(() => {
+    setBrowserActionStates([]);
+  }, [selectedEntityId, selectedRun?.id]);
+
+  useEffect(() => {
+    if (!selectedEntityId) {
+      setLatestCircleRun(null);
+      setLatestCircleRunLoadedEntityId(null);
+      setLatestCircleRunError(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setLatestCircleRun(null);
+    setLatestCircleRunLoadedEntityId(null);
+    setLatestCircleRunError(false);
+    const refreshLatestCircleRun = () => {
+      void api.listAmwayCircleRuns(selectedEntityId, 10)
+        .then(({ runs }) => {
+          if (cancelled) return;
+          const latestRun = runs.reduce<AmwayCircleRunSummary | null>((latest, run) => (
+            !latest || run.run_sequence > latest.run_sequence ? run : latest
+          ), null);
+          setLatestCircleRun(latestRun);
+          setLatestCircleRunLoadedEntityId(selectedEntityId);
+          setLatestCircleRunError(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setLatestCircleRun(null);
+          setLatestCircleRunLoadedEntityId(selectedEntityId);
+          setLatestCircleRunError(true);
+        });
+    };
+
+    refreshLatestCircleRun();
+    const timer = isSelectedRunActive
+      ? window.setInterval(refreshLatestCircleRun, 6000)
+      : null;
+    const settleTimers = isSelectedRunActive
+      ? []
+      : [2000, 6000].map((delay) => window.setTimeout(refreshLatestCircleRun, delay));
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
+      settleTimers.forEach((settleTimer) => window.clearTimeout(settleTimer));
+    };
+  }, [isSelectedRunActive, selectedEntityId, selectedRun?.id, selectedRun?.status]);
 
   useEffect(() => {
     if (!selectedEntityId) {
@@ -529,7 +653,8 @@ export function AmwayAssociationCircleConsolePage({
 
   useEffect(() => {
     const { sessionId, taskId } = liveTaskLookup;
-    if (!sessionId || !isSelectedRunActive) {
+    const shouldReadTerminalTask = Boolean(isSelectedRunTerminal && taskId);
+    if (!sessionId || (!isSelectedRunActive && !shouldReadTerminalTask)) {
       setActiveTask(null);
       return;
     }
@@ -538,17 +663,44 @@ export function AmwayAssociationCircleConsolePage({
       const request = taskId
         ? api.getTask(sessionId, taskId)
         : api.getActiveTask(sessionId);
-      void request.then((task) => {
-        if (!cancelled) setActiveTask(task);
+      void request.then(async (task) => {
+        if (cancelled || !task) {
+          if (!cancelled) setActiveTask(task);
+          return;
+        }
+        const platformStates = await api.getTaskFetchPlatformStates(sessionId, task.id);
+        if (cancelled) return;
+        setActiveTask({
+          ...task,
+          latest_run: task.latest_run
+            ? { ...task.latest_run, fetch_platform_states: platformStates.platform_states }
+            : task.latest_run,
+        });
       });
     };
     fetchLiveTask();
-    const timer = window.setInterval(fetchLiveTask, 1000);
+    const timer = isSelectedRunActive
+      ? window.setInterval(fetchLiveTask, 1000)
+      : null;
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timer !== null) window.clearInterval(timer);
     };
-  }, [isSelectedRunActive, liveTaskLookup]);
+  }, [isSelectedRunActive, isSelectedRunTerminal, liveTaskLookup]);
+
+  const resolveFlowBrowserAction = useCallback(
+    (requestId: string, resolution: 'completed' | 'skip') => {
+      const socket = flowSocketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        toast.error('生产线连接已断开，请刷新后重试。');
+        return;
+      }
+      socket.send(JSON.stringify({
+        event: 'browser_action_resolution',
+        data: { request_id: requestId, resolution },
+      }));
+    },
+  []);
 
   useEffect(() => {
     const { sessionId } = liveTaskLookup;
@@ -568,16 +720,43 @@ export function AmwayAssociationCircleConsolePage({
         ? `${WS_URL}/ws/${sessionId}?token=${encodeURIComponent(token)}`
         : `${WS_URL}/ws/${sessionId}`;
       socket = new WebSocket(url);
+      flowSocketRef.current = socket;
       socket.onopen = () => {
         reconnectCount = 0;
       };
       socket.onmessage = (event) => {
         if (closedByEffect) return;
+        const browserState = parseBrowserActionState(event.data);
+        if (browserState) {
+          setBrowserActionStates((current) => {
+            const key = browserState.requestId
+              || browserState.takeover?.takeoverId
+              || `${browserState.platform}:${browserState.actionType || browserState.state}`;
+            const index = current.findIndex((item) => (
+              (item.requestId || item.takeover?.takeoverId || `${item.platform}:${item.actionType || item.state}`) === key
+            ));
+            if (index < 0) return [...current, browserState];
+            const next = [...current];
+            next[index] = {
+              ...next[index],
+              ...browserState,
+              takeover: browserState.takeover || next[index].takeover,
+            };
+            return next;
+          });
+          return;
+        }
+        const ackRequestId = parseBrowserActionAck(event.data);
+        if (ackRequestId) {
+          setBrowserActionStates((current) => current.filter((item) => item.requestId !== ackRequestId));
+          return;
+        }
         const stageResult = parseAssociationStageResult(event.data);
         if (!stageResult) return;
         setStreamedStageResults((current) => appendUniqueStageResult(current, stageResult, 500));
       };
       socket.onclose = () => {
+        if (flowSocketRef.current === socket) flowSocketRef.current = null;
         if (closedByEffect) return;
         const delay = Math.min(4000, 600 + reconnectCount * 600);
         reconnectCount += 1;
@@ -592,6 +771,7 @@ export function AmwayAssociationCircleConsolePage({
     return () => {
       closedByEffect = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (flowSocketRef.current === socket) flowSocketRef.current = null;
       socket?.close();
     };
   }, [isSelectedRunActive, liveTaskLookup]);
@@ -802,9 +982,11 @@ export function AmwayAssociationCircleConsolePage({
       ? '正在运行'
       : isProjectionLoading
         ? '正在读取'
-        : consoleProjection.nodes.length > 0
-          ? '圈层已生成'
-          : '待运行';
+        : latestCircleRunLoadedEntityId !== selectedEntityId
+          ? '正在读取'
+          : latestCircleRunError
+            ? '采集状态读取失败'
+            : amwayCircleRunStatusLabel(latestCircleRun, consoleProjection.nodes.length > 0);
   const headerHasPeriodReport = Boolean(
     periodView?.report_id && hasReportContent(periodView.projection),
   );
@@ -904,10 +1086,10 @@ export function AmwayAssociationCircleConsolePage({
   }
 
   return (
-    <div className="amway-console flex min-h-screen bg-[var(--bg-secondary)]">
+    <div className="amway-console flex min-h-screen min-w-0 overflow-x-hidden bg-[var(--bg-secondary)]">
       <nav
         aria-label="安利 Console 导航"
-        className="sticky top-0 flex h-screen w-52 shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-5"
+        className="sticky top-0 hidden h-screen w-52 shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-5 md:flex"
       >
         <div className="px-2 text-xs font-medium tracking-[0.14em] text-[var(--text-tertiary)]">
           安利品牌圈层
@@ -957,6 +1139,9 @@ export function AmwayAssociationCircleConsolePage({
             world={selectedWorld}
             activeRun={selectedRun}
             activeTask={activeTask}
+            latestCircleRun={latestCircleRun}
+            isLatestCircleRunLoading={latestCircleRunLoadedEntityId !== selectedEntityId}
+            latestCircleRunError={latestCircleRunError}
             isRunActive={isSelectedRunExecuting}
             isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
             isProjectionLoading={isProjectionLoading}
@@ -993,6 +1178,8 @@ export function AmwayAssociationCircleConsolePage({
             periodView={periodView}
             activeRun={selectedRun}
             activeTask={activeTask}
+            browserActionStates={browserActionStates}
+            onResolveBrowserAction={resolveFlowBrowserAction}
             isRunActive={isSelectedRunExecuting}
             isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
             isAwaitingPlanConfirm={isAwaitingPlanConfirm}

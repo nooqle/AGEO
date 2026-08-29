@@ -143,11 +143,17 @@ export function AmwayFlowOrchestrationPanel({
   }, [entityId, activeRunCompleted]);
 
   useEffect(() => {
-    void reloadEvents();
+    const timer = window.setTimeout(() => {
+      void reloadEvents();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [reloadEvents]);
 
   useEffect(() => {
-    void reloadLessons();
+    const timer = window.setTimeout(() => {
+      void reloadLessons();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [reloadLessons, activeRunCompleted, latestCompleted, topologyRemovedKey]);
 
   const suggestSaveAfterRun = activeRunCompleted || latestCompleted;

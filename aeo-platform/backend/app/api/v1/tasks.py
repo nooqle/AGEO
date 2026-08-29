@@ -9,6 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.models.task import TaskStatus
 from app.services.access_scope_service import AccessScopeService
+from app.services.fetch_run_platform_state_service import (
+    FetchRunPlatformStateService,
+    fetch_run_platform_state_to_dict,
+)
 from app.services.llm_usage_service import LLMUsageService
 from app.services.runtime_coordinator import runtime_coordinator
 from app.services.task_service import TaskService, task_run_to_dict, task_to_dict
@@ -102,6 +106,35 @@ async def get_task(
     if not task or str(task.session_id) != str(sid):
         raise HTTPException(status_code=404, detail="Task not found")
     return {"task": task_to_dict(task)}
+
+
+@router.get("/{task_id}/fetch-platform-states")
+async def get_task_fetch_platform_states(
+    session_id: str,
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return the latest run's authoritative per-platform fetch states."""
+
+    sid = _parse_uuid(session_id, "session_id")
+    tid = _parse_uuid(task_id, "task_id")
+    service = TaskService(db)
+    task = await service.get_task_for_viewer(tid, current_user)
+    if not task or str(task.session_id) != str(sid):
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    loaded_runs = list(task.__dict__.get("task_runs") or [])
+    latest_run = loaded_runs[0] if loaded_runs else None
+    if latest_run is None:
+        return {"task_id": str(task.id), "task_run_id": None, "platform_states": []}
+
+    rows = await FetchRunPlatformStateService(db).list_for_task_run(latest_run.id)
+    return {
+        "task_id": str(task.id),
+        "task_run_id": str(latest_run.id),
+        "platform_states": [fetch_run_platform_state_to_dict(row) for row in rows],
+    }
 
 
 @router.get("/{task_id}/runs")

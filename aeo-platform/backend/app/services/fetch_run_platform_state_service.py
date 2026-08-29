@@ -26,6 +26,51 @@ _STATUS_PRIORITY = {
 _TERMINAL_STATUSES = {"skipped", "failed", "succeeded"}
 
 
+def fetch_run_platform_state_to_dict(row: FetchRunPlatformState) -> dict[str, Any]:
+    """Serialize the compact platform evidence needed by task consumers.
+
+    Keep the full packet out of the task API response.  The packet can contain
+    question-level answer data, while task status pages only need the platform
+    status, coverage counters, and failure reason.
+    """
+
+    packet = row.latest_packet if isinstance(row.latest_packet, dict) else {}
+    stats = packet.get("stats") if isinstance(packet.get("stats"), dict) else {}
+
+    def _count(key: str) -> int:
+        try:
+            return max(0, int(stats.get(key, 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _iso(value: datetime | None) -> str | None:
+        return value.isoformat() if value else None
+
+    return {
+        "id": str(row.id),
+        "task_run_id": str(row.task_run_id),
+        "task_id": str(row.task_id),
+        "platform": row.platform,
+        "status": row.status,
+        "attempt_no": row.attempt_no,
+        "auth_state": row.auth_state,
+        "action_type": packet.get("action_type") or "browser_action",
+        "reason_code": packet.get("reason_code"),
+        "request_id": row.latest_takeover_request_id,
+        "questions_completed": _count("completed"),
+        "questions_total": _count("total"),
+        "mention_count": _count("mentions"),
+        "artifact_write_status": row.artifact_write_status,
+        "error_kind": row.error_kind or packet.get("error_type"),
+        "error_message": row.error_message or packet.get("error"),
+        "timing": row.timing_json or {},
+        "started_at": _iso(row.started_at),
+        "finished_at": _iso(row.finished_at),
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
+    }
+
+
 class FetchRunPlatformStateService:
     """Persist and project authoritative A4/A5 per-platform state."""
 

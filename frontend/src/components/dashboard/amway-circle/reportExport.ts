@@ -203,12 +203,24 @@ export function downloadAssociationReportHtml(
     const isAction = titleText.includes('从数据到行动') || (titleText.includes('本周') && titleText.includes('件事'));
     const isBlindSpot = titleText.includes('盲区') || section.sectionId === 'ai_blind_spot';
     const isPlatformDiff = titleText === '平台差异' || titleText.includes('平台差异');
+    const isLivingYoungAutonomy = section.sectionId === 'living_young_autonomy';
 
     const takeawayClass = isBlindSpot ? 'takeaway-box-red' : isVerdict ? 'takeaway-box-green-strong' : 'takeaway-box-green';
     const takeawayHtml = section.takeaway ? `<div class="${takeawayClass}">${renderExportParagraphHtml(reportCopy(section.takeaway), entityTerms)}</div>` : '';
 
     let claimsHtml = '';
-    if (isAiArchive && sectionClaims.length) {
+    if (isLivingYoungAutonomy && sectionClaims.length) {
+      const paths = sectionClaims.slice(0, 3).map((claim, pathIndex) => {
+        const [label, status, ...detailParts] = claim.split('｜').map((part) => part.trim());
+        const normalizedStatus = status || '待验证';
+        const statusClass = /已形成|已接住|较稳定/.test(normalizedStatus) ? 'autonomy-status-established' : 'autonomy-status-pending';
+        return `<li class="autonomy-card"><div class="autonomy-card-head"><div><span class="autonomy-num">${String(pathIndex + 1).padStart(2, '0')}</span><h3>${escapeHtml(label || `自主路径 ${pathIndex + 1}`)}</h3></div><span class="autonomy-status ${statusClass}">${escapeHtml(normalizedStatus)}</span></div><p>${escapeHtml(detailParts.join('｜') || '本轮尚未形成可核验的品牌连接。')}</p></li>`;
+      }).join('');
+      const connectionJudgment = sectionClaims[3]
+        ? `<p class="autonomy-connection">${escapeHtml(sectionClaims[3])}</p>`
+        : '';
+      claimsHtml = `<ol class="autonomy-grid">${paths}</ol>${connectionJudgment}`;
+    } else if (isAiArchive && sectionClaims.length) {
       claimsHtml = `<div class="persona-grid">${sectionClaims.slice(0, 4).map((claim) => {
         const match = claim.match(/^([^｜]+)｜(.+)$/);
         const platform = match?.[1]?.trim() || '';
@@ -529,6 +541,19 @@ export function downloadAssociationReportHtml(
     .persona-name { font: 700 16px/1.4 ui-sans-serif, system-ui, sans-serif; margin-bottom: 6px; }
     .persona-desc { font: 14px/1.7 ui-sans-serif, system-ui, sans-serif; color: #1f2933; }
     .persona-data { margin-top: 8px; font: 12px/1.6 ui-sans-serif, system-ui, sans-serif; color: #657184; }
+
+    /* 活得年轻：三条自主路径 */
+    .autonomy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 0; padding: 0; list-style: none; }
+    .autonomy-card { min-width: 0; background: #fffdf8; border: 1px solid #ebe5da; border-top: 3px solid #1f7a6b; border-radius: 10px; padding: 14px; }
+    .autonomy-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .autonomy-card h3 { margin: 3px 0 0; font: 700 18px/1.45 "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; color: #1f2933; }
+    .autonomy-card p { margin: 10px 0 0; font: 14px/1.8 "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; color: #384556; overflow-wrap: anywhere; }
+    .autonomy-num { display: block; color: #1f7a6b; font: 700 11px/1.3 ui-sans-serif, system-ui, sans-serif; letter-spacing: .14em; }
+    .autonomy-status { flex: 0 0 auto; border-radius: 6px; padding: 3px 7px; font: 700 11px/1.4 ui-sans-serif, system-ui, sans-serif; }
+    .autonomy-status-established { background: rgba(31,122,107,0.10); color: #17685b; }
+    .autonomy-status-pending { background: #fff4d6; color: #6b4e16; }
+    .autonomy-connection { margin: 12px 0 0; padding: 11px 14px; border-top: 1px solid #ebe5da; border-bottom: 1px solid #ebe5da; background: #f4eee2; color: #1f2933; font: 14px/1.8 "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+    @media (max-width: 720px) { .autonomy-grid { grid-template-columns: 1fr; } }
 
     /* action / problem card */
     .action-list { margin: 16px 0 0; display: flex; flex-direction: column; gap: 10px; }

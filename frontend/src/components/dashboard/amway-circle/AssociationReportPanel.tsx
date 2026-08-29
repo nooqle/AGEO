@@ -78,8 +78,11 @@ export function AssociationReportPanel({
   const reportSections = hasBackendReportSpine
     ? readableNarrativeSections(normalizedReportSections) || generatedReportSections
     : generatedReportSections;
-  const compactReportSections = reportSections.slice(0, 6);
-  const exportReportSections = compactReportSections;
+  const contentReportSections = reportSections.filter((section) => (
+    (!('sectionId' in section) || section.sectionId !== 'period_change')
+    && !section.title.startsWith('附录：')
+  ));
+  const exportReportSections = contentReportSections;
   const periodView = readPeriodView(projection);
   const periodScopeText = buildPeriodScopeText(periodView);
   const isReportDeliverable = reportQualityChecks.passed === true;
@@ -138,7 +141,7 @@ export function AssociationReportPanel({
         ) : null}
 
         <div className="mx-auto mt-9 max-w-[1040px] space-y-10">
-          {compactReportSections.map((section, index) => {
+          {contentReportSections.map((section, index) => {
             const sectionId = 'sectionId' in section ? section.sectionId : undefined;
             const shouldRenderStrategyDetails =
               sectionId === 'strategy_validation' || section.title.includes('战略词逐项验证');
@@ -167,7 +170,7 @@ export function AssociationReportPanel({
             );
           })}
 
-          <ReportEvidenceSamples quotes={compactReportSections.flatMap((section) => (section.supportingFacts || []).filter(reportEvidenceLine))} />
+          <ReportEvidenceSamples quotes={contentReportSections.flatMap((section) => (section.supportingFacts || []).filter(reportEvidenceLine))} />
 
           <ReportPeriodChangeSummary periodView={periodView} />
 

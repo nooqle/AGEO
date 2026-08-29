@@ -834,6 +834,31 @@ class AmwayCircleTrackingService:
         completed_at = _datetime_or_now(
             artifact.get("updated_at") or calibration_result.get("generated_at")
         )
+        question_count = _int(sample_scope.get("question_count"))
+        expected_answer_count = question_count * len(requested_platforms)
+        valid_answer_count = _int(sample_scope.get("valid_answer_count"))
+        failed_answer_count = _int(sample_scope.get("failed_answer_count"))
+        collection_status = _collection_status(
+            calibrated=calibrated,
+            expected_answer_count=expected_answer_count,
+            valid_answer_count=valid_answer_count,
+        )
+        collection_coverage = {
+            "status": collection_status,
+            "expected_answer_count": expected_answer_count,
+            "valid_answer_count": valid_answer_count,
+            "failed_answer_count": failed_answer_count,
+            "coverage_ratio": _coverage_ratio(
+                valid_answer_count,
+                expected_answer_count,
+            ),
+        }
+        include_in_cumulative = calibrated and collection_status != "failed"
+        excluded_reason = None
+        if not calibrated:
+            excluded_reason = "missing_entity_calibration"
+        elif collection_status == "failed":
+            excluded_reason = "no_valid_answers"
         sequence = (
             circle_run.run_sequence
             if circle_run
@@ -841,19 +866,20 @@ class AmwayCircleTrackingService:
         )
         values = {
             "question_set_id": question_set_id,
-            "status": "completed" if calibrated else "partial",
+            "status": collection_status,
             "center_term": center_terms[0],
             "center_terms": center_terms,
             "platforms_requested": requested_platforms,
             "platforms_completed": completed_platforms,
-            "question_count": _int(sample_scope.get("question_count")),
-            "valid_answer_count": _int(sample_scope.get("valid_answer_count")),
-            "failed_answer_count": _int(sample_scope.get("failed_answer_count")),
+            "question_count": question_count,
+            "valid_answer_count": valid_answer_count,
+            "failed_answer_count": failed_answer_count,
             "answer_scope": {
                 "question_definition": _dict(artifact.get("question_definition")),
                 "platform_source_summary": _dict(
                     artifact.get("platform_source_summary")
                 ),
+                "collection_coverage": collection_coverage,
             },
             "question_signature": _question_signature(question_bank),
             "lexicon_version": ontology_version,
@@ -867,8 +893,8 @@ class AmwayCircleTrackingService:
                 or CALIBRATION_SCHEMA_VERSION
             ),
             "projection_version": str(artifact.get("schema_version") or "v1"),
-            "include_in_cumulative": calibrated,
-            "excluded_reason": None if calibrated else "missing_entity_calibration",
+            "include_in_cumulative": include_in_cumulative,
+            "excluded_reason": excluded_reason,
             "completed_at": completed_at,
         }
         if circle_run is None:
@@ -884,8 +910,7 @@ class AmwayCircleTrackingService:
                     or input_scope.get("question_set_version")
                     or f"第 {sequence} 轮"
                 ),
-                expected_answer_count=values["question_count"]
-                * len(requested_platforms),
+                expected_answer_count=expected_answer_count,
                 started_at=brand_run.started_at or brand_run.created_at,
                 **values,
             )
@@ -894,9 +919,7 @@ class AmwayCircleTrackingService:
         else:
             for key, value in values.items():
                 setattr(circle_run, key, value)
-            circle_run.expected_answer_count = values["question_count"] * len(
-                requested_platforms
-            )
+            circle_run.expected_answer_count = expected_answer_count
 
         await self._persist_run_snapshots(
             circle_run=circle_run,
@@ -1150,7 +1173,8 @@ class AmwayCircleTrackingService:
             "snapshot_integrity": manifest,
         }
         if incomplete:
-            circle_run.status = "partial"
+            if circle_run.status != "failed":
+                circle_run.status = "partial"
             circle_run.include_in_cumulative = False
             circle_run.excluded_reason = "incomplete_snapshot:" + ",".join(
                 _unique_strings(incomplete)
@@ -2197,6 +2221,21 @@ def _period_summary(
         for platform in _string_list(getattr(row, "platforms_requested", []))
     )
     question_observation_count = sum(int(row.question_count or 0) for row in runs)
+    expected_answer_count = sum(
+        int(
+            getattr(row, "expected_answer_count", 0)
+            or int(getattr(row, "question_count", 0) or 0)
+            * len(_string_list(getattr(row, "platforms_requested", [])))
+        )
+        for row in runs
+    )
+    valid_answer_count = sum(int(row.valid_answer_count or 0) for row in runs)
+    failed_answer_count = sum(int(row.failed_answer_count or 0) for row in runs)
+    collection_status = _aggregate_collection_status(
+        runs,
+        expected_answer_count=expected_answer_count,
+        valid_answer_count=valid_answer_count,
+    )
     return _period_sample_scope(
         {
             "period_type": period_type,
@@ -2205,9 +2244,13 @@ def _period_summary(
             "question_count": question_observation_count,
             "question_observation_count": question_observation_count,
             "distinct_question_count": None,
-            "valid_answer_count": sum(int(row.valid_answer_count or 0) for row in runs),
-            "failed_answer_count": sum(
-                int(row.failed_answer_count or 0) for row in runs
+            "expected_answer_count": expected_answer_count,
+            "valid_answer_count": valid_answer_count,
+            "failed_answer_count": failed_answer_count,
+            "collection_status": collection_status,
+            "coverage_ratio": _coverage_ratio(
+                valid_answer_count,
+                expected_answer_count,
             ),
             "platforms": platforms,
             "requested_platforms": requested_platforms,
@@ -2354,6 +2397,30 @@ def _aggregate_projection(
     body = _period_projection_shell(bodies[0][1])
     body["nodes"] = _aggregate_nodes(list(reversed(bodies)))
     question_bank = _aggregate_question_bank(bodies)
+    # 实时聚合路径同样需要携带证据与答案原文（报告路径 _build_period_report_artifact
+    # 有相同逻辑），否则 period view 的 projection 会丢 source_appendix/evidence_samples。
+    evidence_samples = _aggregate_period_items(
+        bodies,
+        field="evidence_samples",
+        id_field="evidence_id",
+    )
+    source_appendix = _aggregate_period_items(
+        bodies,
+        field="source_appendix",
+        id_field="evidence_id",
+    )
+    source_ids = {
+        str(item.get("evidence_id") or "").strip()
+        for item in source_appendix
+        if str(item.get("evidence_id") or "").strip()
+    }
+    source_appendix.extend(
+        deepcopy(item)
+        for item in evidence_samples
+        if str(item.get("evidence_id") or "").strip() not in source_ids
+    )
+    body["evidence_samples"] = evidence_samples
+    body["source_appendix"] = source_appendix
     if summary is not None:
         distinct_question_count = len(question_bank) or _int(
             summary.get("distinct_question_count")
@@ -4030,6 +4097,53 @@ def _int(value: Any) -> int:
         return 0
 
 
+def _coverage_ratio(valid_answer_count: int, expected_answer_count: int) -> float:
+    if expected_answer_count <= 0:
+        return 0.0
+    return round(
+        min(max(valid_answer_count, 0), expected_answer_count)
+        / expected_answer_count,
+        4,
+    )
+
+
+def _collection_status(
+    *,
+    calibrated: bool,
+    expected_answer_count: int,
+    valid_answer_count: int,
+) -> str:
+    if not calibrated:
+        return "partial"
+    if valid_answer_count <= 0:
+        return "failed"
+    if expected_answer_count <= 0:
+        return "completed"
+    if valid_answer_count < expected_answer_count:
+        return "partial"
+    return "completed"
+
+
+def _aggregate_collection_status(
+    runs: list[AmwayCircleRun],
+    *,
+    expected_answer_count: int,
+    valid_answer_count: int,
+) -> str:
+    if not runs:
+        return "empty"
+    if valid_answer_count <= 0 and expected_answer_count > 0:
+        return "failed"
+    if any(
+        str(getattr(row, "status", "completed") or "completed") != "completed"
+        for row in runs
+    ):
+        return "partial"
+    if expected_answer_count > 0 and valid_answer_count < expected_answer_count:
+        return "partial"
+    return "completed"
+
+
 def _float(value: Any) -> float:
     try:
         return float(value or 0)
@@ -4477,6 +4591,10 @@ def _period_sample_scope(
         "platform_count": len(platforms),
         "valid_answer_count": _int(summary.get("valid_answer_count")),
         "failed_answer_count": _int(summary.get("failed_answer_count")),
+        "expected_answer_count": _int(summary.get("expected_answer_count")),
+        "collection_status": str(summary.get("collection_status") or "").strip()
+        or "completed",
+        "coverage_ratio": _float(summary.get("coverage_ratio")),
         "normalized_node_count": (
             len(nodes)
             if projection is not None

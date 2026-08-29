@@ -67,6 +67,7 @@ class BrowserAnswerExecutionPlan:
     before_dom_extract: AsyncHook | None = None
     extract_answer: AsyncAnswerExtractor | None = None
     extract_references: AsyncReferenceExtractor | None = None
+    race_intercept_with_dom: bool = False
 
 
 @dataclass(slots=True)
@@ -107,10 +108,41 @@ async def execute_post_submit_capture_flow(
         default=_DEFAULT_BLOCKER_CHECK_AFTER_SECONDS,
         minimum=1,
     )
+    dom_wait_result: tuple[int, float, Any] | None = None
+    dom_wait_task: asyncio.Task | None = None
 
     try:
         if plan.intercept_task:
-            parsed = await plan.intercept_task
+            parsed = None
+            if plan.race_intercept_with_dom:
+                dom_wait_task = asyncio.create_task(
+                    handler._wait_for_content_with_browser_agent(
+                        max_wait=plan.max_wait,
+                        poll_interval=plan.poll_interval,
+                        min_content_len=plan.min_content_len,
+                        stable_rounds=stable_rounds,
+                        target_url=plan.fallback_url,
+                        blocker_check_after_seconds=blocker_check_after_seconds,
+                    )
+                )
+                done, _ = await asyncio.wait(
+                    {plan.intercept_task, dom_wait_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if plan.intercept_task in done:
+                    parsed = await plan.intercept_task
+                    if parsed and (parsed.parse_ok or parsed.error_type):
+                        await _cancel_task(dom_wait_task)
+                    else:
+                        dom_wait_result = await dom_wait_task
+                else:
+                    dom_wait_result = await dom_wait_task
+                    if plan.intercept_task.done():
+                        parsed = await plan.intercept_task
+                    else:
+                        await _cancel_task(plan.intercept_task)
+            else:
+                parsed = await plan.intercept_task
             if parsed and parsed.parse_ok and len(parsed.answer_text.strip()) >= 10:
                 answer_text = parsed.answer_text
                 search_refs = parsed.references
@@ -137,14 +169,16 @@ async def execute_post_submit_capture_flow(
                 return None, events
 
         if not answer_text:
-            prev_len, waited, blocker_decision = await handler._wait_for_content_with_browser_agent(
-                max_wait=plan.max_wait,
-                poll_interval=plan.poll_interval,
-                min_content_len=plan.min_content_len,
-                stable_rounds=stable_rounds,
-                target_url=plan.fallback_url,
-                blocker_check_after_seconds=blocker_check_after_seconds,
-            )
+            if dom_wait_result is None:
+                dom_wait_result = await handler._wait_for_content_with_browser_agent(
+                    max_wait=plan.max_wait,
+                    poll_interval=plan.poll_interval,
+                    min_content_len=plan.min_content_len,
+                    stable_rounds=stable_rounds,
+                    target_url=plan.fallback_url,
+                    blocker_check_after_seconds=blocker_check_after_seconds,
+                )
+            prev_len, waited, blocker_decision = dom_wait_result
             blocker_events, handled = await handler._handle_browser_agent_wait_blocker(
                 blocker_decision,
                 progress=plan.blocker_progress,
@@ -256,6 +290,24 @@ async def execute_post_submit_capture_flow(
             )
         )
         return None, events
+    finally:
+        if dom_wait_task is not None:
+            await _cancel_task(dom_wait_task)
+        if plan.intercept_task is not None:
+            await _cancel_task(plan.intercept_task)
+
+
+async def _cancel_task(task: asyncio.Task) -> None:
+    """Cancel and drain a losing capture task so its listeners are removed."""
+
+    if not task.done():
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.debug("Capture task ended with an error during cleanup", exc_info=True)
 
 
 async def _try_extract_dom_references_after_network(

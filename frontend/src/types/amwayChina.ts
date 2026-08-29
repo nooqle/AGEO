@@ -248,7 +248,7 @@ export interface AmwayCircleProjectionResponse {
   target_run_id?: string | null;
   as_of_run_id?: string | null;
   projection_version: string;
-  status: 'ready' | 'building' | 'failed';
+  status: 'ready' | 'partial' | 'building' | 'failed';
   source_run_ids: string[];
   source_run_count: number;
   source_run_hash: string;

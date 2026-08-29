@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from app.config import get_settings
 from app.core.llm import get_llm_model
 from app.core.llm.glm5 import GLM5Config, GLM5Model
+from app.services.llm_usage_service import record_llm_usage_async
 from app.core.fetchers.browser.browser_agent_contract import (
     BrowserAgentAction,
     BrowserAgentDecision,
@@ -503,6 +504,22 @@ class LLMBrowserAgentPolicy:
         except Exception as exc:
             logger.warning("[BrowserAgentLoop] LLM browser decision failed: %s", exc)
             return None
+        await record_llm_usage_async(
+            session_id=str(loop_context.meta.get("session_id") or "") or None,
+            task_id=str(loop_context.meta.get("task_id") or "") or None,
+            skill_key="browser_agent",
+            step="A4",
+            step_name="浏览器代理决策",
+            model=model,
+            usage=getattr(response, "usage", None),
+            latency_ms=getattr(response, "latency_ms", None),
+            extra_metadata={
+                "platform": loop_context.platform,
+                "browser_stage": loop_context.stage,
+                "run_id": loop_context.meta.get("run_id"),
+                "usage_scope": "a4_browser_agent",
+            },
+        )
         payload = _extract_json_object(response.content)
         if not payload:
             logger.warning("[BrowserAgentLoop] LLM policy returned non-JSON content")

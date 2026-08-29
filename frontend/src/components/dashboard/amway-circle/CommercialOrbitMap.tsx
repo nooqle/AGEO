@@ -160,6 +160,7 @@ export function CommercialOrbitMap({
       : [],
   );
   const [keyboardNodeId, setKeyboardNodeId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const keyboardEntryIds = entries
     .filter((entry) => {
       const trackFocused = orbitFocusedEntry(entry, focusGroupKey);
@@ -205,6 +206,38 @@ export function CommercialOrbitMap({
   const liveSamples = isLivePreview
     ? buildLiveExtractionStreamSamples(sourceAppendix, evidenceSamples).slice(0, 4)
     : [];
+  const renderedEntries = entries.map((entry) => {
+    const selected = selectedNodeId === entry.node.node_id;
+    const focused = entry.node.node_id === selectedFocusNodeId;
+    const trackFocused = orbitFocusedEntry(entry, focusGroupKey);
+    const mutedByTrack = Boolean(focusTrackFilter) && !trackFocused;
+    const mutedByOverview = !isRiskMode
+      && !focusTrackFilter
+      && !focused
+      && !overviewHighlightedNodeIds.has(entry.node.node_id);
+    const origin = nodeOriginRead(entry.node, strategyTerms);
+    const position = orbitScreenPosition(entry, associationXScale, isRiskMode);
+    const labelVisible = focusGroupKey
+      ? focusedTrackLabelNodeIds.has(entry.node.node_id)
+      : entry.labelPriority;
+    const labelShown = !mutedByTrack && (
+      focused
+      || labelVisible
+      || hoveredNodeId === entry.node.node_id
+      || keyboardNodeId === entry.node.node_id
+    );
+    return {
+      entry,
+      selected,
+      focused,
+      trackFocused,
+      mutedByTrack,
+      mutedByOverview,
+      origin,
+      position,
+      labelShown,
+    };
+  });
   return (
     <div
       ref={mapRef}
@@ -376,20 +409,17 @@ export function CommercialOrbitMap({
         sampleScope={sampleScope}
         onClose={closeNodeInsight}
       />
-      {entries.length ? entries.map((entry) => {
-        const selected = selectedNodeId === entry.node.node_id;
-        const focused = entry.node.node_id === selectedFocusNodeId;
-        const trackFocused = orbitFocusedEntry(entry, focusGroupKey);
-        const mutedByTrack = Boolean(focusTrackFilter) && !trackFocused;
-        const mutedByOverview = !isRiskMode
-          && !focusTrackFilter
-          && !focused
-          && !overviewHighlightedNodeIds.has(entry.node.node_id);
-        const origin = nodeOriginRead(entry.node, strategyTerms);
-        const position = orbitScreenPosition(entry, associationXScale, isRiskMode);
-        const labelVisible = focusGroupKey
-          ? focusedTrackLabelNodeIds.has(entry.node.node_id)
-          : entry.labelPriority;
+      {renderedEntries.length ? renderedEntries.map((renderedEntry) => {
+        const {
+          entry,
+          selected,
+          focused,
+          trackFocused,
+          mutedByTrack,
+          mutedByOverview,
+          origin,
+          position,
+        } = renderedEntry;
         return (
           <button
             key={entry.node.node_id}
@@ -398,10 +428,13 @@ export function CommercialOrbitMap({
             data-node-id={entry.node.node_id}
             tabIndex={mutedByTrack || entry.node.node_id !== activeKeyboardNodeId ? -1 : 0}
             aria-hidden={mutedByTrack ? true : undefined}
+            aria-label={entry.node.term}
             onFocus={(event) => {
               selectedNodeTriggerRef.current = event.currentTarget;
               setKeyboardNodeId(entry.node.node_id);
             }}
+            onMouseEnter={() => setHoveredNodeId(entry.node.node_id)}
+            onMouseLeave={() => setHoveredNodeId(null)}
             onKeyDown={(event) => {
               const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
                 ? 1
@@ -463,13 +496,31 @@ export function CommercialOrbitMap({
                   : undefined,
               }}
             />
+          </button>
+        );
+      }) : null}
+      <div
+        aria-hidden="true"
+        data-amway-orbit-label-layer="true"
+        className="pointer-events-none absolute inset-0 z-[45]"
+      >
+        {renderedEntries.map(({ entry, focused, origin, position, labelShown }) => {
+          const labelOffset = focusTrackFilter ? 22 : 28;
+          const labelHeightEstimate = 32;
+          const labelAbove = position.top > (
+            (mapSize.height - labelOffset - labelHeightEstimate) / Math.max(1, mapSize.height) * 100
+          );
+          return (
             <span
-              className={`amway-orbit-node-label absolute left-1/2 top-[calc(100%+6px)] inline-flex min-w-max -translate-x-1/2 items-center gap-1.5 rounded-full border bg-[var(--bg-elevated)] px-2.5 py-1 text-xs font-medium shadow-sm transition duration-200 ${
-                !mutedByTrack && (focused || labelVisible)
-                  ? 'opacity-100'
-                  : 'opacity-0 group-hover:opacity-100'
-              } pointer-events-none hidden sm:inline-flex`}
+              key={`label-${entry.node.node_id}`}
+              className={`amway-orbit-node-label absolute inline-flex min-w-max -translate-x-1/2 items-center gap-1.5 rounded-full border bg-[var(--bg-elevated)] px-2.5 py-1 text-xs font-medium shadow-sm transition duration-200 hidden sm:inline-flex ${
+                labelAbove ? '-translate-y-full' : ''
+              } ${labelShown ? 'opacity-100' : 'opacity-0'}`}
               style={{
+                left: `${position.left * canvasWidthPercent / 100}%`,
+                top: labelAbove
+                  ? `calc(${position.top}% - ${labelOffset}px)`
+                  : `calc(${position.top}% + ${labelOffset}px)`,
                 borderColor: focused ? orbitToneColor(entry.groupKey) : 'var(--border-subtle)',
                 color: focused ? orbitToneColor(entry.groupKey) : 'var(--text-secondary)',
               }}
@@ -487,9 +538,9 @@ export function CommercialOrbitMap({
                 {nodeOriginShortLabel(origin.kind)}
               </span>
             </span>
-          </button>
-        );
-      }) : null}
+          );
+        })}
+      </div>
     </div>
   );
 }

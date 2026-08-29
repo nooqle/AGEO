@@ -27,13 +27,13 @@ export function AmwayConsoleHeader({
 }: AmwayConsoleHeaderProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/85 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-[1920px] items-center justify-between gap-4 px-5 lg:px-7 2xl:px-10">
+      <div className="mx-auto flex h-16 max-w-[1920px] items-center justify-between gap-2 px-3 sm:gap-4 sm:px-5 lg:px-7 2xl:px-10">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--brand-primary)] text-sm font-semibold text-[var(--brand-contrast)]">
+          <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--brand-primary)] text-sm font-semibold text-[var(--brand-contrast)] sm:flex">
             S
           </div>
           <div className="min-w-0">
-            <div className="text-sm font-semibold leading-5">Specta AI</div>
+            <div className="hidden text-sm font-semibold leading-5 sm:block">Specta AI</div>
             <div className="truncate text-xs text-[var(--text-secondary)]">安利品牌圈层 · {viewLabel}</div>
           </div>
         </div>
@@ -43,7 +43,7 @@ export function AmwayConsoleHeader({
               className={`h-1.5 w-1.5 rounded-full ${isRunning ? 'animate-pulse bg-[var(--brand-primary)]' : 'bg-[var(--text-tertiary)]'}`}
               aria-hidden="true"
             />
-            <span className="font-medium text-[var(--text-primary)]">{statusLabel}</span>
+            <span className="hidden font-medium text-[var(--text-primary)] sm:inline">{statusLabel}</span>
           </div>
           <button
             type="button"
@@ -58,7 +58,7 @@ export function AmwayConsoleHeader({
             }`}
           >
             <FileText size={15} />
-            {reportLabel}
+            <span className="hidden sm:inline">{reportLabel}</span>
           </button>
         </div>
       </div>

@@ -4,7 +4,8 @@ This module contains the A4 node implementation for fetching answers
 from various AI platforms (Doubao, Yuanbao, Kimi, DeepSeek, etc.)
 
 Optimizations:
-- API-first strategy: Doubao/Yuanbao/Kimi (API) execute first, DeepSeek (Browser) second
+- Fast mode resolves API/browser paths from the active configuration; legacy
+  Hunyuan configuration routes Yuanbao through the browser path
 - API platforms use per-platform pacing, concurrency, and retry budgets
 - Browser platforms have a 90s per-question timeout (from PlatformConstants), no retries
 - Browser failures do not block the overall flow
@@ -18,7 +19,7 @@ import random
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Coroutine, Iterator
+from typing import Any, Callable, Coroutine, Iterator, Literal
 from uuid import UUID
 
 import httpx
@@ -561,6 +562,32 @@ def _display_platform_names(platforms: list[str]) -> str:
     return resolve_platform_display_names(platforms)
 
 
+def _hunyuan_legacy_configuration_detected() -> bool:
+    """Detect the retired Hunyuan API configuration used by fast A4."""
+
+    from app.core.fetchers.api.hunyuan_client import HunyuanClient
+
+    return HunyuanClient.has_legacy_configuration(
+        configured_url=settings.HUNYUAN_BASE_URL,
+        configured_model=settings.HUNYUAN_FAST_MODEL or settings.HUNYUAN_MODEL,
+    )
+
+
+def _resolve_hunyuan_fetch_method(
+    fetch_mode: str,
+    *,
+    requested: bool,
+    legacy_configured: bool,
+) -> Literal["api", "browser"] | None:
+    """Choose one Hunyuan path without changing other platform routing."""
+
+    if not requested:
+        return None
+    if fetch_mode == "full" or legacy_configured:
+        return "browser"
+    return "api"
+
+
 def _resolve_fetch_paths(
     fetch_mode: str,
     platforms: list[str],
@@ -570,9 +597,18 @@ def _resolve_fetch_paths(
     if fetch_mode == "full":
         return [], list(platforms)
 
-    api_platforms = [p for p in platforms if p in PlatformConstants.API_PLATFORMS]
+    hunyuan_browser_fallback = _hunyuan_legacy_configuration_detected()
+    api_platforms = [
+        p
+        for p in platforms
+        if p in PlatformConstants.API_PLATFORMS
+        and not (p == "hunyuan" and hunyuan_browser_fallback)
+    ]
     browser_platforms = [
-        p for p in platforms if p in PlatformConstants.BROWSER_PLATFORMS
+        p
+        for p in platforms
+        if p in PlatformConstants.BROWSER_PLATFORMS
+        or (p == "hunyuan" and hunyuan_browser_fallback)
     ]
     return api_platforms, browser_platforms
 
@@ -1072,6 +1108,8 @@ def _build_browser_phase_start_message(
         and api_task_count is not None
     ):
         if browser_names:
+            if not api_platforms:
+                return f"开始 {browser_names} 浏览器采集。"
             return (
                 f"{_display_platform_names(api_platforms)} API 抓取完成，"
                 f"{api_success_total}/{api_task_count} 成功。开始 {browser_names} 浏览器采集。"
@@ -1084,6 +1122,60 @@ def _build_browser_phase_start_message(
     if browser_names:
         return f"启动浏览器采集：{browser_names}。"
     return "启动浏览器采集。"
+
+
+def _build_fast_phase_start_message(
+    question_count: int,
+    platforms: list[str],
+) -> str:
+    """Describe fast-mode work from its resolved API/browser paths."""
+
+    api_platforms, browser_platforms = _resolve_fetch_paths("fast", platforms)
+    api_names = _display_platform_names(api_platforms)
+    browser_names = _display_platform_names(browser_platforms)
+    if api_names:
+        message = (
+            f"正在通过 API 抓取：{question_count} 个问题 × {api_names}，"
+            "批量并行抓取中..."
+        )
+    else:
+        message = f"当前无 API 任务，直接通过浏览器采集 {question_count} 个问题。"
+    if browser_names:
+        message += f" 浏览器平台：{browser_names}。"
+    return message
+
+
+def _build_fast_path_summary(platforms: list[str]) -> str:
+    """Render the fast-mode path label from the resolved execution paths."""
+
+    api_platforms, browser_platforms = _resolve_fetch_paths("fast", platforms)
+    return _format_fetch_path_summary(api_platforms, browser_platforms)
+
+
+def _format_fetch_path_summary(
+    api_platforms: list[str],
+    browser_platforms: list[str],
+    *,
+    role_first: bool = False,
+) -> str:
+    """Format resolved platform paths for either a label or detail line."""
+
+    path_parts = []
+    if api_platforms:
+        api_names = _display_platform_names(api_platforms)
+        path_parts.append(f"API（{api_names}）" if role_first else f"{api_names} API")
+    if browser_platforms:
+        browser_names = _display_platform_names(browser_platforms)
+        path_parts.append(
+            f"浏览器（{browser_names}）" if role_first else f"{browser_names} 浏览器"
+        )
+    return " + ".join(path_parts) or "无可用平台"
+
+
+def _build_fast_mode_label(platforms: list[str]) -> str:
+    """Build the fast-mode label without assuming which platform uses API."""
+
+    return f"快速采集（{_build_fast_path_summary(platforms)}）"
 
 
 def _question_id_from_state_question(question: dict[str, Any]) -> str:
@@ -2179,7 +2271,7 @@ async def _browser_fetch_with_timeout(
 ) -> dict[str, Any]:
     """Run a browser fetch with a strict timeout and no retries.
 
-    Browser platforms (Kimi/DeepSeek) are optional — failures are non-blocking.
+    Browser platforms (Yuanbao/Kimi/DeepSeek) are optional — failures are non-blocking.
     """
     # Extract platform info from args for error reporting
     # _fetch_from_browser signature: handler, question, platform, platform_name, browser_state
@@ -2356,20 +2448,24 @@ def _build_duration_msg(fetch_mode: str, question_count: int) -> str:
             "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
         )
     else:
-        api_str = "/".join(
-            PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
-            for p in PlatformConstants.API_PLATFORMS
+        api_platforms, browser_platforms = _resolve_fetch_paths(
+            fetch_mode, list(PlatformConstants.SUPPORTED_PLATFORMS)
         )
-        browser_str = "/".join(
-            PlatformConstants.PLATFORM_DISPLAY_NAMES[p]
-            for p in PlatformConstants.BROWSER_PLATFORMS
+        api_str = _display_platform_names(api_platforms)
+        browser_str = _display_platform_names(browser_platforms)
+        path_summary = _format_fetch_path_summary(
+            api_platforms, browser_platforms, role_first=True
         )
+        detail_lines = [f"- 采集模式：**快速采集**（{path_summary}）"]
+        if api_str:
+            detail_lines.append(f"- API 平台（{api_str}）：各平台串行抓取，约 2-3 分钟")
+        if browser_str:
+            detail_lines.append(f"- 浏览器平台（{browser_str}）：约 3-5 分钟")
         return (
             f"开始向{all_names} {platform_count} 个平台提问，共 {question_count} 个问题。\n\n"
-            f"- 采集模式：**快速采集**（API + {browser_str} 浏览器）\n"
-            f"- API 平台（{api_str}）：各平台串行抓取，约 2-3 分钟\n"
-            f"- 浏览器平台（{browser_str}）：约 3-5 分钟\n"
-            f"- 预计总耗时约 5-10 分钟\n\n"
+            + "\n".join(detail_lines)
+            + "\n"
+            "- 预计总耗时约 5-10 分钟\n\n"
             "请保持页面打开，可以切换到其他标签页做别的事，完成后将自动继续。"
         )
 
@@ -2431,7 +2527,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
     """A4: Fetch answers from AI platforms for all questions.
 
     Supports two modes (controlled by state['fetch_mode']):
-    - fast: API (Doubao/Yuanbao/Kimi) + DeepSeek Browser  (~5-10 min)
+    - fast: API (Doubao/Kimi) + DeepSeek Browser; legacy Hunyuan config uses
+      Yuanbao Browser instead (~5-10 min)
     - full: All 4 platforms via Browser only, no API       (~8-15 min)
     """
     session_id = state["session_id"]
@@ -2583,7 +2680,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         mode_label = (
             "完整采集（4平台全浏览器）"
             if fetch_mode == "full"
-            else "快速采集（豆包、元宝、Kimi API + DeepSeek 浏览器）"
+            else _build_fast_mode_label(list(PlatformConstants.SUPPORTED_PLATFORMS))
         )
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
     await send_reply_event(session_id, "", is_complete=True)
@@ -2660,10 +2757,24 @@ async def a4_fetch_node(state: AgentState) -> Command:
         doubao_client = None
         hunyuan_client = None
         kimi_client = None
+        hunyuan_requested = _pf is None or "hunyuan" in _pf
+        hunyuan_browser_fallback = (
+            fetch_mode == "fast" and _hunyuan_legacy_configuration_detected()
+        )
+        hunyuan_fetch_method = _resolve_hunyuan_fetch_method(
+            fetch_mode,
+            requested=hunyuan_requested,
+            legacy_configured=hunyuan_browser_fallback,
+        )
 
         if fetch_mode == "fast":
             from app.core.fetchers.api.doubao_client import DoubaoClient
-            from app.core.fetchers.api.hunyuan_client import HunyuanClient
+
+            if hunyuan_fetch_method == "browser":
+                logger.warning(
+                    "[A4] Legacy Hunyuan endpoint/model detected; "
+                    "routing Yuanbao through browser and skipping Hunyuan API"
+                )
 
             try:
                 if _pf is None or "doubao" in _pf:
@@ -2675,9 +2786,15 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 logger.warning("[A4] DoubaoClient init failed: %s", e)
 
             try:
-                if _pf is None or "hunyuan" in _pf:
+                if hunyuan_fetch_method == "api":
+                    from app.core.fetchers.api.hunyuan_client import HunyuanClient
+
                     hunyuan_client = HunyuanClient(
                         model=settings.HUNYUAN_FAST_MODEL or None
+                    )
+                elif hunyuan_fetch_method == "browser":
+                    logger.info(
+                        "[A4] Yuanbao API client skipped; browser fallback active"
                     )
             except Exception as e:
                 logger.warning("[A4] Yuanbao client init failed: %s", e)
@@ -2691,7 +2808,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 logger.warning("[A4] KimiClient init failed: %s", e)
 
         # ── Browser handlers ──
-        # fast mode: DeepSeek only
+        # fast mode: DeepSeek, plus Yuanbao when the legacy API is configured
         # full mode: all 4 platforms
         from app.core.playwright_installer import ensure_playwright_ready
 
@@ -2733,10 +2850,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
             except Exception as e:
                 logger.warning("[A4] DeepSeek browser init failed: %s", e)
 
-            # Additional browser handlers (full mode only)
-            if fetch_mode == "full":
+            # Additional browsers run in full mode; legacy Yuanbao also falls
+            # back here in fast mode before it can issue retired API requests.
+            if fetch_mode == "full" or hunyuan_browser_fallback:
                 try:
-                    if _pf is None or "kimi" in _pf:
+                    if fetch_mode == "full" and (_pf is None or "kimi" in _pf):
                         kimi_browser_client = _create_browser_client("kimi", state)
                         kimi_browser_handler = (
                             _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
@@ -2753,7 +2871,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     logger.warning("[A4] Kimi browser init failed: %s", e)
 
                 try:
-                    if _pf is None or "hunyuan" in _pf:
+                    if hunyuan_fetch_method == "browser":
                         yuanbao_browser_client = _create_browser_client(
                             "yuanbao", state
                         )
@@ -2770,7 +2888,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     logger.warning("[A4] Yuanbao browser init failed: %s", e)
 
                 try:
-                    if _pf is None or "doubao" in _pf:
+                    if fetch_mode == "full" and (_pf is None or "doubao" in _pf):
                         doubao_browser_client = _create_browser_client("doubao", state)
                         doubao_browser_handler = (
                             _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
@@ -3024,7 +3142,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     step="A4",
                     step_name="AI答案抓取",
                     progress=0.57,
-                    message=f"正在通过 API 抓取：{total} 个问题 × 豆包、元宝、Kimi，批量并行抓取中...",
+                    message=_build_fast_phase_start_message(
+                        total,
+                        platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
+                    ),
                 )
 
                 api_tasks = []
@@ -3530,11 +3651,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     deepseek_browser_client,
                 )
 
-            # Additional browsers (full mode only)
-            if fetch_mode == "full":
-                kimi_requested = _pf is None or "kimi" in _pf
-                yuanbao_requested = _pf is None or "hunyuan" in _pf
-                doubao_requested = _pf is None or "doubao" in _pf
+            # Additional browsers (full mode, plus legacy Yuanbao fallback).
+            if fetch_mode == "full" or hunyuan_browser_fallback:
+                kimi_requested = fetch_mode == "full" and (_pf is None or "kimi" in _pf)
+                yuanbao_requested = hunyuan_fetch_method == "browser"
+                doubao_requested = fetch_mode == "full" and (
+                    _pf is None or "doubao" in _pf
+                )
 
                 if kimi_requested:
                     requested_browser_platforms.append("kimi")

@@ -8,6 +8,7 @@ import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
 import type { StageResult } from '@/types/snapshot';
 import type { AnalysisTask } from '@/types/task';
 import type {
+  AmwayCircleRunSummary,
   AmwayCirclePeriodType,
   AmwayCirclePeriodViewResponse,
   AmwayQuestionHistoryResponse,
@@ -43,6 +44,35 @@ import {
 
 type CircleStatus = 'empty' | 'loading' | 'ready';
 type ConsoleWorkspace = 'map' | 'lexicon' | 'questions';
+
+function normalizedAnswerCount(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+export function amwayCircleRunStatusLabel(
+  latestRun: AmwayCircleRunSummary | null,
+  hasProjection: boolean,
+): string {
+  if (!latestRun) return hasProjection ? '采集状态未确认' : '待运行';
+
+  const validCount = normalizedAnswerCount(latestRun.valid_answer_count);
+  const failedCount = normalizedAnswerCount(latestRun.failed_answer_count);
+  const expectedCount = normalizedAnswerCount(latestRun.expected_answer_count);
+  const totalCount = expectedCount || validCount + failedCount;
+  if (latestRun.status === 'pending' || latestRun.status === 'running') return '正在抓取';
+  if (latestRun.status === 'failed') return '采集失败';
+  if (latestRun.status === 'cancelled') return '采集已取消';
+  const isPartial = latestRun.status === 'partial'
+    || failedCount > 0
+    || (expectedCount > 0 && validCount < expectedCount);
+
+  if (isPartial) {
+    return totalCount > 0
+      ? `最新一轮部分采集 ${validCount}/${totalCount}`
+      : '最新一轮部分采集';
+  }
+  return hasProjection ? '圈层已生成' : '待运行';
+}
 
 const PERIOD_OPTIONS: Array<{ value: AmwayCirclePeriodType; label: string }> = [
   { value: 'latest_run', label: '最近一次' },
@@ -95,6 +125,9 @@ interface AmwayAssociationCircleDashboardProps {
   world?: OntologyWorldSummary | null;
   activeRun?: BrandIntelligenceRun | null;
   activeTask?: AnalysisTask | null;
+  latestCircleRun?: AmwayCircleRunSummary | null;
+  isLatestCircleRunLoading?: boolean;
+  latestCircleRunError?: boolean;
   isRunActive?: boolean;
   isRunSubmitting?: boolean;
   isProjectionLoading?: boolean;
@@ -129,6 +162,9 @@ export function AmwayAssociationCircleDashboard({
   world,
   activeRun,
   activeTask,
+  latestCircleRun = null,
+  isLatestCircleRunLoading = false,
+  latestCircleRunError = false,
   isRunActive,
   isRunSubmitting,
   isProjectionLoading,
@@ -234,11 +270,11 @@ export function AmwayAssociationCircleDashboard({
   );
   const headerStatusLabel = isRunSubmitting || isRunActive
     ? nodes.length > 0 ? '实时抽取中' : '正在抓取'
-    : status === 'loading'
+    : status === 'loading' || isLatestCircleRunLoading
       ? '正在读取报告'
-    : status === 'ready'
-      ? '圈层已生成'
-      : '待运行';
+      : latestCircleRunError
+        ? '采集状态读取失败'
+        : amwayCircleRunStatusLabel(latestCircleRun, status === 'ready');
   useEffect(() => {
     if (!selectedEntityId) {
       setQuestionHistory(null);
@@ -450,8 +486,10 @@ export function AmwayAssociationCircleDashboard({
                   <h1 className="text-2xl font-semibold leading-tight tracking-tight">品牌联想图谱</h1>
                   <p className="text-sm tabular-nums text-[var(--text-secondary)]" aria-label="本轮数据范围">
                     {answerCount > 0
-                      ? `${answerCount} 条回答 · ${samplePlatformCountFromScope(sampleScope)} 个平台 · ${nodes.length} 个节点`
-                      : '尚未运行采集，从图谱中心开始'}
+                      ? `${headerStatusLabel} · ${samplePlatformCountFromScope(sampleScope)} 个平台 · ${nodes.length} 个节点`
+                      : headerStatusLabel === '待运行'
+                        ? '尚未运行采集，从图谱中心开始'
+                        : headerStatusLabel}
                   </p>
                 </div>
               </div>

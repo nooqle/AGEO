@@ -25,11 +25,13 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/services/api';
+import { getPlatformDisplayName } from '@/config/platformLabel';
 import { AmwayFlowOrchestrationPanel } from '@/components/dashboard/AmwayFlowOrchestrationPanel';
 import { useTheme } from '@/hooks/useTheme';
 import type { DashboardHomeData } from '@/types/dashboard';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
 import type { AnalysisTask } from '@/types/task';
+import type { BrowserState } from '@/types/agent';
 import type { StageResult } from '@/types/snapshot';
 import type { AmwayCirclePeriodViewResponse, AmwayQuestionHistorySet } from '@/types/amwayChina';
 import type {
@@ -114,6 +116,11 @@ import {
   iconBadgeClass,
 } from './amway-flow/AmwayFlowNodeCard';
 import {
+  buildFlowPlatformStateBlockers,
+  buildFlowRuntimeBlockers,
+  type FlowRuntimeBlocker,
+} from './amway-flow/runtimeBlockers';
+import {
   AnalysisResultArtifact,
   AnswersArtifact,
   ArtifactEmpty,
@@ -131,6 +138,20 @@ export { readEnabledFlowPlatforms } from './amway-flow/topologyDoc';
 
 const nodeTypes = { amway: AmwayFlowNodeCard };
 
+function flowRuntimePlatform(value: string | null | undefined): string {
+  const platform = String(value || '').trim().toLowerCase();
+  return platform === 'yuanbao' ? 'hunyuan' : platform;
+}
+
+function flowRuntimeActionKey(platform: string | null | undefined, actionType: string | null | undefined): string {
+  return `${flowRuntimePlatform(platform)}:${String(actionType || 'browser_action').trim()}`;
+}
+
+type FlowRuntimeBlockerCard = {
+  blocker: FlowRuntimeBlocker;
+  browserState?: BrowserState;
+};
+
 export function AmwayFlowCanvas({
   entityId,
   centerTerm,
@@ -143,6 +164,8 @@ export function AmwayFlowCanvas({
   isRunSubmitting,
   isAwaitingPlanConfirm = false,
   liveStageResults = [],
+  browserActionStates = [],
+  onResolveBrowserAction,
   onQuickRun,
   onConfirmFlowPlan,
   onRefreshFlowPlan,
@@ -162,6 +185,8 @@ export function AmwayFlowCanvas({
   /** M3: parked at plan confirmation gate */
   isAwaitingPlanConfirm?: boolean;
   liveStageResults?: StageResult[];
+  browserActionStates?: BrowserState[];
+  onResolveBrowserAction?: (requestId: string, resolution: 'completed' | 'skip') => void;
   onQuickRun: () => void;
   onConfirmFlowPlan?: () => void;
   onRefreshFlowPlan?: () => void;
@@ -422,6 +447,60 @@ export function AmwayFlowCanvas({
 
   const running = Boolean(isRunActive || isRunSubmitting);
   const progressMessage = String(activeTask?.progress_message || activeRun?.message || '').trim();
+
+  const durableRuntimeBlockers = useMemo(
+    () => buildFlowRuntimeBlockers(activeTask?.latest_run?.child_attempts),
+    [activeTask?.latest_run?.child_attempts],
+  );
+  const durablePlatformStateBlockers = useMemo(
+    () => buildFlowPlatformStateBlockers(activeTask?.latest_run?.fetch_platform_states),
+    [activeTask?.latest_run?.fetch_platform_states],
+  );
+  const runtimeBlockerCards = useMemo<FlowRuntimeBlockerCard[]>(() => {
+    const cards = new Map<string, FlowRuntimeBlockerCard>();
+    durableRuntimeBlockers.forEach((blocker) => {
+      cards.set(flowRuntimeActionKey(blocker.platform, blocker.actionType), { blocker });
+    });
+    durablePlatformStateBlockers.forEach((stateBlocker) => {
+      const key = flowRuntimeActionKey(stateBlocker.platform, stateBlocker.actionType);
+      const existing = cards.get(key);
+      cards.set(key, {
+        blocker: {
+          ...existing?.blocker,
+          ...stateBlocker,
+          id: existing?.blocker.id || stateBlocker.id,
+          requestId: stateBlocker.requestId || existing?.blocker.requestId || null,
+          message: existing?.blocker.message || stateBlocker.message,
+          actionHint: existing?.blocker.actionHint || stateBlocker.actionHint,
+        },
+      });
+    });
+
+    browserActionStates
+      .filter((state) => state.requiresAction)
+      .forEach((state) => {
+        const key = flowRuntimeActionKey(state.platform, state.actionType);
+        const existing = cards.get(key);
+        const blocker: FlowRuntimeBlocker = {
+          id: existing?.blocker.id || state.requestId || key,
+          platform: flowRuntimePlatform(state.platform),
+          actionType: state.actionType || existing?.blocker.actionType || 'browser_action',
+          requestId: state.requestId || existing?.blocker.requestId || null,
+          status: 'waiting_input',
+          message: state.message || existing?.blocker.message || '',
+          actionHint: state.actionHint || existing?.blocker.actionHint || null,
+          errorKind: null,
+          errorMessage: null,
+          questionsCompleted: existing?.blocker.questionsCompleted || null,
+          questionsTotal: existing?.blocker.questionsTotal || null,
+        };
+        cards.set(key, { blocker, browserState: state });
+      });
+
+    return [...cards.values()].sort((left, right) => (
+      left.blocker.platform.localeCompare(right.blocker.platform)
+    ));
+  }, [browserActionStates, durableRuntimeBlockers]);
 
   // M1: local topology preview + authoritative run.flow_plan when a task is active
   const executionPlan = useMemo<FlowExecutionPlan>(() => {
@@ -1191,6 +1270,100 @@ export function AmwayFlowCanvas({
                   setTopologySaveEpoch((n) => n + 1);
                 }}
               />
+              {runtimeBlockerCards.length > 0 ? (
+                <section
+                  aria-label="采集阻塞与失败状态"
+                  data-testid="amway-flow-runtime-status"
+                  className="mt-4 space-y-2"
+                >
+                  {runtimeBlockerCards.map(({ blocker }) => {
+                    const platformLabel = getPlatformDisplayName(blocker.platform);
+                    const isWaiting = blocker.status === 'waiting_input';
+                    const reason = blocker.errorMessage || blocker.message || (
+                      isWaiting ? '当前平台需要人工处理后才能继续。' : '当前平台本轮未完成采集。'
+                    );
+                    return (
+                      <article
+                        key={blocker.id}
+                        role="alert"
+                        data-testid={`amway-flow-runtime-${isWaiting ? 'waiting' : 'failed'}-${blocker.platform}`}
+                        className={`rounded-xl border px-3.5 py-3 ${
+                          isWaiting
+                            ? 'border-[rgba(245,158,11,0.32)] bg-[rgba(245,158,11,0.08)]'
+                            : 'border-[rgba(220,38,38,0.28)] bg-[rgba(220,38,38,0.06)]'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <span
+                            aria-hidden="true"
+                            className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                              isWaiting ? 'bg-[var(--warning)]' : 'bg-[var(--error)]'
+                            }`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h2 className="text-sm font-semibold text-[var(--text-primary)]">
+                                {platformLabel} {isWaiting ? '需要人工处理' : '采集失败'}
+                              </h2>
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                                  isWaiting
+                                    ? 'border-[rgba(245,158,11,0.3)] text-[var(--warning)]'
+                                    : 'border-[rgba(220,38,38,0.28)] text-[var(--error)]'
+                                }`}
+                              >
+                                {isWaiting ? '等待处理' : '未完成'}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                              原因：{reason}
+                            </p>
+                            {isWaiting ? (
+                              <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
+                                操作指引：{blocker.actionHint || '请在当前浏览器窗口完成验证或登录，完成后回到这里确认。'}
+                              </p>
+                            ) : (
+                              <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
+                                本轮其他平台结果仍保留；如需补采，请重新运行。
+                              </p>
+                            )}
+                            {isWaiting ? (
+                              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  data-testid={`amway-flow-runtime-complete-${blocker.platform}`}
+                                  disabled={!blocker.requestId || !onResolveBrowserAction}
+                                  onClick={() => {
+                                    if (blocker.requestId) {
+                                      onResolveBrowserAction?.(blocker.requestId, 'completed');
+                                    }
+                                  }}
+                                  className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  我已完成
+                                </button>
+                                <button
+                                  type="button"
+                                  data-testid={`amway-flow-runtime-skip-${blocker.platform}`}
+                                  disabled={!blocker.requestId || !onResolveBrowserAction}
+                                  onClick={() => {
+                                    if (blocker.requestId) {
+                                      onResolveBrowserAction?.(blocker.requestId, 'skip');
+                                    }
+                                  }}
+                                  className="inline-flex h-8 items-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-xs font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  跳过此平台
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </section>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button

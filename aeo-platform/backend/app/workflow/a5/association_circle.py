@@ -22,7 +22,7 @@ from app.tools.a4_fetch_agent import (
 REPORT_KIND = "brand_association_circle"
 ARTIFACT_KIND = "brand_association_circle"
 SCHEMA_VERSION = "2026-07-14"
-REPORT_COPY_CONSTRAINT_VERSION = "human_brand_diagnosis_v16_identity_scope_contract"
+REPORT_COPY_CONSTRAINT_VERSION = "human_brand_diagnosis_v19_living_young_evidence_coverage"
 
 REPORT_COPY_FORBIDDEN_PHRASES = (
     "这" + "说" + "明",
@@ -67,6 +67,7 @@ REPORT_EVIDENCE_SCOPE_CONTRACTS: dict[str, tuple[tuple[str, ...], ...]] = {
     "ai_archive.v1": (("evidence_ids",), ("entity_ids", "node_terms")),
     "value_pillars.v1": (("evidence_ids",), ("node_terms",)),
     "ai_blind_spot.v1": (("evidence_ids",), ("question_ids",)),
+    "living_young_autonomy.v1": (("evidence_ids",), ("node_terms",)),
     "platform_difference.v1": (
         ("evidence_ids",),
         ("question_ids",),
@@ -82,6 +83,9 @@ FOUR_HAVE_SECTION_STRATEGY_CUES: dict[str, tuple[str, ...]] = {
         "有健康",
         "健康",
         "抗衰",
+        "长寿时代",
+        "心智抗衰",
+        "细胞抗衰",
         "纽崔莱",
         "体重管理",
         "营养",
@@ -5143,6 +5147,116 @@ def _build_storyline_report_sections(
     blind_count_unit = (
         "条回答" if linked_answer_count_is_exact else "个按平台与问题去重的原文观察"
     )
+
+    def positive_pillar_terms(*items: dict[str, Any]) -> list[str]:
+        excluded = {
+            _clean_text(term)
+            for item in items
+            for term in item.get("risk_terms") or []
+            if _clean_text(term)
+        }
+        return list(
+            dict.fromkeys(
+                _clean_text(term)
+                for item in items
+                for term in [
+                    *(item.get("node_terms") or []),
+                    *(item.get("strategy_terms") or []),
+                ]
+                if _clean_text(term) and _clean_text(term) not in excluded
+            )
+        )
+
+    def proposition_claim(
+        label: str,
+        items: list[dict[str, Any]],
+        terms: list[str],
+        refs: list[str],
+    ) -> str:
+        statuses = list(
+            dict.fromkeys(
+                _clean_text(item.get("status_label"))
+                for item in items
+                if _clean_text(item.get("status_label"))
+            )
+        )
+        status = " / ".join(statuses) if refs and statuses else "待验证"
+        representative = (
+            f"代表节点：{_join_report_terms(terms[:4], '待补充')}"
+            if refs and terms
+            else f"证据缺口：{_join_report_terms(terms[:4], '本轮未出现可验证节点')}"
+        )
+        return f"{label}｜{status}｜{representative}"
+
+    body_terms = positive_pillar_terms(health)
+    heart_terms = positive_pillar_terms(companionship)
+    path_term_priority = [
+        "安利事业机会",
+        "个人成长",
+        "被需要感",
+        "人生再出发",
+        "低门槛创业",
+        "ABO",
+        "有价值",
+        "社会价值",
+        "安利人故事",
+        "安利人",
+        "KOC",
+        "营销人员工作室",
+        "美好生活共创空间",
+    ]
+    path_candidate_terms = set(positive_pillar_terms(security, value))
+    path_terms = [term for term in path_term_priority if term in path_candidate_terms]
+    body_refs = list(dict.fromkeys(_storyline_refs(health, {})))
+    heart_refs = list(dict.fromkeys(_storyline_refs(companionship, {})))
+    path_nodes = [
+        node
+        for term in path_terms
+        for node in nodes
+        if _clean_text(node.get("term")) == term
+        and not bool(node.get("is_risk_term"))
+        and _clean_text(node.get("review_status")) != "pending_review"
+        and int(node.get("supportive_evidence_count") or 0) > 0
+    ]
+    path_node_terms = {
+        _clean_text(node.get("term")) for node in path_nodes if node.get("term")
+    }
+    if path_nodes:
+        path_terms = [term for term in path_terms if term in path_node_terms]
+        path_refs = list(
+            dict.fromkeys(
+                _clean_text(ref)
+                for node in path_nodes
+                for ref in [
+                    *(node.get("evidence_samples") or []),
+                    *(node.get("evidence_refs") or []),
+                ]
+                if _clean_text(ref)
+            )
+        )
+    else:
+        path_refs = (
+            list(
+                dict.fromkeys(
+                    [
+                        *_storyline_refs(security, {}),
+                        *_storyline_refs(value, {}),
+                    ]
+                )
+            )
+            if path_terms
+            else []
+        )
+    autonomy_terms = list(dict.fromkeys([*body_terms, *heart_terms, *path_terms]))
+    autonomy_refs = list(dict.fromkeys([*body_refs, *heart_refs, *path_refs]))
+    autonomy_connection_count = sum(
+        bool(refs and terms)
+        for refs, terms in (
+            (body_refs, body_terms),
+            (heart_refs, heart_terms),
+            (path_refs, path_terms),
+        )
+    )
     return [
         {
             "section_id": "core_verdict",
@@ -5393,6 +5507,73 @@ def _build_storyline_report_sections(
                     if active_rate is not None
                     else "下一轮先补充开放问题样本，再评估主动提及率。"
                 )
+            ),
+        },
+        {
+            "section_id": "living_young_autonomy",
+            "evidence_contract_id": "living_young_autonomy.v1",
+            "evidence_scope": {
+                "evidence_ids": autonomy_refs,
+                "node_terms": autonomy_terms,
+            },
+            "render_strategy_rows": False,
+            "role": "opportunity_finding",
+            "evidence_binding_required": bool(autonomy_refs and autonomy_terms),
+            "title": "活得年轻：掌控生活的自主",
+            "reader_question": "安利是否已经被 AI 理解为帮助人持续拥有生活主动权的品牌？",
+            "takeaway": (
+                "当前证据支持身体有力、心中有爱、脚下有路三条路径分别被 AI 接住；"
+                "但尚不能证明 AI 已将三者整合为“掌控生活的自主”这一完整品牌主张。"
+            ),
+            "claims": [
+                proposition_claim("身体有力", [health], body_terms, body_refs),
+                proposition_claim("心中有爱", [companionship], heart_terms, heart_refs),
+                proposition_claim("脚下有路", [value, security], path_terms, path_refs),
+                f"路径证据覆盖：{autonomy_connection_count}/3；完整主张形成：尚待验证。",
+            ],
+            "paragraphs": [
+                (
+                    "这项主张把年轻从年龄描述推进到生活能力。身体状态提供行动底座，"
+                    "温暖关系提供支持网络，可继续选择和创造的路径提供面向未来的主动权。"
+                ),
+                (
+                    f"身体有力看{_join_report_terms(body_terms[:4], '长期健康管理、长寿与抗衰')}。"
+                    + (
+                        "本轮已出现正向证据，下一步要看这些联想能否从产品和品类升级为长期方案。"
+                        if body_refs
+                        else "本轮尚未形成可验证连接，先作为品牌主张中的待验证方向。"
+                    )
+                ),
+                (
+                    f"心中有爱看{_join_report_terms(heart_terms[:4], '大健康社群、陪伴与良好关系')}。"
+                    + (
+                        "本轮已出现正向证据，仍需观察社群价值能否摆脱销售旧认知的牵制。"
+                        if heart_refs
+                        else "本轮尚未形成可验证连接，需要补真实社群场景和关系证据。"
+                    )
+                ),
+                (
+                    f"脚下有路只看事业机会、个人成长和人生再出发等正向路径，"
+                    f"本轮代表方向为{_join_report_terms(path_terms[:4], '待补充')}。"
+                    + (
+                        "收入不稳定、拉人头等风险词只用于检验信任边界，不作为这层主张成立的证明。"
+                        if path_refs
+                        else "本轮缺少正向路径证据，风险语境不计为这层主张成立。"
+                    )
+                ),
+            ],
+            "so_what": (
+                "品牌传播需要同时回答健康能力、关系支持和人生路径，并用本轮证据区分已被接住与仍待验证的部分。"
+            ),
+            "supporting_facts": [
+                f"身体有力：{_join_report_terms(body_terms[:4], '本轮待验证')}。",
+                f"心中有爱：{_join_report_terms(heart_terms[:4], '本轮待验证')}。",
+                f"脚下有路：{_join_report_terms(path_terms[:4], '本轮待验证')}。",
+                *_dedupe_report_lines([*health_quotes, *companionship_quotes], limit=3),
+            ],
+            "evidence_refs": autonomy_refs,
+            "next_probe": (
+                "下一轮分别用长寿与抗衰、大健康社群、事业机会与人生再出发问题复测，观察三层能否稳定回到安利。"
             ),
         },
         {

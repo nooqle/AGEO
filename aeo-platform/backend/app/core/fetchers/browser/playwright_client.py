@@ -34,7 +34,7 @@ class PlaywrightBrowserClient:
     so login state is preserved across runs.
     """
 
-    def __init__(self, session_name: str = "default"):
+    def __init__(self, session_name: str = "default", task_id: str | None = None):
         """Initialize the browser client.
 
         Args:
@@ -42,6 +42,7 @@ class PlaywrightBrowserClient:
                 directory so cookies survive backend restarts.
         """
         self.session_name = session_name
+        self.task_id = task_id
         self.user_data_dir = _SESSION_BASE_DIR / session_name
         self.playwright = None
         # With launch_persistent_context there is no separate Browser object;

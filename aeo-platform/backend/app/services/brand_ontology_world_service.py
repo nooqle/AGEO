@@ -118,6 +118,22 @@ LEGACY_ASSOCIATION_REPORT_TITLES: frozenset[str] = frozenset(
         "下一轮追踪建议",
     }
 )
+STORYLINE_ASSOCIATION_REPORT_SECTION_IDS: frozenset[str] = frozenset(
+    {
+        "core_verdict",
+        "ai_archive",
+        "value_pillars",
+        "ai_blind_spot",
+        "platform_difference",
+        "data_to_action",
+    }
+)
+CURRENT_ASSOCIATION_REPORT_SECTION_IDS: frozenset[str] = frozenset(
+    {"living_young_autonomy"}
+)
+CURRENT_ASSOCIATION_REPORT_COPY_CONSTRAINT_VERSION = (
+    "human_brand_diagnosis_v19_living_young_evidence_coverage"
+)
 _world_summary_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 
 
@@ -133,7 +149,18 @@ def _association_report_sections_are_legacy(
         for section in sections
         if isinstance(section, dict)
     }
-    return bool(titles & LEGACY_ASSOCIATION_REPORT_TITLES)
+    if titles & LEGACY_ASSOCIATION_REPORT_TITLES:
+        return True
+
+    section_ids = {
+        str(section.get("section_id") or "").strip()
+        for section in sections
+        if isinstance(section, dict)
+    }
+    is_storyline_report = STORYLINE_ASSOCIATION_REPORT_SECTION_IDS.issubset(section_ids)
+    return is_storyline_report and not CURRENT_ASSOCIATION_REPORT_SECTION_IDS.issubset(
+        section_ids
+    )
 
 
 def _upgrade_legacy_association_report_projection(
@@ -895,9 +922,15 @@ class BrandOntologyWorldService:
             question_bank = await self._latest_question_bank_for_entity(entity_id)
         if not question_bank and evidence_samples:
             question_bank = _question_bank_from_evidence_samples(evidence_samples)
-        if latest_report is not None and nodes and (
-            not report_narrative_sections
-            or _association_report_sections_are_legacy(report_narrative_sections)
+        if (
+            latest_report is not None
+            and nodes
+            and (
+                not report_narrative_sections
+                or _association_report_sections_are_legacy(report_narrative_sections)
+                or str(copy_constraints.get("version") or "").strip()
+                != CURRENT_ASSOCIATION_REPORT_COPY_CONSTRAINT_VERSION
+            )
         ):
             try:
                 full_fetch_results = await self._fetch_results_for_association_report(

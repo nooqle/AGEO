@@ -1,14 +1,17 @@
 """Doubao (ByteDance) browser handler."""
 
 import asyncio
+import json
 import logging
-from typing import AsyncGenerator
+from contextlib import suppress
+from typing import Any, AsyncGenerator
 
 from app.core.fetchers.browser.base_handler import BaseBrowserHandler
 from app.core.fetchers.browser.browser_executor import (
     BrowserAnswerExecutionPlan,
     execute_post_submit_capture_flow,
 )
+from app.core.fetchers.browser.failure_observability import build_failure_contract
 from app.core.fetchers.browser.parsers.base import BaseResponseParser
 from app.core.fetchers.browser.parsers.sse import DoubaoSSEParser
 from app.schemas.fetch import (
@@ -37,8 +40,25 @@ class DoubaoHandler(BaseBrowserHandler):
     BROWSER_LATE_BLOCKER_HINTS = ("安全验证", "verify", "人机验证", "验证码")
 
     _DEFAULTS: dict = {
-        "input": "textarea.semi-input-textarea, textarea",
-        "input_ready": "textarea.semi-input-textarea, textarea",
+        "input": (
+            "textarea.semi-input-textarea, "
+            "[data-testid*='chat-input'] [contenteditable='true'], "
+            "[role='textbox'][contenteditable='true'], "
+            ".ProseMirror[contenteditable='true'], "
+            "[class*='editor'][contenteditable='true'], textarea"
+        ),
+        "input_ready": (
+            "textarea.semi-input-textarea, "
+            "[data-testid*='chat-input'] [contenteditable='true'], "
+            "[role='textbox'][contenteditable='true'], "
+            ".ProseMirror[contenteditable='true'], "
+            "[class*='editor'][contenteditable='true'], textarea"
+        ),
+        "send_btn": (
+            "button[data-testid*='send'], button[aria-label*='发送'], "
+            "button[aria-label*='send' i], [role='button'][class*='send'], "
+            "button[class*='send']"
+        ),
         "login_btn": "[data-testid='to_login_button'], [class*='login-btn']",
         "content": [
             ".flow-markdown-body",
@@ -133,24 +153,39 @@ class DoubaoHandler(BaseBrowserHandler):
                     self._intercept_and_wait(intercept_config, parser)
                 )
 
-            # Step 5b: Submit question
-            submitted = False
-            if self.client.page is not None:
-                try:
-                    textarea = self.client.page.locator(self._sel("input")).first
-                    if await textarea.count() > 0:
-                        await textarea.fill(question)
-                        await asyncio.sleep(0.3)
-                        await self.client.page.keyboard.press("Enter")
-                        submitted = True
-                        logger.info("[Doubao] Question submitted via textarea + Enter")
-                except Exception as e:
-                    logger.debug("[Doubao] Direct submit failed: %s", e)
-
+            # Step 5b: Submit question and confirm that the UI accepted it.
+            baseline_probe = await self._capture_submission_probe(question)
+            submitted = await self._submit_question(question, baseline_probe)
             if not submitted:
-                await self.client.find_and_fill("发消息", question)
-                await self.client.press("Enter")
-                logger.info("[Doubao] Question submitted via find_and_fill fallback")
+                if intercept_task is not None:
+                    intercept_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await intercept_task
+                evidence_ref = await self._capture_failure_evidence(
+                    failure_reason="submission_not_confirmed",
+                    execution_stage="submit_question",
+                    extra_metadata={
+                        "baseline_submission_probe": baseline_probe,
+                        "last_submission_probe": getattr(
+                            self, "_last_submission_probe", None
+                        ),
+                    },
+                )
+                yield self._create_event(
+                    BrowserState.ERROR,
+                    "豆包未接收本题，已停止等待并记录页面证据",
+                    progress=0,
+                    error_type="submission_not_confirmed",
+                    **build_failure_contract(
+                        failure_reason="submission_not_confirmed",
+                        execution_stage="submit_question",
+                        retryable=True,
+                        needs_handoff=False,
+                        failure_layer="adapter",
+                        evidence_ref=evidence_ref,
+                    ),
+                )
+                return
 
             yield self._create_event(BrowserState.WAITING_RESPONSE, "等待 AI 回复...", progress=0.7)
             fetch_result, events = await execute_post_submit_capture_flow(
@@ -182,6 +217,162 @@ class DoubaoHandler(BaseBrowserHandler):
 
     # ------------------------------------------------------------------ Doubao-specific helpers
 
+    async def _capture_submission_probe(self, question: str) -> dict[str, Any]:
+        """Capture observable UI state before typing a question."""
+
+        if self.client.page is None:
+            return {}
+        input_selector = json.dumps(self._sel("input"), ensure_ascii=False)
+        question_prefix = json.dumps(question.strip()[:16], ensure_ascii=False)
+        probe = await self.client.page.evaluate(
+            f"""() => {{
+                const candidates = Array.from(document.querySelectorAll({input_selector}));
+                const input = candidates.find((el) => el.offsetParent !== null) || null;
+                const readInput = input
+                    ? String(input.value || input.innerText || input.textContent || '').trim()
+                    : '';
+                const prefix = {question_prefix};
+                const bodyText = String(document.body?.innerText || '');
+                const userSelector = [
+                    '[data-testid*="message"][data-testid*="user"]',
+                    '[class*="message"][class*="user"]',
+                    '[class*="user-message"]',
+                    '[class*="message-user"]'
+                ].join(',');
+                return {{
+                    url: location.href,
+                    input_len: readInput.length,
+                    input_contains_question: prefix ? readInput.includes(prefix) : false,
+                    body_prefix_count: prefix ? bodyText.split(prefix).length - 1 : 0,
+                    user_message_count: document.querySelectorAll(userSelector).length,
+                }};
+            }}"""
+        )
+        return probe if isinstance(probe, dict) else {}
+
+    async def _type_question_into_visible_input(self, question: str) -> bool:
+        """Type into the first visible legacy textarea or rich-text editor."""
+
+        page = self.client.page
+        if page is None:
+            return False
+        locator = page.locator(self._sel("input"))
+        for index in range(await locator.count()):
+            candidate = locator.nth(index)
+            try:
+                if not await candidate.is_visible():
+                    continue
+                await candidate.click()
+                await page.keyboard.press("Control+a")
+                await page.keyboard.insert_text(question)
+                typed = await candidate.evaluate(
+                    "(el) => String(el.value || el.innerText || el.textContent || '').trim()"
+                )
+                if question.strip()[:16] in str(typed):
+                    return True
+            except Exception as exc:
+                logger.debug("[Doubao] Candidate input %d failed: %s", index, exc)
+        return False
+
+    async def _click_send_button(self) -> bool:
+        page = self.client.page
+        if page is None:
+            return False
+        buttons = page.locator(self._sel("send_btn"))
+        for index in range(await buttons.count()):
+            button = buttons.nth(index)
+            try:
+                if await button.is_visible() and await button.is_enabled():
+                    await button.click()
+                    return True
+            except Exception as exc:
+                logger.debug("[Doubao] Candidate send button %d failed: %s", index, exc)
+        return False
+
+    async def _submission_looks_started(
+        self,
+        baseline_probe: dict[str, Any],
+        question: str,
+        *,
+        timeout_seconds: float,
+    ) -> bool:
+        """Confirm submission from URL/message changes or a cleared input."""
+
+        if self.client.page is None:
+            return False
+
+        def _as_int(value: Any) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        baseline_prefix_count = _as_int(baseline_probe.get("body_prefix_count"))
+        baseline_message_count = _as_int(baseline_probe.get("user_message_count"))
+        baseline_url = str(baseline_probe.get("url") or "")
+        self._last_submission_probe = {
+            "baseline": baseline_probe,
+            "latest": None,
+            "confirmed_by": None,
+        }
+        waited = 0.0
+        while waited < timeout_seconds:
+            await asyncio.sleep(0.4)
+            waited += 0.4
+            probe = await self._capture_submission_probe(question)
+            probe["waited_seconds"] = waited
+            self._last_submission_probe["latest"] = probe
+            if str(probe.get("url") or "") != baseline_url:
+                self._last_submission_probe["confirmed_by"] = "url_changed"
+                return True
+            if _as_int(probe.get("user_message_count")) > baseline_message_count:
+                self._last_submission_probe["confirmed_by"] = "user_message_added"
+                return True
+            if (
+                _as_int(probe.get("body_prefix_count")) > baseline_prefix_count
+                and _as_int(probe.get("input_len")) == 0
+            ):
+                self._last_submission_probe["confirmed_by"] = (
+                    "question_rendered_and_input_cleared"
+                )
+                return True
+        return False
+
+    async def _submit_question(
+        self,
+        question: str,
+        baseline_probe: dict[str, Any],
+    ) -> bool:
+        if not await self._type_question_into_visible_input(question):
+            logger.warning("[Doubao] No visible input accepted the question")
+            return False
+        await self.client.page.keyboard.press("Enter")
+        if await self._submission_looks_started(
+            baseline_probe, question, timeout_seconds=2.0
+        ):
+            logger.info("[Doubao] Question submission confirmed after Enter")
+            return True
+        latest_probe = getattr(self, "_last_submission_probe", {}).get("latest") or {}
+        if not bool(latest_probe.get("input_contains_question")):
+            if await self._submission_looks_started(
+                baseline_probe, question, timeout_seconds=4.0
+            ):
+                logger.info(
+                    "[Doubao] Question submission confirmed after input cleared"
+                )
+                return True
+            logger.warning(
+                "[Doubao] Question left the input after Enter but submission was not confirmed"
+            )
+            return False
+        if await self._click_send_button() and await self._submission_looks_started(
+            baseline_probe, question, timeout_seconds=4.0
+        ):
+            logger.info("[Doubao] Question submission confirmed after send-button click")
+            return True
+        logger.warning("[Doubao] Submission was not confirmed after Enter/button paths")
+        return False
+
     async def recover_after_rate_limit(self, cooldown_seconds: int = 35) -> bool:
         """Cooldown and reopen chat page after Doubao rate limiting."""
         logger.info("[Doubao] Cooling down for %ss before retry", cooldown_seconds)
@@ -209,20 +400,21 @@ class DoubaoHandler(BaseBrowserHandler):
 
     async def _wait_for_doubao_chat_ready(self, timeout: int = 300) -> bool:
         """Wait until Doubao returns to a usable chat state."""
+        input_selector = json.dumps(self._sel("input_ready"), ensure_ascii=False)
         elapsed = 0.0
         while elapsed < timeout:
             if self.client.page is not None:
                 try:
-                    ready = await self.client.page.evaluate("""() => {
+                    ready = await self.client.page.evaluate(f"""() => {{
                         if (!location.pathname.includes('/chat')) return false;
-                        const textarea = document.querySelector('textarea.semi-input-textarea, textarea');
-                        if (!textarea) return false;
+                        const inputs = Array.from(document.querySelectorAll({input_selector}));
+                        if (!inputs.some((el) => el.offsetParent !== null)) return false;
                         const loginBtn = document.querySelector('[data-testid="to_login_button"], [class*="login-btn"]');
                         if (loginBtn && loginBtn.offsetParent !== null) return false;
                         const verifyText = document.body?.innerText || '';
                         if (verifyText.includes('验证') || verifyText.toLowerCase().includes('verify')) return false;
                         return true;
-                    }""")
+                    }}""")
                     if ready:
                         logger.info("[Doubao] Chat page ready after recovery")
                         return True

@@ -15,7 +15,10 @@ kimi:
     url_pattern: "kimi\\.gateway\\.chat.*ChatService/Chat"
     method: "POST"
     content_type_contains: "connect+json"
-    timeout: 115
+    # Connect streams can stay open after useful text is already rendered.
+    # The executor races this listener with DOM stability, so this timeout is
+    # only the network-side ceiling rather than an extra serial wait budget.
+    timeout: 55
     continue_on_invalid_parse: true
 
   # --- CSS 选择器 ---
@@ -184,9 +187,11 @@ doubao:
     timeout: 90
 
   # --- CSS 选择器 ---
-  # Semi Design textarea 组件
-  input: "textarea.semi-input-textarea, textarea"
-  input_ready: "textarea.semi-input-textarea, textarea"
+  # Current builds use either the legacy Semi textarea or a rich-text editor.
+  input: "textarea.semi-input-textarea, [data-testid*='chat-input'] [contenteditable='true'], [role='textbox'][contenteditable='true'], .ProseMirror[contenteditable='true'], [class*='editor'][contenteditable='true'], textarea"
+  input_ready: "textarea.semi-input-textarea, [data-testid*='chat-input'] [contenteditable='true'], [role='textbox'][contenteditable='true'], .ProseMirror[contenteditable='true'], [class*='editor'][contenteditable='true'], textarea"
+
+  send_btn: "button[data-testid*='send'], button[aria-label*='发送'], button[aria-label*='send' i], [role='button'][class*='send'], button[class*='send']"
 
   # 登录检测（Semi Design button）
   login_btn: "[class*='login-btn'], button.semi-button"

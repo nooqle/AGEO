@@ -13,6 +13,57 @@ export type TaskRunStatus =
   | 'failed'
   | 'completed';
 
+export type TaskRunChildAttemptStatus =
+  | 'waiting_input'
+  | 'completed'
+  | 'skipped'
+  | 'cancelled'
+  | 'failed'
+  | 'expired';
+
+export interface TaskRunChildAttemptRecord {
+  id: string;
+  task_run_id: string;
+  child_kind: 'a4_browser_action' | string;
+  status: TaskRunChildAttemptStatus | string;
+  step: string;
+  platform: string;
+  action_type: string;
+  request_id: string;
+  message: string;
+  action_hint: string | null;
+  progress: number;
+  resolution: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+export interface FetchRunPlatformStateRecord {
+  id: string;
+  task_run_id: string;
+  task_id: string;
+  platform: string;
+  status: string;
+  attempt_no: number;
+  auth_state: string;
+  action_type?: string | null;
+  reason_code?: string | null;
+  request_id?: string | null;
+  questions_completed: number;
+  questions_total: number;
+  mention_count: number;
+  artifact_write_status?: string | null;
+  error_kind?: string | null;
+  error_message?: string | null;
+  timing?: Record<string, unknown>;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TaskRunRecord {
   id: string;
   task_id: string;
@@ -33,6 +84,8 @@ export interface TaskRunRecord {
   submitted_at: string;
   started_at: string | null;
   finished_at: string | null;
+  child_attempts?: TaskRunChildAttemptRecord[] | null;
+  fetch_platform_states?: FetchRunPlatformStateRecord[] | null;
 }
 
 export interface AnalysisTask {

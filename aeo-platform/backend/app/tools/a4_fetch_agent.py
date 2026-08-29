@@ -356,7 +356,11 @@ class AioAnswerFetchTool:
 
         from app.core.fetchers.browser.playwright_client import PlaywrightBrowserClient
 
-        return PlaywrightBrowserClient(session_name=session_name)
+        run_context = self.build_run_context(state)
+        return PlaywrightBrowserClient(
+            session_name=session_name,
+            task_id=run_context.task_id,
+        )
 
     def create_browser_handler(
         self,

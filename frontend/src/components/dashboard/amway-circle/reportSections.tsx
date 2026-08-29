@@ -232,6 +232,7 @@ export function ReportSection({
   const isPlatformDiff = titleText === '平台差异' || titleText.includes('平台差异');
   const isAction = titleText.includes('从数据到行动') || (titleText.includes('本周') && titleText.includes('件事'));
   const isBlindSpot = titleText.includes('盲区') || section.sectionId === 'ai_blind_spot';
+  const isLivingYoungAutonomy = section.sectionId === 'living_young_autonomy';
 
   const coreMetrics = isCoreVerdict && sampleScope && groups?.length ? buildCoreVerdictMetrics(sampleScope, groups) : null;
   const barChartItems = isAiArchive && groups?.length ? buildNodeFrequencyBars(groups) : null;
@@ -293,7 +294,9 @@ export function ReportSection({
           pillars={strategyStoryline?.pillars || []}
         />
       ) : null}
-      {actionClaims?.length ? (
+      {isLivingYoungAutonomy && section.claims?.length ? (
+        <ReportAutonomyPathCards claims={section.claims} />
+      ) : actionClaims?.length ? (
         <ReportActionCards claims={actionClaims} tone="problem" />
       ) : (isAiArchive || isPlatformDiff) && section.claims?.length ? (
         <ReportPersonaClaimCards claims={section.claims} />
@@ -341,6 +344,57 @@ export function ReportSection({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function ReportAutonomyPathCards({ claims }: { claims: string[] }) {
+  const paths = claims.slice(0, 3).map((claim, index) => {
+    const [label, status, ...detailParts] = claim.split('｜').map((part) => part.trim());
+    return {
+      index,
+      label: label || `自主路径 ${index + 1}`,
+      status: status || '待验证',
+      detail: detailParts.join('｜') || '本轮尚未形成可核验的品牌连接。',
+    };
+  });
+  const connectionJudgment = claims[3]?.trim();
+
+  return (
+    <div className="mt-6">
+      <ol className="grid list-none gap-3 p-0 md:grid-cols-3" aria-label="活得年轻品牌主张的三条自主路径">
+        {paths.map((path) => {
+          const isEstablished = /已形成|已接住|较稳定/.test(path.status);
+          return (
+            <li
+              key={`${path.label}-${path.index}`}
+              className="min-w-0 rounded-xl border border-[var(--border-subtle)] border-t-[3px] border-t-[var(--brand-primary)] bg-[var(--bg-primary)] px-4 py-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold tabular-nums tracking-[0.14em] text-[var(--brand-primary)]">
+                    {String(path.index + 1).padStart(2, '0')}
+                  </div>
+                  <h4 className="report-font mt-1 text-lg font-semibold text-[var(--text-primary)]">
+                    {path.label}
+                  </h4>
+                </div>
+                <span className={`shrink-0 rounded-lg px-2 py-1 text-[11px] font-semibold ${isEstablished ? 'bg-[var(--brand-bg)] text-[var(--brand-text)]' : 'bg-[var(--status-warning-bg)] text-[var(--text-secondary)]'}`}>
+                  {path.status}
+                </span>
+              </div>
+              <p className="mt-3 break-words text-sm leading-7 text-[var(--text-secondary)]">
+                {path.detail}
+              </p>
+            </li>
+          );
+        })}
+      </ol>
+      {connectionJudgment ? (
+        <p className="mt-4 border-y border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 text-sm leading-7 text-[var(--text-primary)]">
+          {connectionJudgment}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

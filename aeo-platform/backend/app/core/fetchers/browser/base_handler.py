@@ -934,6 +934,9 @@ class BaseBrowserHandler(ABC):
             "platform_profile": platform_profile_to_payload(
                 self._browser_agent_profile()
             ),
+            "session_id": self.session_id,
+            "task_id": str(getattr(self.client, "task_id", "") or "") or None,
+            "run_id": self.run_id,
         }
         if extra_meta:
             resolved_meta.update(dict(extra_meta))

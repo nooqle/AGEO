@@ -172,6 +172,35 @@ def _resolve_pricing(
                 settings.DEEPSEEK_FLASH_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
             )
             output_price = settings.DEEPSEEK_FLASH_PRICE_OUTPUT_PER_MTOKENS
+    elif provider == "doubao":
+        pricing_currency = "CNY"
+        source = "volcengine_doubao_official_pricing_2026_07_16"
+        source_url = "https://www.volcengine.com/product/doubao/"
+        if "doubao-seed-2-0-mini" in model_key:
+            pricing_model = "doubao-seed-2.0-mini"
+            input_price = settings.DOUBAO_MINI_PRICE_INPUT_CACHE_MISS_PER_MTOKENS
+            cached_input_price = settings.DOUBAO_MINI_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
+            output_price = settings.DOUBAO_MINI_PRICE_OUTPUT_PER_MTOKENS
+        elif "doubao-seed-2-0-lite" in model_key:
+            pricing_model = "doubao-seed-2.0-lite"
+            input_price = settings.DOUBAO_LITE_PRICE_INPUT_CACHE_MISS_PER_MTOKENS
+            cached_input_price = settings.DOUBAO_LITE_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
+            output_price = settings.DOUBAO_LITE_PRICE_OUTPUT_PER_MTOKENS
+    elif provider == "hunyuan" and "hunyuan-2.0-instruct" in model_key:
+        pricing_currency = "CNY"
+        pricing_model = "hunyuan-2.0-instruct"
+        source = "tencent_hunyuan_official_pricing_2026_03_13"
+        source_url = "https://cloud.tencent.com/announce/detail/2227"
+        input_price = settings.HUNYUAN_2_INSTRUCT_PRICE_INPUT_PER_MTOKENS
+        output_price = settings.HUNYUAN_2_INSTRUCT_PRICE_OUTPUT_PER_MTOKENS
+    elif provider == "moonshot" and model_key.startswith("kimi-k2.5"):
+        pricing_currency = "CNY"
+        pricing_model = "kimi-k2.5"
+        source = "kimi_k2_5_official_pricing_2026_07_16"
+        source_url = "https://platform.kimi.com/docs/pricing/chat-k25"
+        input_price = settings.MOONSHOT_PRICE_INPUT_CACHE_MISS_PER_MTOKENS
+        cached_input_price = settings.MOONSHOT_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
+        output_price = settings.MOONSHOT_PRICE_OUTPUT_PER_MTOKENS
 
     if input_price is None or output_price is None:
         return None
@@ -337,15 +366,21 @@ class LLMUsageService:
         skill_key: str | None,
         step: str | None,
         step_name: str | None,
-        model: BaseLLMModel,
+        model: BaseLLMModel | None,
         usage: LLMUsage,
+        provider: str | None = None,
+        model_name: str | None = None,
         latency_ms: int | None = None,
         extra_metadata: dict[str, Any] | None = None,
     ) -> LLMUsageRecord:
-        provider, model_name = _resolve_model_metadata(model)
+        if model is not None:
+            resolved_provider, resolved_model_name = _resolve_model_metadata(model)
+        else:
+            resolved_provider = str(provider or "unknown").strip().lower() or "unknown"
+            resolved_model_name = str(model_name or "unknown").strip() or "unknown"
         cost_breakdown = estimate_usage_costs(
-            provider=provider,
-            model_name=model_name,
+            provider=resolved_provider,
+            model_name=resolved_model_name,
             prompt_tokens=int(usage.prompt_tokens or 0),
             completion_tokens=int(usage.completion_tokens or 0),
             cached_prompt_tokens=int(usage.cached_prompt_tokens or 0),
@@ -391,8 +426,8 @@ class LLMUsageService:
             record = LLMUsageRecord(
                 session_id=session_uuid,
                 task_id=task_uuid,
-                provider=provider,
-                model_name=model_name,
+                provider=resolved_provider,
+                model_name=resolved_model_name,
                 skill_key=skill_key,
                 step=step,
                 step_name=step_name,
@@ -817,3 +852,50 @@ async def record_llm_usage_async(
             )
     except Exception as exc:
         logger.warning("[LLMUsage] Failed to persist usage: %s", exc)
+
+
+async def record_provider_usage_async(
+    *,
+    session_id: str | None,
+    task_id: str | None,
+    skill_key: str | None,
+    step: str | None,
+    step_name: str | None,
+    provider: str,
+    model_name: str,
+    usage: LLMUsage | None,
+    latency_ms: int | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> None:
+    """Persist usage from provider APIs that do not use ``BaseLLMModel``."""
+
+    normalized_usage = usage or LLMUsage()
+    has_any_counter = any(
+        value is not None
+        for value in (
+            normalized_usage.prompt_tokens,
+            normalized_usage.completion_tokens,
+            normalized_usage.total_tokens,
+        )
+    )
+    if not has_any_counter and latency_ms is None:
+        return
+
+    try:
+        async with AsyncSessionLocal() as db:
+            service = LLMUsageService(db)
+            await service.record_usage(
+                session_id=session_id,
+                task_id=task_id,
+                skill_key=skill_key,
+                step=step,
+                step_name=step_name,
+                model=None,
+                provider=provider,
+                model_name=model_name,
+                usage=normalized_usage,
+                latency_ms=latency_ms,
+                extra_metadata=extra_metadata,
+            )
+    except Exception as exc:
+        logger.warning("[LLMUsage] Failed to persist provider usage: %s", exc)

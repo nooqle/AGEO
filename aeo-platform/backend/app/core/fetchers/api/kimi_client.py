@@ -82,6 +82,15 @@ class KimiClient(BaseAPIClient):
 
     async def ask_with_search(self, question: str) -> LLMResponse:
         start_time = time.time()
+        usage_totals = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cached_prompt_tokens": 0,
+            "cache_miss_prompt_tokens": 0,
+            "prompt_tokens_details": {"cached_tokens": 0},
+        }
+        usage_observed = False
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -118,6 +127,58 @@ class KimiClient(BaseAPIClient):
                 )
                 response.raise_for_status()
                 data = response.json()
+                raw_usage = data.get("usage")
+                if isinstance(raw_usage, dict):
+                    usage_observed = True
+                    round_prompt_tokens = 0
+                    for key in (
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "total_tokens",
+                    ):
+                        try:
+                            token_count = max(int(raw_usage.get(key) or 0), 0)
+                            usage_totals[key] += token_count
+                            if key == "prompt_tokens":
+                                round_prompt_tokens = token_count
+                        except (TypeError, ValueError):
+                            continue
+                    raw_prompt_details = raw_usage.get("prompt_tokens_details")
+                    if not isinstance(raw_prompt_details, dict):
+                        raw_prompt_details = {}
+                    try:
+                        cached_tokens = max(
+                            int(
+                                raw_prompt_details.get("cached_tokens")
+                                or raw_usage.get("cached_prompt_tokens")
+                                or raw_usage.get("prompt_cache_hit_tokens")
+                                or 0
+                            ),
+                            0,
+                        )
+                    except (TypeError, ValueError):
+                        cached_tokens = 0
+                    raw_cache_miss = raw_usage.get("cache_miss_prompt_tokens")
+                    if raw_cache_miss is None:
+                        raw_cache_miss = raw_usage.get("prompt_cache_miss_tokens")
+                    if raw_cache_miss is None:
+                        cache_miss_tokens = max(
+                            round_prompt_tokens - cached_tokens,
+                            0,
+                        )
+                    else:
+                        try:
+                            cache_miss_tokens = max(int(raw_cache_miss), 0)
+                        except (TypeError, ValueError):
+                            cache_miss_tokens = max(
+                                round_prompt_tokens - cached_tokens,
+                                0,
+                            )
+                    usage_totals["cached_prompt_tokens"] += cached_tokens
+                    usage_totals["cache_miss_prompt_tokens"] += cache_miss_tokens
+                    usage_totals["prompt_tokens_details"][
+                        "cached_tokens"
+                    ] += cached_tokens
 
                 choice = data.get("choices", [{}])[0]
                 finish_reason = choice.get("finish_reason", "")
@@ -142,11 +203,14 @@ class KimiClient(BaseAPIClient):
                 duration = time.time() - start_time
 
                 answer_text, search_refs = self._parse_json_response(raw_content)
+                raw_response = dict(data)
+                if usage_observed:
+                    raw_response["usage_aggregate"] = usage_totals
 
                 return LLMResponse(
                     answer_text=answer_text,
                     search_references=search_refs,
-                    raw_response=data,
+                    raw_response=raw_response,
                     duration=duration,
                 )
 
@@ -156,7 +220,9 @@ class KimiClient(BaseAPIClient):
         return LLMResponse(
             answer_text="",
             search_references=[],
-            raw_response={},
+            raw_response=(
+                {"usage_aggregate": usage_totals} if usage_observed else {}
+            ),
             duration=duration,
         )
 
