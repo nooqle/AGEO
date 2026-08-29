@@ -1,6 +1,13 @@
 name: Inspect AIO Production Once
 
 on:
+  workflow_dispatch:
+    inputs:
+      recover_browser:
+        description: Restart only the AIO browser after confirming no active analysis task
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - codex/aio-production-diagnostic-20260829
@@ -23,6 +30,7 @@ jobs:
     env:
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
       TARGET_TASK_ID: 41dc70da-9200-4a27-b44d-d2a4149eebb4
+      RECOVER_AIO_BROWSER: ${{ github.event_name == 'workflow_dispatch' && inputs.recover_browser && 'true' || 'false' }}
 
     steps:
       - name: Validate SSH configuration
@@ -195,6 +203,7 @@ jobs:
 
 
           async def collect() -> None:
+              runtime_client = None
               print("== release ==")
               print(Path.cwd())
               release_sha = Path(".release-sha")
@@ -214,6 +223,7 @@ jobs:
                       auth_token=os.getenv("AIO_AUTH_TOKEN"),
                       timeout_seconds=20.0,
                   )
+                  runtime_client = client
                   sandbox = await client.get_sandbox_info()
                   browser = await client.get_browser_info()
                   try:
@@ -306,6 +316,34 @@ jobs:
                   print("rows=", len(run_rows))
                   for row in run_rows:
                       print(json.dumps(sanitize(dict(row)), ensure_ascii=False, default=str))
+
+                  if os.getenv("RECOVER_AIO_BROWSER") == "true":
+                      print()
+                      print("== guarded AIO browser recovery ==")
+                      if task_rows:
+                          raise RuntimeError(
+                              f"refusing browser restart: {len(task_rows)} active analysis task(s)"
+                          )
+                      if runtime_client is None:
+                          raise RuntimeError("refusing browser restart: AIO runtime client unavailable")
+                      recovery = await runtime_client.exec_shell(
+                          "supervisorctl -c /opt/gem/supervisord.conf restart browser; sleep 12; echo __POST_STATUS__; supervisorctl -c /opt/gem/supervisord.conf status browser; echo __POST_PID__; pgrep -af '/usr/local/bin/browser' || true; echo __POST_TARGETS__; curl -fsS --max-time 8 http://127.0.0.1:9222/json/list",
+                          timeout_seconds=30.0,
+                      )
+                      print("recovery_status=", recovery.status, "exit_code=", recovery.exit_code)
+                      print(clean_text(recovery.output, 12000))
+                      if recovery.exit_code not in (0, None):
+                          raise RuntimeError(f"AIO browser restart failed: exit={recovery.exit_code}")
+                      post_browser = await runtime_client.get_browser_info()
+                      print("post_browser=", json.dumps(sanitize(post_browser.detail), ensure_ascii=False))
+                      post_shot = await runtime_client.take_browser_screenshot()
+                      (output_root / "aio-post-recovery.png").write_bytes(post_shot.image_bytes)
+                      print("post_recovery_screenshot=", {
+                          "content_type": post_shot.content_type,
+                          "bytes": len(post_shot.image_bytes),
+                          "screen": [post_shot.screen_width, post_shot.screen_height],
+                          "image": [post_shot.image_width, post_shot.image_height],
+                      })
 
                   print()
                   print("== fetch_run_platform_states ==")
