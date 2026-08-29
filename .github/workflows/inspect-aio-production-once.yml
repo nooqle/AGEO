@@ -87,6 +87,7 @@ jobs:
           set -euo pipefail
           output_root="$1"
           task_id="$2"
+          recover_browser="${3:-false}"
           current="$(readlink -f /srv/ageo-deploy/current || true)"
           test -n "$current"
           backend="$current/aeo-platform/backend"
@@ -95,7 +96,7 @@ jobs:
           rm -rf "$output_root"
           mkdir -p "$output_root/evidence"
           cd "$backend"
-          DIAGNOSTIC_OUTPUT_ROOT="$output_root" TARGET_TASK_ID="$task_id" "$python_bin" - <<'PY' > "$output_root/report.txt"
+          DIAGNOSTIC_OUTPUT_ROOT="$output_root" TARGET_TASK_ID="$task_id" RECOVER_AIO_BROWSER="$recover_browser" "$python_bin" - <<'PY' > "$output_root/report.txt"
           import asyncio
           import json
           import os
@@ -449,7 +450,7 @@ jobs:
           )
 
           ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
-            "bash -s -- $(printf '%q' "$remote_root") $(printf '%q' "$TARGET_TASK_ID")" <<< "$remote_script"
+            "bash -s -- $(printf '%q' "$remote_root") $(printf '%q' "$TARGET_TASK_ID") $(printf '%q' "$RECOVER_AIO_BROWSER")" <<< "$remote_script"
           scp "${scp_options[@]}" \
             "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:${remote_root}.tgz" \
             "$local_bundle/aio-production-diagnostic.tgz"
