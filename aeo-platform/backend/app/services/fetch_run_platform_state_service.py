@@ -676,9 +676,49 @@ class FetchRunPlatformStateService:
                 continue
             if not fallback:
                 fallback = legacy_result
-            if cls._derive_status_from_legacy_result(legacy_result) == normalized_status:
+            if (
+                cls._derive_status_from_legacy_result(legacy_result)
+                == normalized_status
+            ):
                 return legacy_result
         return fallback
+
+    @staticmethod
+    def _project_packet_error(packet: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Read errors from both legacy flat packets and the AIO packet schema."""
+
+        error_kind = packet.get("error_type") or packet.get("reason_code")
+        error_message = packet.get("error") or packet.get("error_message")
+
+        errors = packet.get("errors")
+        if isinstance(errors, list):
+            for item in reversed(errors):
+                if not isinstance(item, dict):
+                    continue
+                error_kind = (
+                    error_kind
+                    or item.get("error_type")
+                    or item.get("reason_code")
+                    or item.get("failure_reason")
+                )
+                error_message = (
+                    error_message or item.get("message") or item.get("error")
+                )
+                if error_kind or error_message:
+                    break
+
+        provenance = packet.get("provenance")
+        if isinstance(provenance, dict):
+            error_kind = (
+                error_kind
+                or provenance.get("reason_code")
+                or provenance.get("failure_reason")
+            )
+
+        return (
+            str(error_kind).strip() if error_kind else None,
+            str(error_message).strip() if error_message else None,
+        )
 
     @classmethod
     def _normalize_packet_projection(
@@ -951,6 +991,12 @@ class FetchRunPlatformStateService:
                     aggregated_status=status,
                 )
             auth_state = cls._project_auth_state(representative_packet, status)
+            error_kind, error_message = cls._project_packet_error(representative_packet)
+            if error_kind is None and error_message is None:
+                for packet in reversed(packets):
+                    error_kind, error_message = cls._project_packet_error(packet)
+                    if error_kind is not None or error_message is not None:
+                        break
             timing_json = cls._aggregate_packet_timing(packets)
             started_points = [
                 started_at
@@ -993,9 +1039,8 @@ class FetchRunPlatformStateService:
                         "blocking_fingerprint"
                     ),
                     "artifact_write_status": None,
-                    "error_kind": representative_packet.get("error_type"),
-                    "error_message": representative_packet.get("error")
-                    or representative_packet.get("error_message"),
+                    "error_kind": error_kind,
+                    "error_message": error_message,
                     "timing_json": timing_json,
                     "started_at": started_at,
                     "finished_at": finished_at,

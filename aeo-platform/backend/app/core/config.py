@@ -185,7 +185,11 @@ class Settings(BaseSettings):
     AIO_TAKEOVER_HEARTBEAT_INTERVAL_MS: int = 10000
     AIO_TAKEOVER_ISSUED_TTL_SECONDS: int = 480
     AIO_TAKEOVER_HEARTBEAT_TTL_SECONDS: int = 30
-    AIO_MAX_PARALLEL_BROWSER_SESSIONS: int = 4
+    # The current AIO runtime exposes one physical Chromium instance. Running
+    # multiple platform pipelines concurrently can make one renderer failure
+    # contaminate every logical session, so serialize by default until AIO
+    # provides isolated browser processes per session.
+    AIO_MAX_PARALLEL_BROWSER_SESSIONS: int = 1
     AIO_AUTH_ENV_SCOPE: str = "default"
     AIO_BROWSER_LOCALE: str = "zh-CN"
     AIO_BROWSER_ACCEPT_LANGUAGE: str = "zh-CN,zh;q=0.9,en;q=0.8"

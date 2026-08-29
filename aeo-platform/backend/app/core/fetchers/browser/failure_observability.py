@@ -73,6 +73,11 @@ _BROWSER_CONTEXT_CLOSED_MARKERS = (
     "browser has been closed",
     "page has been closed",
     "target closed",
+    "target crashed",
+    "page crashed",
+    "renderer process crashed",
+    "aw, snap",
+    "sigtrap",
 )
 
 
@@ -230,7 +235,9 @@ class BrowserFailureEvidenceService:
         if not root.exists():
             return 0
 
-        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=self.retention_days)
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(
+            days=self.retention_days
+        )
         deleted = 0
         for entry in root.iterdir():
             if not entry.is_dir():

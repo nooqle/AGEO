@@ -839,14 +839,30 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
     async def close(self) -> dict[str, Any]:
         """Disconnect from remote browser and release the leased session holder."""
 
+        reset_error: Exception | None = None
+        release_error: Exception | None = None
+        session_id = self.aio_session_id
         try:
             await self._reset_runtime(preserve_remote_surface=False)
-            if self.aio_session_id is not None:
-                await aio_session_manager.release_session(
-                    self.aio_session_id,
-                    task_id=self.task_id,
-                    purpose=f"{self.purpose}:{self.platform}",
-                )
-            return {"success": True}
-        except Exception as e:
-            return {"error": str(e)}
+        except Exception as exc:
+            reset_error = exc
+        finally:
+            if session_id is not None:
+                try:
+                    await aio_session_manager.release_session(
+                        session_id,
+                        task_id=self.task_id,
+                        purpose=f"{self.purpose}:{self.platform}",
+                    )
+                except Exception as exc:
+                    release_error = exc
+            self.aio_session_id = None
+
+        if reset_error is not None or release_error is not None:
+            errors = []
+            if reset_error is not None:
+                errors.append(f"runtime reset failed: {reset_error}")
+            if release_error is not None:
+                errors.append(f"session release failed: {release_error}")
+            return {"error": "; ".join(errors)}
+        return {"success": True}

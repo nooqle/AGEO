@@ -29,6 +29,7 @@ from app.core.fetchers.browser.browser_agent_contract import (
 from app.core.fetchers.browser.failure_observability import (
     BrowserFailureEvidenceService,
     build_failure_contract,
+    is_browser_context_closed_error,
 )
 from app.core.fetchers.browser.browser_agent_loop import collect_browser_agent_step
 from app.core.fetchers.browser.parsers.base import (
@@ -800,18 +801,18 @@ class BaseBrowserHandler(ABC):
         extra_metadata: dict | None = None,
     ) -> dict | None:
         screenshot_payload: dict | bytes | None = None
-        screenshot_payload = await self._browser_agent_screenshot_provider()
+        page = getattr(self.client, "page", None)
+        if page is not None:
+            try:
+                screenshot_payload = await page.screenshot(type="png")
+            except Exception as e:
+                logger.debug(
+                    "[%s] Playwright screenshot capture failed: %s",
+                    self.PLATFORM_KEY,
+                    e,
+                )
         if screenshot_payload is None:
-            page = getattr(self.client, "page", None)
-            if page is not None:
-                try:
-                    screenshot_payload = await page.screenshot(type="png")
-                except Exception as e:
-                    logger.debug(
-                        "[%s] Playwright screenshot capture failed: %s",
-                        self.PLATFORM_KEY,
-                        e,
-                    )
+            screenshot_payload = await self._browser_agent_screenshot_provider()
         text_snapshot = await self._browser_agent_text_snapshot_provider()
         page_url = None
         page = getattr(self.client, "page", None)
@@ -1171,6 +1172,8 @@ class BaseBrowserHandler(ABC):
                             tag,
                             sync_error,
                         )
+                if is_browser_context_closed_error(error_message):
+                    raise RuntimeError(error_message)
             cur_len = int(result.get("output", "0") or "0")
             logger.info(
                 "[%s] Poll %ds: content_len=%d (prev=%d, stable=%d)",

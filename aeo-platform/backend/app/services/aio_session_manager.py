@@ -470,6 +470,24 @@ class AioSandboxSessionManager:
         if existing is not None:
             existing = await self._reconcile_session_takeover_lock_locked(existing)
 
+        now = datetime.now(timezone.utc)
+        if (
+            existing is not None
+            and existing.expires_at is not None
+            and existing.expires_at <= now
+            and not existing.human_takeover_lock
+        ):
+            logger.warning(
+                "[AIO Session] Clearing %d stale holder(s) from expired session %s",
+                len(existing.holders),
+                existing.session_id,
+            )
+            existing.holders.clear()
+            existing.ref_count = 0
+            existing.automation_lock = None
+            existing.session_state = AioSessionState.IDLE
+            existing.expires_at = None
+
         if existing and existing.session_state not in {
             AioSessionState.DRAINING,
             AioSessionState.FAILED,
@@ -497,6 +515,7 @@ class AioSandboxSessionManager:
                 existing.ref_count = len(existing.holders)
                 existing.automation_lock = holder
                 existing.session_state = AioSessionState.LEASED
+                existing.expires_at = None
             self._touch_session(existing)
             return await self._save_session_record(existing)
 
@@ -740,9 +759,10 @@ class AioSandboxSessionManager:
             session = await self.get_session(session_id)
             session.holders.discard(holder)
             session.ref_count = len(session.holders)
-            session.automation_lock = (
-                None if session.ref_count == 0 else session.automation_lock
-            )
+            if session.automation_lock not in session.holders:
+                session.automation_lock = (
+                    sorted(session.holders)[-1] if session.holders else None
+                )
             if session.human_takeover_lock and session.current_takeover_id:
                 session.session_state = AioSessionState.TAKEOVER_FROZEN
             else:
@@ -751,8 +771,11 @@ class AioSandboxSessionManager:
                     if session.ref_count == 0
                     else AioSessionState.LEASED
                 )
-            session.expires_at = datetime.now(timezone.utc) + timedelta(
-                seconds=settings.AIO_IDLE_TTL_SECONDS
+            session.expires_at = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=settings.AIO_IDLE_TTL_SECONDS)
+                if session.ref_count == 0
+                else None
             )
             self._touch_session(session)
             return await self._save_session_record(session)

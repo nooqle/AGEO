@@ -500,7 +500,7 @@ export function AmwayFlowCanvas({
     return [...cards.values()].sort((left, right) => (
       left.blocker.platform.localeCompare(right.blocker.platform)
     ));
-  }, [browserActionStates, durableRuntimeBlockers]);
+  }, [browserActionStates, durablePlatformStateBlockers, durableRuntimeBlockers]);
 
   // M1: local topology preview + authoritative run.flow_plan when a task is active
   const executionPlan = useMemo<FlowExecutionPlan>(() => {
