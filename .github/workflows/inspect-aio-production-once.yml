@@ -1,0 +1,358 @@
+name: Inspect AIO Production Once
+
+on:
+  push:
+    branches:
+      - codex/aio-production-diagnostic-20260829
+    paths:
+      - .github/workflows/inspect-aio-production-once.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-aio-production-once
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: Inspect production AIO without mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    env:
+      DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+      TARGET_TASK_ID: 41dc70da-9200-4a27-b44d-d2a4149eebb4
+
+    steps:
+      - name: Validate SSH configuration
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${DEMO_SSH_HOST:?Missing DEMO_SSH_HOST secret}"
+          : "${DEMO_SSH_USER:?Missing DEMO_SSH_USER secret}"
+          : "${DEMO_SSH_KEY:?Missing DEMO_SSH_KEY secret}"
+          : "${DEMO_SSH_PORT:?Missing DEMO_SSH_PORT secret or default}"
+
+      - name: Collect sanitized AIO diagnostics
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_aio_inspect_key
+          local_bundle="$RUNNER_TEMP/aio-production-diagnostic"
+          rm -rf "$local_bundle"
+          mkdir -p "$local_bundle"
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(
+            -i "$key_path"
+            -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+          scp_options=(
+            -i "$key_path"
+            -P "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+
+          remote_root="/tmp/ageo-aio-diagnostic-${GITHUB_RUN_ID}"
+          remote_script=$(cat <<'SCRIPT'
+          set -euo pipefail
+          output_root="$1"
+          task_id="$2"
+          current="$(readlink -f /srv/ageo-deploy/current || true)"
+          test -n "$current"
+          backend="$current/aeo-platform/backend"
+          python_bin="$backend/.venv/bin/python"
+          test -x "$python_bin"
+          rm -rf "$output_root"
+          mkdir -p "$output_root/evidence"
+          cd "$backend"
+          DIAGNOSTIC_OUTPUT_ROOT="$output_root" TARGET_TASK_ID="$task_id" "$python_bin" - <<'PY' > "$output_root/report.txt"
+          import asyncio
+          import json
+          import os
+          import re
+          import shutil
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          output_root = Path(os.environ["DIAGNOSTIC_OUTPUT_ROOT"])
+          task_id = os.environ["TARGET_TASK_ID"]
+
+
+          def load_env(path: Path) -> None:
+              if not path.exists():
+                  return
+              for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  key = key.strip()
+                  value = value.strip().strip('"').strip("'")
+                  if key and key not in os.environ:
+                      os.environ[key] = value
+
+
+          load_env(Path("/srv/ageo-deploy/shared/backend/.env.local"))
+          load_env(Path(".env.local"))
+
+
+          SECRET_KEY = re.compile(r"(token|secret|password|cookie|authorization|api[_-]?key)", re.I)
+          SECRET_VALUE = re.compile(r"(Bearer\s+)[A-Za-z0-9._-]+|sk-[A-Za-z0-9_-]{8,}", re.I)
+
+
+          def clean_text(value: object, limit: int = 2000) -> str:
+              text = str(value or "")
+              text = SECRET_VALUE.sub(lambda match: (match.group(1) + "[REDACTED]") if match.group(1) else "[REDACTED]", text)
+              text = re.sub(r"\s+", " ", text).strip()
+              return text if len(text) <= limit else text[:limit] + "..."
+
+
+          def sanitize(value, depth: int = 0):
+              if depth > 8:
+                  return "[MAX_DEPTH]"
+              if isinstance(value, dict):
+                  result = {}
+                  for key, item in value.items():
+                      key_text = str(key)
+                      result[key_text] = "[REDACTED]" if SECRET_KEY.search(key_text) else sanitize(item, depth + 1)
+                  return result
+              if isinstance(value, list):
+                  return [sanitize(item, depth + 1) for item in value[:40]]
+              if isinstance(value, str):
+                  return clean_text(value)
+              return value
+
+
+          def parse_json(value):
+              if isinstance(value, (dict, list)):
+                  return value
+              if not isinstance(value, str) or not value.strip():
+                  return None
+              try:
+                  return json.loads(value)
+              except Exception:
+                  return value
+
+
+          def packet_error_summary(packet):
+              packet = parse_json(packet)
+              if not isinstance(packet, dict):
+                  return sanitize(packet)
+              result = {
+                  "keys": sorted(packet.keys()),
+                  "status": packet.get("status"),
+                  "errors": packet.get("errors"),
+                  "provenance": packet.get("provenance"),
+                  "error_type": packet.get("error_type"),
+                  "error": packet.get("error"),
+                  "error_message": packet.get("error_message"),
+                  "stats": packet.get("stats"),
+              }
+              question_results = packet.get("question_results")
+              if isinstance(question_results, list):
+                  result["question_results"] = []
+                  for item in question_results:
+                      if not isinstance(item, dict):
+                          continue
+                      child = item.get("packet") if isinstance(item.get("packet"), dict) else {}
+                      legacy = item.get("legacy_result") if isinstance(item.get("legacy_result"), dict) else {}
+                      result["question_results"].append({
+                          "question_id": item.get("question_id"),
+                          "question_text": clean_text(item.get("question_text"), 160),
+                          "packet_status": child.get("status"),
+                          "packet_errors": child.get("errors"),
+                          "packet_provenance": child.get("provenance"),
+                          "legacy_success": legacy.get("success"),
+                          "legacy_status": legacy.get("status"),
+                          "legacy_error_type": legacy.get("error_type"),
+                          "legacy_error": legacy.get("error"),
+                          "legacy_error_message": legacy.get("error_message"),
+                          "legacy_evidence_ref": legacy.get("evidence_ref"),
+                      })
+              return sanitize(result)
+
+
+          async def collect() -> None:
+              print("== release ==")
+              print(Path.cwd())
+              release_sha = Path(".release-sha")
+              if release_sha.exists():
+                  print("sha=", release_sha.read_text(encoding="utf-8", errors="ignore").strip())
+              print("AIO_ENABLED=", os.getenv("AIO_ENABLED", "<missing>"))
+              print("AIO_BASE_URL=", clean_text(os.getenv("AIO_BASE_URL", "<missing>"), 300))
+              print("AIO_AUTH_TOKEN=", "present" if os.getenv("AIO_AUTH_TOKEN") else "missing")
+              print("AIO_MAX_PARALLEL_BROWSER_SESSIONS=", os.getenv("AIO_MAX_PARALLEL_BROWSER_SESSIONS", "<default>"))
+              print()
+
+              print("== AIO runtime endpoints ==")
+              try:
+                  from app.core.fetchers.browser.aio_client import AioSandboxClient
+                  client = AioSandboxClient(
+                      base_url=os.environ["AIO_BASE_URL"],
+                      auth_token=os.getenv("AIO_AUTH_TOKEN"),
+                      timeout_seconds=20.0,
+                  )
+                  sandbox = await client.get_sandbox_info()
+                  browser = await client.get_browser_info()
+                  try:
+                      auth = await client.get_auth_info()
+                  except Exception as exc:
+                      auth = {"error": clean_text(exc)}
+                  print("sandbox=", json.dumps(sanitize(sandbox.detail), ensure_ascii=False))
+                  print("browser=", json.dumps(sanitize(browser.detail), ensure_ascii=False))
+                  print("auth=", json.dumps(sanitize(getattr(auth, "detail", auth)), ensure_ascii=False))
+                  shot = await client.take_browser_screenshot()
+                  (output_root / "aio-current.png").write_bytes(shot.image_bytes)
+                  print("current_screenshot=", {
+                      "content_type": shot.content_type,
+                      "bytes": len(shot.image_bytes),
+                      "screen": [shot.screen_width, shot.screen_height],
+                      "image": [shot.image_width, shot.image_height],
+                  })
+              except Exception as exc:
+                  print("runtime_error=", clean_text(exc, 3000))
+              print()
+
+              from sqlalchemy import text
+              from app.core.database import AsyncSessionLocal
+
+              print("== fetch_run_platform_states ==")
+              async with AsyncSessionLocal() as db:
+                  rows = (await db.execute(text("""
+                      select platform, status, attempt_no, auth_state, error_kind,
+                             error_message, latest_packet, timing_json,
+                             started_at, finished_at, updated_at
+                      from fetch_run_platform_states
+                      where task_id = cast(:task_id as uuid)
+                      order by updated_at desc, platform
+                  """), {"task_id": task_id})).mappings().all()
+                  print("rows=", len(rows))
+                  for row in rows:
+                      print(json.dumps(sanitize({
+                          "platform": row["platform"],
+                          "status": row["status"],
+                          "attempt_no": row["attempt_no"],
+                          "auth_state": row["auth_state"],
+                          "error_kind": row["error_kind"],
+                          "error_message": row["error_message"],
+                          "timing_json": parse_json(row["timing_json"]),
+                          "started_at": str(row["started_at"]),
+                          "finished_at": str(row["finished_at"]),
+                          "updated_at": str(row["updated_at"]),
+                          "packet": packet_error_summary(row["latest_packet"]),
+                      }), ensure_ascii=False))
+
+                  print()
+                  print("== aio_runtime_sessions recent ==")
+                  session_rows = (await db.execute(text("""
+                      select session_id, workspace_id, sandbox_ref, aio_version,
+                             session_state::text as session_state, ref_count,
+                             holders_json, browser_info_json, current_takeover_id,
+                             automation_lock, human_takeover_lock,
+                             last_seen_at, last_healthcheck_at, expires_at, updated_at
+                      from aio_runtime_sessions
+                      order by updated_at desc
+                      limit 16
+                  """))).mappings().all()
+                  for row in session_rows:
+                      print(json.dumps(sanitize(dict(row)), ensure_ascii=False, default=str))
+
+                  print()
+                  print("== aio_platform_runtime_states target task ==")
+                  platform_rows = (await db.execute(text("""
+                      select session_id, workspace_id, task_id, platform,
+                             last_state_save_at, last_state_load_at, updated_at
+                      from aio_platform_runtime_states
+                      where task_id = :task_id
+                      order by updated_at desc, platform
+                  """), {"task_id": task_id})).mappings().all()
+                  for row in platform_rows:
+                      print(json.dumps(sanitize(dict(row)), ensure_ascii=False, default=str))
+              print()
+
+              print("== failure evidence metadata (last 24h, max 80) ==")
+              evidence_root = Path(os.getenv("A4_FAILURE_EVIDENCE_DIR") or "/srv/ageo-deploy/shared/runtime/failure-evidence")
+              cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+              candidates = []
+              if evidence_root.exists():
+                  candidates = sorted(evidence_root.glob("**/metadata.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+              copied = 0
+              for metadata_path in candidates:
+                  if copied >= 80:
+                      break
+                  modified = datetime.fromtimestamp(metadata_path.stat().st_mtime, tz=timezone.utc)
+                  if modified < cutoff:
+                      continue
+                  try:
+                      metadata = json.loads(metadata_path.read_text(encoding="utf-8", errors="ignore"))
+                  except Exception as exc:
+                      print("metadata_read_error=", metadata_path, clean_text(exc))
+                      continue
+                  evidence_id = clean_text(metadata.get("evidence_id") or metadata_path.parent.name, 180)
+                  print(json.dumps(sanitize(metadata), ensure_ascii=False))
+                  safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", evidence_id)[:180]
+                  shutil.copy2(metadata_path, output_root / "evidence" / f"{safe_name}.json")
+                  screenshot = metadata_path.parent / "screenshot.png"
+                  if screenshot.exists():
+                      shutil.copy2(screenshot, output_root / "evidence" / f"{safe_name}.png")
+                  copied += 1
+              print("evidence_bundles_copied=", copied)
+
+              print()
+              print("== a4.log selected tail ==")
+              log_path = Path("app/logs/a4.log")
+              if not log_path.exists():
+                  print("a4.log missing")
+                  return
+              lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()[-12000:]
+              pattern = re.compile(r"aio|browser|deepseek|doubao|kimi|hunyuan|yuanbao|timeout|timed out|captcha|challenge|verification|login|sign in|error|failed|circuit", re.I)
+              selected = [clean_text(line, 3500) for line in lines if pattern.search(line)][-1800:]
+              print("selected_lines=", len(selected))
+              for line in selected:
+                  print(line)
+
+
+          asyncio.run(collect())
+          PY
+          tar -C "$output_root" -czf "${output_root}.tgz" .
+          cat "$output_root/report.txt"
+          SCRIPT
+          )
+
+          ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+            "bash -s -- $(printf '%q' "$remote_root") $(printf '%q' "$TARGET_TASK_ID")" <<< "$remote_script"
+          scp "${scp_options[@]}" \
+            "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:${remote_root}.tgz" \
+            "$local_bundle/aio-production-diagnostic.tgz"
+          ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+            "rm -rf $(printf '%q' "$remote_root") $(printf '%q' "${remote_root}.tgz")"
+
+      - name: Upload sanitized diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: aio-production-diagnostic-${{ github.run_id }}
+          path: ${{ runner.temp }}/aio-production-diagnostic/aio-production-diagnostic.tgz
+          if-no-files-found: error
+          retention-days: 3
