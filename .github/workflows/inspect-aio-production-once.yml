@@ -225,7 +225,7 @@ jobs:
                   print("auth=", json.dumps(sanitize(getattr(auth, "detail", auth)), ensure_ascii=False))
                   try:
                       shell = await client.exec_shell(
-                          "free -h; echo __PS__; ps -eo pid,ppid,stat,pcpu,pmem,rss,vsz,comm,args --sort=-rss | head -n 50; echo __LIMITS__; ulimit -a; echo __TARGETS_HTTP__; curl -fsS --max-time 8 http://127.0.0.1:9222/json/list; echo __CRASH_REPORTS__; find '/home/gem/.config/chromium/Crash Reports' -type f -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\\n' 2>/dev/null | sort | tail -n 40",
+                          "free -h; echo __PS__; ps -eo pid,ppid,stat,pcpu,pmem,rss,vsz,comm,args --sort=-rss | head -n 50; echo __SUPERVISOR__; supervisorctl status 2>&1 || supervisorctl -c /etc/supervisor/supervisord.conf status 2>&1 || true; echo __LIMITS__; ulimit -a; echo __TARGETS_HTTP__; curl -fsS --max-time 8 http://127.0.0.1:9222/json/list; echo __CRASH_REPORTS__; find '/home/gem/.config/chromium/Crash Reports' -type f -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\\n' 2>/dev/null | sort | tail -n 40",
                           timeout_seconds=20.0,
                       )
                       print("aio_system_snapshot_status=", shell.status, "exit_code=", shell.exit_code)
@@ -280,6 +280,35 @@ jobs:
 
               print("== fetch_run_platform_states ==")
               async with AsyncSessionLocal() as db:
+                  print("== live analysis tasks ==")
+                  task_rows = (await db.execute(text("""
+                      select id, status::text as status, current_stage, progress,
+                             progress_message, started_at, updated_at
+                      from analysis_tasks
+                      where status::text in ('pending', 'running')
+                      order by updated_at desc
+                      limit 40
+                  """))).mappings().all()
+                  print("rows=", len(task_rows))
+                  for row in task_rows:
+                      print(json.dumps(sanitize(dict(row)), ensure_ascii=False, default=str))
+
+                  print()
+                  print("== live task runs ==")
+                  run_rows = (await db.execute(text("""
+                      select id, task_id, status::text as status, executor_kind::text as executor_kind,
+                             lease_owner, checkpoint_stage, heartbeat_at, started_at, updated_at
+                      from task_runs
+                      where status::text in ('queued', 'claimed', 'running', 'waiting_input', 'cancelling')
+                      order by updated_at desc
+                      limit 40
+                  """))).mappings().all()
+                  print("rows=", len(run_rows))
+                  for row in run_rows:
+                      print(json.dumps(sanitize(dict(row)), ensure_ascii=False, default=str))
+
+                  print()
+                  print("== fetch_run_platform_states ==")
                   rows = (await db.execute(text("""
                       select platform, status, attempt_no, auth_state, error_kind,
                              error_message, latest_packet, timing_json,
