@@ -297,10 +297,10 @@ jobs:
                   print("== live task runs ==")
                   run_rows = (await db.execute(text("""
                       select id, task_id, status::text as status, executor_kind::text as executor_kind,
-                             lease_owner, checkpoint_stage, heartbeat_at, started_at, updated_at
+                             lease_owner, checkpoint_stage, heartbeat_at, submitted_at, started_at
                       from task_runs
                       where status::text in ('queued', 'claimed', 'running', 'waiting_input', 'cancelling')
-                      order by updated_at desc
+                      order by coalesce(heartbeat_at, started_at, submitted_at) desc
                       limit 40
                   """))).mappings().all()
                   print("rows=", len(run_rows))
