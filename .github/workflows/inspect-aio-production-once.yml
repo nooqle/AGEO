@@ -8,6 +8,11 @@ on:
         required: false
         default: false
         type: boolean
+      smoke_platform_pages:
+        description: Open platform pages without submitting questions
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - codex/aio-production-diagnostic-20260829
@@ -31,6 +36,7 @@ jobs:
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
       TARGET_TASK_ID: 41dc70da-9200-4a27-b44d-d2a4149eebb4
       RECOVER_AIO_BROWSER: ${{ github.event_name == 'workflow_dispatch' && inputs.recover_browser && 'true' || 'false' }}
+      SMOKE_AIO_PLATFORM_PAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_platform_pages && 'true' || 'false' }}
 
     steps:
       - name: Validate SSH configuration
@@ -88,6 +94,7 @@ jobs:
           output_root="$1"
           task_id="$2"
           recover_browser="${3:-false}"
+          smoke_platform_pages="${4:-false}"
           current="$(readlink -f /srv/ageo-deploy/current || true)"
           test -n "$current"
           backend="$current/aeo-platform/backend"
@@ -96,7 +103,7 @@ jobs:
           rm -rf "$output_root"
           mkdir -p "$output_root/evidence"
           cd "$backend"
-          DIAGNOSTIC_OUTPUT_ROOT="$output_root" TARGET_TASK_ID="$task_id" RECOVER_AIO_BROWSER="$recover_browser" "$python_bin" - <<'PY' > "$output_root/report.txt"
+          DIAGNOSTIC_OUTPUT_ROOT="$output_root" TARGET_TASK_ID="$task_id" RECOVER_AIO_BROWSER="$recover_browser" SMOKE_AIO_PLATFORM_PAGES="$smoke_platform_pages" "$python_bin" - <<'PY' > "$output_root/report.txt"
           import asyncio
           import json
           import os
@@ -346,6 +353,64 @@ jobs:
                           "image": [post_shot.image_width, post_shot.image_height],
                       })
 
+                  if os.getenv("SMOKE_AIO_PLATFORM_PAGES") == "true":
+                      print()
+                      print("== AIO platform page smoke ==")
+                      if task_rows:
+                          raise RuntimeError(
+                              f"refusing platform smoke: {len(task_rows)} active analysis task(s)"
+                          )
+                      if runtime_client is None:
+                          raise RuntimeError("refusing platform smoke: AIO runtime client unavailable")
+                      from patchright.async_api import async_playwright
+                      live_browser = await runtime_client.get_browser_info()
+                      playwright = await async_playwright().start()
+                      cdp_browser = await playwright.chromium.connect_over_cdp(
+                          live_browser.cdp_url
+                      )
+                      contexts = list(cdp_browser.contexts)
+                      if not contexts:
+                          raise RuntimeError("AIO CDP browser has no context")
+                      context = contexts[0]
+                      platform_urls = {
+                          "deepseek": "https://chat.deepseek.com/",
+                          "yuanbao": "https://yuanbao.tencent.com/",
+                          "kimi": "https://www.kimi.com/",
+                          "doubao": "https://www.doubao.com/chat/",
+                      }
+                      for platform, url in platform_urls.items():
+                          page = await context.new_page()
+                          result = {"platform": platform, "requested_url": url}
+                          try:
+                              await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                              await page.wait_for_timeout(3500)
+                              result.update(await page.evaluate("""() => {
+                                  const visible = (el) => {
+                                      const style = getComputedStyle(el);
+                                      const rect = el.getBoundingClientRect();
+                                      return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                                  };
+                                  const editables = [...document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]')].filter(visible);
+                                  const text = (document.body && document.body.innerText || '').toLowerCase();
+                                  return {
+                                      final_url: location.href,
+                                      title: document.title,
+                                      body_length: text.length,
+                                      visible_editable_count: editables.length,
+                                      has_login_marker: /登录|扫码登录|sign in|log in/.test(text),
+                                      has_verify_marker: /验证码|安全验证|captcha|verify you are human/.test(text),
+                                  };
+                              }"""))
+                              await page.screenshot(
+                                  path=str(output_root / f"smoke-{platform}.png"),
+                                  type="png",
+                              )
+                          except Exception as exc:
+                              result["error"] = clean_text(exc, 1000)
+                          print(json.dumps(sanitize(result), ensure_ascii=False))
+                      await cdp_browser.close()
+                      await playwright.stop()
+
                   print()
                   print("== fetch_run_platform_states ==")
                   rows = (await db.execute(text("""
@@ -450,7 +515,7 @@ jobs:
           )
 
           ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
-            "bash -s -- $(printf '%q' "$remote_root") $(printf '%q' "$TARGET_TASK_ID") $(printf '%q' "$RECOVER_AIO_BROWSER")" <<< "$remote_script"
+            "bash -s -- $(printf '%q' "$remote_root") $(printf '%q' "$TARGET_TASK_ID") $(printf '%q' "$RECOVER_AIO_BROWSER") $(printf '%q' "$SMOKE_AIO_PLATFORM_PAGES")" <<< "$remote_script"
           scp "${scp_options[@]}" \
             "${DEMO_SSH_USER}@${DEMO_SSH_HOST}:${remote_root}.tgz" \
             "$local_bundle/aio-production-diagnostic.tgz"
