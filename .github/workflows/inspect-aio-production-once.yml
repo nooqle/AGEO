@@ -225,7 +225,7 @@ jobs:
                   print("auth=", json.dumps(sanitize(getattr(auth, "detail", auth)), ensure_ascii=False))
                   try:
                       shell = await client.exec_shell(
-                          "free -h; echo __PS__; ps -eo pid,ppid,stat,pcpu,pmem,rss,vsz,comm,args --sort=-rss | head -n 50; echo __LIMITS__; ulimit -a; echo __TARGETS_HTTP__; curl -fsS --max-time 8 http://127.0.0.1:9222/json/list",
+                          "free -h; echo __PS__; ps -eo pid,ppid,stat,pcpu,pmem,rss,vsz,comm,args --sort=-rss | head -n 50; echo __LIMITS__; ulimit -a; echo __TARGETS_HTTP__; curl -fsS --max-time 8 http://127.0.0.1:9222/json/list; echo __CRASH_REPORTS__; find '/home/gem/.config/chromium/Crash Reports' -type f -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\\n' 2>/dev/null | sort | tail -n 40",
                           timeout_seconds=20.0,
                       )
                       print("aio_system_snapshot_status=", shell.status, "exit_code=", shell.exit_code)
@@ -362,7 +362,7 @@ jobs:
 
               print()
               print("== a4.log selected tail ==")
-              log_path = Path("app/logs/a4.log")
+              log_path = Path("logs/a4.log")
               if not log_path.exists():
                   print("a4.log missing")
                   return
