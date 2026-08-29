@@ -223,6 +223,46 @@ jobs:
                   print("sandbox=", json.dumps(sanitize(sandbox.detail), ensure_ascii=False))
                   print("browser=", json.dumps(sanitize(browser.detail), ensure_ascii=False))
                   print("auth=", json.dumps(sanitize(getattr(auth, "detail", auth)), ensure_ascii=False))
+                  try:
+                      shell = await client.exec_shell(
+                          "free -h; echo __PS__; ps -eo pid,ppid,stat,pcpu,pmem,rss,vsz,comm,args --sort=-rss | head -n 50; echo __LIMITS__; ulimit -a; echo __TARGETS_HTTP__; curl -fsS --max-time 8 http://127.0.0.1:9222/json/list",
+                          timeout_seconds=20.0,
+                      )
+                      print("aio_system_snapshot_status=", shell.status, "exit_code=", shell.exit_code)
+                      print(clean_text(shell.output, 30000))
+                  except Exception as exc:
+                      print("aio_system_snapshot_error=", clean_text(exc, 3000))
+                  try:
+                      import websockets
+                      async with websockets.connect(browser.cdp_url, ping_interval=None, max_size=None) as ws:
+                          await ws.send(json.dumps({"id": 1, "method": "Target.getTargets"}))
+                          while True:
+                              payload = json.loads(await ws.recv())
+                              if payload.get("id") == 1:
+                                  break
+                          targets = payload.get("result", {}).get("targetInfos", [])
+                          target_summary = [
+                              {
+                                  "targetId": item.get("targetId"),
+                                  "type": item.get("type"),
+                                  "title": clean_text(item.get("title"), 240),
+                                  "url": clean_text(item.get("url"), 500),
+                                  "attached": item.get("attached"),
+                                  "browserContextId": item.get("browserContextId"),
+                              }
+                              for item in targets
+                              if isinstance(item, dict)
+                          ]
+                          print("cdp_target_count=", len(target_summary))
+                          print("cdp_targets=", json.dumps(sanitize(target_summary), ensure_ascii=False))
+                          await ws.send(json.dumps({"id": 2, "method": "SystemInfo.getProcessInfo"}))
+                          while True:
+                              process_payload = json.loads(await ws.recv())
+                              if process_payload.get("id") == 2:
+                                  break
+                          print("cdp_process_info=", json.dumps(sanitize(process_payload.get("result", {})), ensure_ascii=False))
+                  except Exception as exc:
+                      print("cdp_inspection_error=", clean_text(exc, 3000))
                   shot = await client.take_browser_screenshot()
                   (output_root / "aio-current.png").write_bytes(shot.image_bytes)
                   print("current_screenshot=", {
