@@ -442,8 +442,12 @@ class AioAnswerFetchTool:
                     )
             return results
         finally:
-            for task in pending:
-                task.cancel()
+            for task in scheduled:
+                if not task.done():
+                    task.cancel()
+            # Drain every scheduled task, including cancellation that interrupts
+            # asyncio.wait before its pending-set assignment completes.
+            await asyncio.gather(*scheduled, return_exceptions=True)
 
     def build_result_packet(
         self,

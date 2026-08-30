@@ -1324,9 +1324,12 @@ async def _gather_browser_tasks(
     """Run browser platform pipelines with the configured AIO concurrency cap."""
 
     if settings.AIO_ENABLED and settings.AIO_BASE_URL:
+        max_parallel = max(1, settings.AIO_MAX_PARALLEL_BROWSER_SESSIONS)
+        schedule_mode = "serially" if max_parallel == 1 else "with bounded parallelism"
         logger.info(
-            "[A4] Phase 2: AIO runtime detected, executing browser pipelines in parallel (max=%d)",
-            max(1, settings.AIO_MAX_PARALLEL_BROWSER_SESSIONS),
+            "[A4] Phase 2: AIO runtime detected, executing browser pipelines %s (max=%d)",
+            schedule_mode,
+            max_parallel,
         )
 
     return await _AIO_ANSWER_FETCH_TOOL.gather_browser_tasks(
@@ -3718,13 +3721,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             if browser_tasks:
                 active_browser_pipeline_count = max(len(browser_task_platforms), 1)
-                browser_batch_timeout = (
-                    max(
-                        _get_browser_pipeline_timeout(platform, total)
-                        for platform in browser_task_platforms
-                    )
-                    + 30.0
-                )
+                pipeline_timeouts = [
+                    _get_browser_pipeline_timeout(platform, total)
+                    for platform in browser_task_platforms
+                ]
+                # AIO commonly exposes one physical Chromium surface. Its
+                # configured semaphore may serialize every platform, so a
+                # max(single timeout) batch deadline cancels valid queued work.
+                # The sum is a safe upper bound for both serial and parallel
+                # execution; each pipeline still keeps its own hard timeout.
+                browser_batch_timeout = sum(pipeline_timeouts) + 30.0
                 logger.info(
                     "[A4] Phase 2: Starting %d browser pipeline(s) with hard batch timeout %.0fs...",
                     len(browser_tasks),

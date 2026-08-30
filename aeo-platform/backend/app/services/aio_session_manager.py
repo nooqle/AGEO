@@ -471,22 +471,64 @@ class AioSandboxSessionManager:
             existing = await self._reconcile_session_takeover_lock_locked(existing)
 
         now = datetime.now(timezone.utc)
+        expires_at = existing.expires_at if existing is not None else None
+        if isinstance(expires_at, str):
+            try:
+                expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                existing.expires_at = expires_at
+            except ValueError:
+                logger.warning(
+                    "[AIO Session] Ignoring malformed expires_at on session %s",
+                    existing.session_id,
+                )
+                expires_at = None
+                existing.expires_at = None
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+            existing.expires_at = expires_at
+
         if (
             existing is not None
-            and existing.expires_at is not None
-            and existing.expires_at <= now
+            and expires_at is not None
+            and expires_at <= now
             and not existing.human_takeover_lock
         ):
-            logger.warning(
-                "[AIO Session] Clearing %d stale holder(s) from expired session %s",
-                len(existing.holders),
-                existing.session_id,
-            )
-            existing.holders.clear()
-            existing.ref_count = 0
-            existing.automation_lock = None
-            existing.session_state = AioSessionState.IDLE
-            existing.expires_at = None
+            has_active_holders = existing.ref_count > 0 or bool(existing.holders)
+            if has_active_holders:
+                # Older records could carry an idle TTL even while a holder was
+                # still driving the shared browser. Never turn that stale TTL
+                # into a lease revoke; the holder set is the live ownership.
+                if existing.holders:
+                    existing.ref_count = len(existing.holders)
+                    if existing.automation_lock not in existing.holders:
+                        existing.automation_lock = sorted(existing.holders)[-1]
+                else:
+                    # A positive legacy ref_count without holder names cannot be
+                    # safely reconstructed. Preserve the count and clear only
+                    # the stale lock metadata so a new holder can recover it.
+                    existing.automation_lock = None
+                if existing.session_state not in {
+                    AioSessionState.DRAINING,
+                    AioSessionState.FAILED,
+                    AioSessionState.DESTROYED,
+                }:
+                    existing.session_state = AioSessionState.LEASED
+                existing.expires_at = None
+                logger.warning(
+                    "[AIO Session] Preserving %d holder(s) on expired session %s; cleared stale expiry",
+                    max(existing.ref_count, len(existing.holders)),
+                    existing.session_id,
+                )
+            else:
+                logger.warning(
+                    "[AIO Session] Clearing idle expired session %s",
+                    existing.session_id,
+                )
+                existing.holders.clear()
+                existing.ref_count = 0
+                existing.automation_lock = None
+                existing.session_state = AioSessionState.IDLE
+                existing.expires_at = None
 
         if existing and existing.session_state not in {
             AioSessionState.DRAINING,

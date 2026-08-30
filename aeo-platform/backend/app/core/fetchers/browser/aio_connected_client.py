@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Awaitable
 from urllib.parse import urlparse
 
 from patchright.async_api import Browser, BrowserContext, async_playwright
@@ -24,6 +24,36 @@ from app.services.aio_session_manager import aio_session_manager
 logger = logging.getLogger(__name__)
 
 _CHROME_VERSION_RE = re.compile(r"Chrome/([0-9.]+)")
+
+
+async def _await_cleanup_with_cancellation_drain(
+    awaitable: Awaitable[Any],
+) -> Any:
+    """Finish cleanup before re-delivering cancellation to the caller.
+
+    ``asyncio.shield`` prevents the cleanup task itself from being cancelled,
+    but the awaiting task still receives ``CancelledError`` immediately. Keep
+    draining that cancellation until the resource operation has completed.
+    """
+
+    task = asyncio.ensure_future(awaitable)
+    cancellation: asyncio.CancelledError | None = None
+    while True:
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            if task.done():
+                raise
+            cancellation = cancellation or exc
+            continue
+        except BaseException as exc:
+            if cancellation is not None:
+                raise cancellation from exc
+            raise
+        else:
+            if cancellation is not None:
+                raise cancellation
+            return result
 
 
 class AioConnectedBrowserClient(PlaywrightBrowserClient):
@@ -62,6 +92,21 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         self._context_owned_by_client = False
         self._storage_state_loaded_into_context = False
         self.context_reuse_strategy: str | None = None
+        self._invalid_page_ids: set[int] = set()
+
+    def invalidate_current_page(self) -> None:
+        """Prevent a crashed/stale page from being selected during resync."""
+
+        if self.page is not None:
+            self._invalid_page_ids.add(id(self.page))
+
+    def _is_page_reusable(self, page: Any) -> bool:
+        if page is None or id(page) in self._invalid_page_ids:
+            return False
+        try:
+            return not page.is_closed()
+        except Exception:
+            return False
 
     @staticmethod
     def _page_matches_target_host(page_url: str | None, target_url: str | None) -> bool:
@@ -120,51 +165,45 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
     async def _reset_runtime(self, *, preserve_remote_surface: bool = True) -> None:
         """Detach from the remote browser without killing the AIO runtime."""
 
-        try:
+        cancellation: asyncio.CancelledError | None = None
+
+        async def run_cleanup(awaitable: Awaitable[Any]) -> None:
+            nonlocal cancellation
             try:
-                await self._persist_storage_state()
-            except Exception as persist_error:
-                logger.warning(
-                    "[AIO Browser:%s] Failed to persist storage state before reset: %s",
-                    self.session_name,
-                    persist_error,
-                )
+                await _await_cleanup_with_cancellation_drain(awaitable)
+            except asyncio.CancelledError as exc:
+                cancellation = cancellation or exc
+            except Exception:
+                pass
+
+        try:
+            await run_cleanup(self._persist_storage_state())
 
             if (
                 not preserve_remote_surface
                 and self.page is not None
                 and self._page_owned_by_client
             ):
-                try:
-                    await self.page.close()
-                except Exception:
-                    pass
+                await run_cleanup(self.page.close())
             self.page = None
             self._page_owned_by_client = False
 
             if self.context is not None and self._context_owned_by_client:
-                try:
-                    await self.context.close()
-                except Exception:
-                    pass
+                await run_cleanup(self.context.close())
 
             if self.browser is not None:
-                try:
-                    await self.browser.close()
-                except Exception:
-                    pass
+                await run_cleanup(self.browser.close())
             self.browser = None
             self.context = None
             self._context_owned_by_client = False
             self._storage_state_loaded_into_context = False
 
             if self.playwright is not None:
-                try:
-                    await self.playwright.stop()
-                except Exception:
-                    pass
+                await run_cleanup(self.playwright.stop())
             self.playwright = None
-        except Exception:
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                cancellation = cancellation or exc
             self.browser = None
             self.context = None
             self.page = None
@@ -172,6 +211,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             self._page_owned_by_client = False
             self._context_owned_by_client = False
             self._storage_state_loaded_into_context = False
+
+        if cancellation is not None:
+            raise cancellation
 
     async def _ensure_remote_runtime(self) -> dict[str, Any]:
         session = await aio_session_manager.acquire_session(
@@ -444,7 +486,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         if reusable_contexts and target_host:
             for candidate in reversed(reusable_contexts):
                 existing_pages = [
-                    page for page in candidate.pages if not page.is_closed()
+                    page for page in candidate.pages if self._is_page_reusable(page)
                 ]
                 for page in reversed(existing_pages):
                     page_host = self._normalize_host(page.url)
@@ -517,7 +559,9 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
             raise RuntimeError("AIO 浏览器上下文未初始化")
 
         existing_pages = [
-            candidate for candidate in self.context.pages if not candidate.is_closed()
+            candidate
+            for candidate in self.context.pages
+            if self._is_page_reusable(candidate)
         ]
         logger.info(
             "[AIO Browser:%s] context pages discovered=%d urls=%s",
@@ -612,7 +656,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                 pages = [
                     page
                     for page in list(getattr(context, "pages", []) or [])
-                    if not page.is_closed()
+                    if self._is_page_reusable(page)
                 ]
                 for page in reversed(pages):
                     page_url = page.url or ""
@@ -842,22 +886,34 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         reset_error: Exception | None = None
         release_error: Exception | None = None
         session_id = self.aio_session_id
+        cancellation: asyncio.CancelledError | None = None
         try:
-            await self._reset_runtime(preserve_remote_surface=False)
-        except Exception as exc:
-            reset_error = exc
-        finally:
+            try:
+                await _await_cleanup_with_cancellation_drain(
+                    self._reset_runtime(preserve_remote_surface=False)
+                )
+            except asyncio.CancelledError as exc:
+                cancellation = cancellation or exc
+            except Exception as exc:
+                reset_error = exc
             if session_id is not None:
                 try:
-                    await aio_session_manager.release_session(
-                        session_id,
-                        task_id=self.task_id,
-                        purpose=f"{self.purpose}:{self.platform}",
+                    await _await_cleanup_with_cancellation_drain(
+                        aio_session_manager.release_session(
+                            session_id,
+                            task_id=self.task_id,
+                            purpose=f"{self.purpose}:{self.platform}",
+                        )
                     )
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
                 except Exception as exc:
                     release_error = exc
+        finally:
             self.aio_session_id = None
 
+        if cancellation is not None:
+            raise cancellation
         if reset_error is not None or release_error is not None:
             errors = []
             if reset_error is not None:

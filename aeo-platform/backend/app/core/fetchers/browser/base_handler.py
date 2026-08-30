@@ -811,8 +811,8 @@ class BaseBrowserHandler(ABC):
                     self.PLATFORM_KEY,
                     e,
                 )
-        if screenshot_payload is None:
-            screenshot_payload = await self._browser_agent_screenshot_provider()
+        # Failure evidence must remain bound to this handler's page. The AIO
+        # global screenshot surface can be showing another platform tab.
         text_snapshot = await self._browser_agent_text_snapshot_provider()
         page_url = None
         page = getattr(self.client, "page", None)
@@ -1154,21 +1154,24 @@ class BaseBrowserHandler(ABC):
             if "error" in result:
                 error_message = str(result["error"])
                 logger.warning("[%s] eval error at %ds: %s", tag, waited, error_message)
-                if (
-                    callable(sync_method)
-                    and "target" in error_message.lower()
-                    and "closed" in error_message.lower()
+                if callable(sync_method) and is_browser_context_closed_error(
+                    error_message
                 ):
                     logger.info(
-                        "[%s] Attempting live-page resync after target-closed eval failure",
+                        "[%s] Attempting live-page resync after crashed/closed eval failure",
                         tag,
                     )
                     try:
+                        invalidate_page = getattr(
+                            self.client, "invalidate_current_page", None
+                        )
+                        if callable(invalidate_page):
+                            invalidate_page()
                         if await sync_method(target_url or self.URL):
                             continue
                     except Exception as sync_error:
                         logger.warning(
-                            "[%s] Live-page resync failed after target-closed eval error: %s",
+                            "[%s] Live-page resync failed after crashed/closed eval error: %s",
                             tag,
                             sync_error,
                         )
