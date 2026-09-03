@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -30,7 +29,6 @@ from app.api.v1.amwaychina_flow_topology import (
 )
 from app.core.utils import repair_mojibake
 from app.models.brand_intelligence_run import BrandIntelligenceRun
-from app.models.entity import Entity
 from app.models.monitoring_plan import MonitoringQuestionSet, QuestionSetStatus
 from app.services.amway_circle_tracking_service import AmwayCircleTrackingService
 from app.services.amway_entity_lexicon_service import AmwayEntityLexiconService

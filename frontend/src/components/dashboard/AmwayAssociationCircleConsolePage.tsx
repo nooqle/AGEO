@@ -259,6 +259,8 @@ export function AmwayAssociationCircleConsolePage({
   const [homeError, setHomeError] = useState<string | null>(null);
   const [activeTask, setActiveTask] = useState<AnalysisTask | null>(null);
   const [latestIntelligenceRun, setLatestIntelligenceRun] = useState<BrandIntelligenceRun | null>(null);
+  const [isCancellingRun, setIsCancellingRun] = useState(false);
+  const cancellingRunRef = useRef(false);
   const flowSocketRef = useRef<WebSocket | null>(null);
   const [browserActionStates, setBrowserActionStates] = useState<BrowserState[]>([]);
   const [directEntity, setDirectEntity] = useState<Entity | null>(null);
@@ -973,12 +975,14 @@ export function AmwayAssociationCircleConsolePage({
     () => buildAssociationProjection(selectedWorld, home),
     [home, selectedWorld],
   );
-  const headerIsRunning =
-    isSelectedRunExecuting
-    || Boolean(selectedEntity && submittingByEntity[selectedEntity.id]);
+  const headerIsStarting = Boolean(selectedEntity && submittingByEntity[selectedEntity.id]);
+  const headerIsRunning = isSelectedRunExecuting;
+  const headerIsBusy = headerIsStarting || headerIsRunning;
   const headerStatusLabel = isAwaitingPlanConfirm
     ? '待确认计划'
-    : headerIsRunning
+    : headerIsStarting
+      ? '正在启动…'
+      : headerIsRunning
       ? '正在运行'
       : isProjectionLoading
         ? '正在读取'
@@ -995,7 +999,7 @@ export function AmwayAssociationCircleConsolePage({
     : headerHasPeriodReport
       ? reportQualityPassed(periodView?.projection) ? '查看报告' : '查看待校验报告'
       : '生成报告';
-  const headerReportDisabled = headerIsRunning
+  const headerReportDisabled = headerIsBusy
     || Boolean(isPeriodReportGenerating)
     || (!headerHasPeriodReport && !consoleProjection.nodes.length);
 
@@ -1036,13 +1040,19 @@ export function AmwayAssociationCircleConsolePage({
   }, [confirmRun, fetchActiveRun, selectedEntityId, selectedRun?.id]);
 
   const handleCancelFlowPlan = useCallback(async () => {
-    if (!selectedEntityId || !selectedRun?.id) return;
+    if (!selectedEntityId || !selectedRun?.id || cancellingRunRef.current) return;
+    cancellingRunRef.current = true;
+    setIsCancellingRun(true);
     try {
       await cancelRun(selectedEntityId, selectedRun.id);
-      void fetchActiveRun(selectedEntityId);
-      toast.info('已取消本次运行');
+      await fetchActiveRun(selectedEntityId);
+      toast.info('已停止本次采集');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '取消失败');
+      await fetchActiveRun(selectedEntityId);
+      toast.error(error instanceof Error ? error.message : '采集任务暂时无法停止，请刷新任务状态后重试。');
+    } finally {
+      cancellingRunRef.current = false;
+      setIsCancellingRun(false);
     }
   }, [cancelRun, fetchActiveRun, selectedEntityId, selectedRun?.id]);
 
@@ -1122,7 +1132,7 @@ export function AmwayAssociationCircleConsolePage({
         <AmwayConsoleHeader
           viewLabel={CONSOLE_VIEWS.find((item) => item.id === consoleView)?.label || '品牌圈层'}
           statusLabel={headerStatusLabel}
-          isRunning={headerIsRunning}
+          isRunning={headerIsBusy}
           reportLabel={headerReportLabel}
           reportDisabled={headerReportDisabled}
           reportPrimary={headerHasPeriodReport}
@@ -1144,6 +1154,7 @@ export function AmwayAssociationCircleConsolePage({
             latestCircleRunError={latestCircleRunError}
             isRunActive={isSelectedRunExecuting}
             isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
+            isCancellingRun={isCancellingRun}
             isProjectionLoading={isProjectionLoading}
             runError={errorByEntity[selectedEntity.id]}
             liveStageResults={streamedStageResults}
@@ -1164,6 +1175,7 @@ export function AmwayAssociationCircleConsolePage({
             onChangePeriodCustomEnd={setPeriodCustomEnd}
             onGeneratePeriodReport={handleGeneratePeriodReport}
             onStart={handleStart}
+            onCancelRun={handleCancelFlowPlan}
             onOpenLatestReport={handleOpenLatestReport}
           />
         ) : null}
@@ -1182,6 +1194,7 @@ export function AmwayAssociationCircleConsolePage({
             onResolveBrowserAction={resolveFlowBrowserAction}
             isRunActive={isSelectedRunExecuting}
             isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
+            isCancellingRun={isCancellingRun}
             isAwaitingPlanConfirm={isAwaitingPlanConfirm}
             liveStageResults={streamedStageResults}
             onQuickRun={handleQuickRun}

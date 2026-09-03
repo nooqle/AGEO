@@ -78,6 +78,24 @@ export const useIntelligenceRunStore = create<IntelligenceRunState>((set, get) =
       }));
       return run;
     } catch (error) {
+      for (const delayMs of [0, 800, 2000]) {
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        try {
+          const recoveredRun = await api.getActiveBrandIntelligenceRun(entityId);
+          if (recoveredRun) {
+            set((state) => ({
+              runsByEntity: { ...state.runsByEntity, [entityId]: recoveredRun },
+              submittingByEntity: { ...state.submittingByEntity, [entityId]: false },
+              errorByEntity: { ...state.errorByEntity, [entityId]: null },
+            }));
+            return recoveredRun;
+          }
+        } catch {
+          // Retry the status read before surfacing the original start failure.
+        }
+      }
       set((state) => ({
         submittingByEntity: { ...state.submittingByEntity, [entityId]: false },
         errorByEntity: {

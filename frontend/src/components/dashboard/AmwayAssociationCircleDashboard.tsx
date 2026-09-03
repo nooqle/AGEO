@@ -130,6 +130,7 @@ interface AmwayAssociationCircleDashboardProps {
   latestCircleRunError?: boolean;
   isRunActive?: boolean;
   isRunSubmitting?: boolean;
+  isCancellingRun?: boolean;
   isProjectionLoading?: boolean;
   runError?: string | null;
   liveStageResults?: StageResult[];
@@ -150,6 +151,7 @@ interface AmwayAssociationCircleDashboardProps {
   onChangePeriodCustomEnd?: (value: string) => void;
   onGeneratePeriodReport: () => Promise<boolean>;
   onStart: (payload?: AssociationCircleStartPayload) => void | Promise<void>;
+  onCancelRun?: () => void;
   onOpenLatestReport: () => void;
 }
 
@@ -167,6 +169,7 @@ export function AmwayAssociationCircleDashboard({
   latestCircleRunError = false,
   isRunActive,
   isRunSubmitting,
+  isCancellingRun = false,
   isProjectionLoading,
   runError,
   liveStageResults = [],
@@ -186,6 +189,7 @@ export function AmwayAssociationCircleDashboard({
   onChangePeriodCustomEnd,
   onGeneratePeriodReport,
   onStart,
+  onCancelRun,
 }: AmwayAssociationCircleDashboardProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<ConsoleWorkspace>('map');
@@ -268,8 +272,10 @@ export function AmwayAssociationCircleDashboard({
   const hasPeriodReport = Boolean(
     periodView?.report_id && hasReportContent(periodView.projection),
   );
-  const headerStatusLabel = isRunSubmitting || isRunActive
-    ? nodes.length > 0 ? '实时抽取中' : '正在抓取'
+  const headerStatusLabel = isRunSubmitting
+    ? '正在启动…'
+    : isRunActive
+      ? nodes.length > 0 ? '实时抽取中' : '正在抓取'
     : status === 'loading' || isLatestCircleRunLoading
       ? '正在读取报告'
       : latestCircleRunError
@@ -335,6 +341,7 @@ export function AmwayAssociationCircleDashboard({
     setQuestionHistoryRefreshKey((current) => current + 1);
   };
   const handleRunFromSettings = async () => {
+    if (isModeling || isCancellingRun) return;
     await handleStart();
     setRunSettingsOpen(false);
   };
@@ -387,6 +394,7 @@ export function AmwayAssociationCircleDashboard({
   };
 
   const isModeling = Boolean(isRunSubmitting || isRunActive);
+  const canCancelRun = Boolean(isRunActive && activeRun?.id && onCancelRun);
   const runningScope = activeRun?.input_scope;
   const runningQuestionCount = Number(runningScope?.uploaded_question_count || 0);
   const configuredQuestionSetLabel = isRunActive
@@ -403,7 +411,15 @@ export function AmwayAssociationCircleDashboard({
     : fetchMode;
   const configuredFetchModeLabel = configuredFetchMode === 'full' ? '浏览器采集' : 'API 采集';
   const runConfigurationSummary = `${configuredQuestionSetLabel} · ${configuredFetchModeLabel} · ${targetPlatformCount || 4} 个平台`;
-  const runButtonLabel = isModeling ? '运行中' : status === 'loading' ? '读取中' : status === 'ready' ? '重新运行' : '开始运行';
+  const runButtonLabel = isRunSubmitting
+    ? '正在启动…'
+    : isRunActive
+      ? '运行中'
+      : status === 'loading'
+        ? '读取中'
+        : status === 'ready'
+          ? '重新运行'
+          : '开始运行';
   const assistiveStatusMessage = periodError
     || periodReportError
     || uploadError
@@ -499,11 +515,25 @@ export function AmwayAssociationCircleDashboard({
                   <span className="block text-[var(--text-tertiary)]">{isModeling ? '本轮配置' : '下次运行'}</span>
                   <span className="font-medium text-[var(--text-primary)]">{runConfigurationSummary}</span>
                 </div>
-                {isModeling ? (
+                {isRunSubmitting ? (
                   <div className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 text-sm font-medium text-[var(--text-secondary)]">
                     <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
-                    正在运行
+                    正在启动…
                   </div>
+                ) : canCancelRun ? (
+                  <button
+                    type="button"
+                    onClick={onCancelRun}
+                    disabled={isCancellingRun}
+                    className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-primary)] px-3.5 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--bg-secondary)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isCancellingRun ? (
+                      <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
+                    ) : (
+                      <X size={14} aria-hidden="true" />
+                    )}
+                    {isCancellingRun ? '正在停止…' : '停止采集'}
+                  </button>
                 ) : (
                   <button
                     ref={runSettingsTriggerRef}
@@ -704,7 +734,7 @@ export function AmwayAssociationCircleDashboard({
                     <button
                       type="button"
                       onClick={() => void handleRunFromSettings()}
-                      disabled={isRunSubmitting || status === 'loading'}
+                      disabled={isModeling || isCancellingRun || status === 'loading'}
                       className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <RefreshCw size={15} />

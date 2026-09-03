@@ -162,6 +162,7 @@ export function AmwayFlowCanvas({
   activeTask,
   isRunActive,
   isRunSubmitting,
+  isCancellingRun = false,
   isAwaitingPlanConfirm = false,
   liveStageResults = [],
   browserActionStates = [],
@@ -182,6 +183,7 @@ export function AmwayFlowCanvas({
   activeTask?: AnalysisTask | null;
   isRunActive?: boolean;
   isRunSubmitting?: boolean;
+  isCancellingRun?: boolean;
   /** M3: parked at plan confirmation gate */
   isAwaitingPlanConfirm?: boolean;
   liveStageResults?: StageResult[];
@@ -446,6 +448,7 @@ export function AmwayFlowCanvas({
   }, [combinedLiveStageResults, evidenceSamples, sourceAppendix]);
 
   const running = Boolean(isRunActive || isRunSubmitting);
+  const canCancelRun = Boolean(isRunActive && activeRun?.id && onCancelFlowPlan);
   const progressMessage = String(activeTask?.progress_message || activeRun?.message || '').trim();
 
   const durableRuntimeBlockers = useMemo(
@@ -1377,7 +1380,8 @@ export function AmwayFlowCanvas({
               <button
                 type="button"
                 onClick={onOpenRunSettings}
-                className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3.5 text-sm font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)]"
+                disabled={Boolean(running || isCancellingRun)}
+                className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3.5 text-sm font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Settings2 size={14} aria-hidden />
                 运行设置
@@ -1386,10 +1390,30 @@ export function AmwayFlowCanvas({
                 <div className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--brand-primary)]/40 bg-[var(--bg-secondary)] px-3.5 text-sm font-medium text-[var(--brand-primary)]">
                   待确认计划
                 </div>
-              ) : running ? (
+              ) : isRunSubmitting ? (
                 <div className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 text-sm font-medium text-[var(--text-secondary)]">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--brand-primary)]" />
-                  {progressMessage || '正在运行'}
+                  正在启动…
+                </div>
+              ) : canCancelRun ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3.5 text-sm font-medium text-[var(--text-secondary)]">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--brand-primary)]" />
+                    {progressMessage || '正在运行'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onCancelFlowPlan?.()}
+                    disabled={isCancellingRun}
+                    className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--border-strong)] bg-[var(--bg-primary)] px-3.5 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--bg-secondary)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isCancellingRun ? (
+                      <RotateCcw size={14} className="animate-spin" aria-hidden />
+                    ) : (
+                      <X size={14} aria-hidden />
+                    )}
+                    {isCancellingRun ? '正在停止…' : '停止采集'}
+                  </button>
                 </div>
               ) : (
                 <button
@@ -1419,7 +1443,9 @@ export function AmwayFlowCanvas({
                 <span className="text-xs font-semibold text-[var(--text-primary)]">
                   {isAwaitingPlanConfirm
                     ? '请确认执行计划'
-                    : running
+                    : isRunSubmitting
+                      ? '正在启动…'
+                      : isRunActive
                       ? '运行计划'
                       : '本次执行计划'}
                 </span>
@@ -1513,11 +1539,15 @@ export function AmwayFlowCanvas({
                 <button
                   type="button"
                   onClick={() => onCancelFlowPlan?.()}
-                  disabled={Boolean(isRunSubmitting)}
+                  disabled={Boolean(isRunSubmitting || isCancellingRun)}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3.5 text-sm font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] disabled:opacity-60"
                 >
-                  <X size={13} aria-hidden />
-                  取消
+                  {isCancellingRun ? (
+                    <RotateCcw size={13} className="animate-spin" aria-hidden />
+                  ) : (
+                    <X size={13} aria-hidden />
+                  )}
+                  {isCancellingRun ? '正在停止…' : '取消'}
                 </button>
               </div>
             ) : null}

@@ -8,6 +8,11 @@ import type { TouchpointTree } from '@/types/touchpoint';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
 import type { SessionListResponse } from '@/types/session';
 import type { SnapshotSummary, SnapshotTrendPoint, SnapshotCompare } from '@/types/snapshot';
+import {
+  apiErrorFromNetworkFailure,
+  apiErrorFromResponse,
+  type ApiErrorContext,
+} from '@/services/api-error';
 import type { AnalysisTask, TaskRunRecord } from '@/types/task';
 import type { LLMObservabilitySnapshot } from '@/types/observability';
 import type {
@@ -190,45 +195,58 @@ class ApiService {
     } as HeadersInit;
   }
 
-  private async responseErrorMessage(response: Response): Promise<string> {
-    try {
-      const error = await response.clone().json();
-      const detail = error?.detail ?? error?.message;
-      if (typeof detail === 'string') {
-        const safeDetail = detail.trim();
-        if (
-          safeDetail
-          && safeDetail.length <= 240
-          && !/<(?:html|body|script)|traceback|stack trace|[A-Z]:\\|\/srv\//i.test(safeDetail)
-        ) {
-          return safeDetail;
-        }
-      }
-    } catch {
-      // Non-JSON proxy and HTML errors are intentionally hidden from the UI.
-    }
-    return `请求失败（HTTP ${response.status}）`;
-  }
-
-  private async ensureSuccessfulResponse(response: Response): Promise<void> {
+  private async ensureSuccessfulResponse(
+    response: Response,
+    errorContext: ApiErrorContext = 'default',
+  ): Promise<void> {
     if (response.ok) return;
     if (response.status === 401) {
       this.handleUnauthorized();
     }
-    throw new Error(await this.responseErrorMessage(response));
+    throw await apiErrorFromResponse(response, errorContext);
+  }
+
+  private async fetchResponse(
+    input: RequestInfo | URL,
+    init: RequestInit,
+    errorContext: ApiErrorContext = 'default',
+    timeoutMs = 0,
+  ): Promise<Response> {
+    let response: Response;
+    const timeoutController = timeoutMs > 0 ? new AbortController() : null;
+    const timeoutId = timeoutController
+      ? setTimeout(() => timeoutController.abort(), timeoutMs)
+      : null;
+    try {
+      response = await fetch(input, {
+        ...init,
+        signal: timeoutController?.signal ?? init.signal,
+      });
+    } catch {
+      throw apiErrorFromNetworkFailure(errorContext);
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    }
+    await this.ensureSuccessfulResponse(response, errorContext);
+    return response;
   }
 
   private async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    errorContext: ApiErrorContext = 'default',
+    timeoutMs = 0,
   ): Promise<T> {
     const url = `${API_URL}${endpoint}`;
-    const response = await fetch(url, {
-      ...options,
-      headers: this.buildHeaders(options),
-    });
-
-    await this.ensureSuccessfulResponse(response);
+    const response = await this.fetchResponse(
+      url,
+      {
+        ...options,
+        headers: this.buildHeaders(options),
+      },
+      errorContext,
+      timeoutMs,
+    );
 
     // Handle 204 No Content (e.g. DELETE responses)
     if (response.status === 204) {
@@ -242,12 +260,10 @@ class ApiService {
     path: string,
     options: RequestInit = {},
   ): Promise<T> {
-    const response = await fetch(path, {
+    const response = await this.fetchResponse(path, {
       ...options,
       headers: this.buildHeaders(options),
     });
-
-    await this.ensureSuccessfulResponse(response);
 
     if (response.status === 204) {
       return undefined as T;
@@ -260,11 +276,10 @@ class ApiService {
     endpoint: string,
     options: RequestInit = {},
   ): Promise<{ blob: Blob; response: Response }> {
-    const response = await fetch(`${API_URL}${endpoint}`, {
+    const response = await this.fetchResponse(`${API_URL}${endpoint}`, {
       ...options,
       headers: this.buildHeaders(options),
     });
-    await this.ensureSuccessfulResponse(response);
     return { blob: await response.blob(), response };
   }
 
@@ -593,14 +608,11 @@ class ApiService {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    const response = await fetch(
+    const response = await this.fetchResponse(
       `${API_URL}/sessions/${sessionId}/outputs/${outputId}/export?format=${format}`,
-      { headers }
+      { headers },
+      'exportOutput',
     );
-    if (response.status === 401) {
-      this.handleUnauthorized();
-    }
-    if (!response.ok) throw new Error('Export failed');
     return response.blob();
   }
 
@@ -1179,6 +1191,8 @@ class ApiService {
         method: 'POST',
         body: JSON.stringify(payload),
       },
+      'runStart',
+      30_000,
     );
     if (!response.run) throw new Error('任务创建失败');
     return response.run;
@@ -1204,6 +1218,8 @@ class ApiService {
     const response = await this.request<BrandIntelligenceRunResponse>(
       `/intelligence-runs/${runId}/cancel`,
       { method: 'POST' },
+      'runCancel',
+      20_000,
     );
     if (!response.run) throw new Error('任务取消失败');
     return response.run;
@@ -1651,6 +1667,7 @@ class ApiService {
           questions: data.questions,
         }),
       },
+      'questionSetSave',
     );
     return resp.question_set;
   }
@@ -1672,6 +1689,7 @@ class ApiService {
         method: 'PATCH',
         body: JSON.stringify(data),
       },
+      'questionSetUpdate',
     );
     return resp.question_set;
   }
@@ -2358,18 +2376,16 @@ class ApiService {
     const baseUrl = API_URL.replace(/\/api\/v1\/?$/, '');
     const token = this.getAuthToken();
     const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
-    const response = await fetch(`${baseUrl}/health/scheduler`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeader,
-      } as HeadersInit,
-    });
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.handleUnauthorized();
-      }
-      throw new Error(`Scheduler health check failed: ${response.status}`);
-    }
+    const response = await this.fetchResponse(
+      `${baseUrl}/health/scheduler`,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        } as HeadersInit,
+      },
+      'schedulerHealth',
+    );
     return response.json();
   }
 
@@ -2388,19 +2404,15 @@ class ApiService {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.handleUnauthorized();
-      }
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || `Upload failed: ${response.status}`);
-    }
+    const response = await this.fetchResponse(
+      url,
+      {
+        method: 'POST',
+        headers,
+        body: formData,
+      },
+      'fileUpload',
+    );
 
     return response.json();
   }
@@ -2413,18 +2425,14 @@ class ApiService {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.handleUnauthorized();
-      }
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || '问题表格解析失败');
-    }
+    const response = await this.fetchResponse(
+      url,
+      {
+        method: 'POST',
+        headers,
+      },
+      'questionTableAnalysis',
+    );
     return response.json();
   }
 
