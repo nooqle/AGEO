@@ -109,6 +109,8 @@ jobs:
                   product_runs = (await db.execute(text(f"""
                     select bir.id::text as run_id, bir.entity_id::text as entity_id,
                            e.name as entity_name, bir.analysis_task_id::text as task_id,
+                           bir.origin_session_id::text as origin_session_id,
+                           bir.output_refs::text as output_refs,
                            bir.status, bir.stage, bir.progress, bir.message,
                            bir.requires_user_action, bir.user_action_type,
                            bir.blocking_reason, bir.error_code, bir.error_message,
@@ -124,6 +126,7 @@ jobs:
 
                   tasks = (await db.execute(text(f"""
                     select at.id::text as task_id, at.entity_id::text as entity_id,
+                           at.session_id::text as session_id,
                            at.status::text as status, at.current_stage, at.progress,
                            at.progress_message, at.error_stage, at.error_message,
                            at.created_at, at.started_at, at.completed_at, at.updated_at
@@ -199,6 +202,14 @@ jobs:
               -e 's/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/[REDACTED_SK]/g' \
               -e 's/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g' |
             tail -n 700 || true
+
+          echo "== target_run_transport_logs =="
+          sudo journalctl -u ageo-backend.service --since '36 hours ago' --no-pager -o short-iso |
+            grep -Ei 'bf740b52|browser.action|browser_action|browser_user_action|SessionEventPublisher|WebSocket.*(connect|session)' |
+            sed -E \
+              -e 's/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/[REDACTED_SK]/g' \
+              -e 's/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g' |
+            tail -n 1200 || true
           SCRIPT
           )
 
