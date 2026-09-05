@@ -196,6 +196,54 @@ jobs:
                           counts = {str(row["status"]).lower(): row["count"] for row in rows}
                           emit("activity", table=table, counts_by_status=counts,
                                active_statuses=list(active), active_count=sum(counts.get(s, 0) for s in active))
+                      # task_runs has no updated_at column. Preserve the source
+                      # timestamps and distinguish evidence age from actual idleness.
+                      run_rows = (await db.execute(text("""
+                          WITH run_activity AS (
+                              SELECT tr.id::text AS task_run_id, tr.task_id::text AS task_id,
+                                     tr.status::text AS status, at.status::text AS task_status,
+                                     tr.submitted_at, tr.started_at, tr.heartbeat_at,
+                                     tr.cancel_requested_at, tr.finished_at,
+                                     at.updated_at AS task_updated_at,
+                                     (SELECT max(ca.updated_at) FROM task_run_child_attempts ca
+                                      WHERE ca.task_run_id = tr.id) AS child_updated_at
+                              FROM task_runs tr JOIN analysis_tasks at ON at.id = tr.task_id
+                              WHERE tr.status::text IN
+                                  ('queued', 'claimed', 'running', 'waiting_input', 'cancelling')
+                          ), observed AS (
+                              SELECT *, greatest(submitted_at, started_at, heartbeat_at,
+                                  cancel_requested_at, finished_at, task_updated_at,
+                                  child_updated_at) AS last_observed_at
+                              FROM run_activity
+                          )
+                          SELECT task_run_id, task_id, status, task_status,
+                                 submitted_at::text, started_at::text, heartbeat_at::text,
+                                 cancel_requested_at::text, finished_at::text,
+                                 task_updated_at::text, child_updated_at::text,
+                                 last_observed_at::text, now()::text AS observed_at,
+                                 extract(epoch FROM (now() - heartbeat_at))::double precision
+                                     AS heartbeat_age_seconds,
+                                 extract(epoch FROM (now() - last_observed_at))::double precision
+                                     AS metadata_age_seconds
+                          FROM observed ORDER BY last_observed_at DESC NULLS LAST LIMIT 50
+                      """))).mappings().all()
+                      emit("task_run_liveness_policy", row_limit=50,
+                           rows_returned=len(run_rows), possibly_truncated=len(run_rows) == 50,
+                           freshness_seconds=300,
+                           liveness_is_advisory=True, idle_not_proven=True)
+                      for row in run_rows:
+                          values = dict(row)
+                          heartbeat_age = values["heartbeat_age_seconds"]
+                          metadata_age = values["metadata_age_seconds"]
+                          if any(age is not None and age < 0 for age in (heartbeat_age, metadata_age)):
+                              liveness = "clock_skew_unknown"
+                          elif heartbeat_age is not None and heartbeat_age <= 300:
+                              liveness = "recent_heartbeat"
+                          elif metadata_age is not None and metadata_age <= 300:
+                              liveness = "recent_metadata_liveness_unknown"
+                          else:
+                              liveness = "stale_metadata_liveness_unknown"
+                          emit("task_run_liveness", **values, liveness=liveness)
               except Exception as exc:
                   emit("activity", error_type=type(exc).__name__)
 
