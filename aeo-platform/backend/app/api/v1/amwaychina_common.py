@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.entity import Entity
+from app.models.session import Session
 from app.services.access_scope_service import AccessScopeService
 from app.services.brand_association_circle_variant import is_amway_association_entity
 from app.services.organization_feature_service import (
@@ -91,12 +92,30 @@ async def require_amway_entity(
         allow_internal_admin_bypass=False,
     ):
         raise HTTPException(status_code=403, detail="无权访问该安利实体")
-    if manage and not AccessScopeService.can_manage_entity(
-        entity,
-        current_user,
-        allow_internal_admin_bypass=False,
-    ):
-        raise HTTPException(status_code=403, detail="无权管理该安利实体")
+    if manage:
+        if entity.owner_user_id is None:
+            # Preserve the legacy session-owner permission without lazy loading
+            # entity.sessions in an AsyncSession or fetching its full graph.
+            can_manage = bool(
+                await db.scalar(
+                    select(
+                        select(Session.id)
+                        .where(
+                            Session.entity_id == entity.id,
+                            Session.user_id == current_user.id,
+                        )
+                        .exists()
+                    )
+                )
+            )
+        else:
+            can_manage = AccessScopeService.can_manage_entity(
+                entity,
+                current_user,
+                allow_internal_admin_bypass=False,
+            )
+        if not can_manage:
+            raise HTTPException(status_code=403, detail="无权管理该安利实体")
     if not feature_enabled_for_account(
         user_flags=getattr(current_user, "feature_flags", None),
         organization_flags=getattr(entity.organization, "feature_flags", None),
