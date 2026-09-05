@@ -200,6 +200,7 @@ def _decorate_novnc_url(url: str) -> str:
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query.setdefault("autoconnect", "1")
     query.setdefault("resize", "scale")
+    query.setdefault("scale", "1")  # vnc_lite uses scale, unlike the full UI.
     query.setdefault("view_clip", "1")
     query.setdefault("reconnect", "1")
     query.setdefault("reconnect_delay", "1000")
@@ -214,6 +215,7 @@ def _build_takeover_vnc_proxy_url(*, takeover_id: str, ticket: str) -> str:
     query = {
         "autoconnect": "1",
         "resize": "scale",
+        "scale": "1",
         "view_clip": "1",
         "reconnect": "1",
         "reconnect_delay": "1000",
@@ -267,6 +269,8 @@ def _rewrite_novnc_html(content: bytes, content_type: str | None) -> bytes:
 
     injected_style = """
 <style id="specta-novnc-controls">
+  #top_bar,
+  #sendCtrlAltDelButton,
   #noVNC_control_bar,
   #noVNC_control_bar_handle,
   #noVNC_status_bar,
@@ -287,6 +291,10 @@ def _rewrite_novnc_html(content: bytes, content_type: str | None) -> bytes:
     margin: 0 !important;
     overflow: hidden !important;
     background: #f8fafc !important;
+  }
+  #screen {
+    min-width: 0;
+    min-height: 0;
   }
 </style>
 """.strip()
