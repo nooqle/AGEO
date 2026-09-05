@@ -1,0 +1,240 @@
+name: Inspect AIO Runtime Once
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/amway-aio-takeover-fix-20260905
+    paths:
+      - .github/workflows/inspect-aio-runtime-once.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-aio-runtime-once
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read sanitized AIO runtime inventory
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${DEMO_SSH_HOST:?Missing DEMO_SSH_HOST}"
+          : "${DEMO_SSH_USER:?Missing DEMO_SSH_USER}"
+          : "${DEMO_SSH_KEY:?Missing DEMO_SSH_KEY}"
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_aio_inspect_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(
+            -i "$key_path" -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+          remote_script=$(cat <<'SCRIPT'
+          set -euo pipefail
+          current="$(readlink -f /srv/ageo-deploy/current)"
+          backend="$current/aeo-platform/backend"
+          cd "$backend"
+          "$backend/.venv/bin/python" - <<'PY'
+          import asyncio
+          import hashlib
+          import ipaddress
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          import httpx
+
+
+          def emit(section, **values):
+              print(json.dumps({"section": section, **values}, ensure_ascii=True), flush=True)
+
+
+          def load_shared_env():
+              path = Path("/srv/ageo-deploy/shared/backend/.env.local")
+              for raw in path.read_text(encoding="utf-8").splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+          # The same bounded script runs locally and, if an existing SSH identity
+          # works, on the AIO host. Docker Env, commands, and logs are never read.
+          inventory_source = r'''
+          import json
+          import subprocess
+
+          def run(args):
+              return subprocess.run(args, capture_output=True, text=True, timeout=20)
+
+          def inventory():
+              prefix = None
+              ids = []
+              for candidate in (["docker"], ["sudo", "-n", "docker"]):
+                  try:
+                      result = run(candidate + ["ps", "-aq"])
+                  except (OSError, subprocess.TimeoutExpired):
+                      continue
+                  if result.returncode == 0:
+                      prefix = candidate
+                      ids = result.stdout.split()[:50]
+                      break
+              if prefix is None:
+                  return {"docker_available": False}
+              template = '{"name":{{json .Name}},"image":{{json .Config.Image}},"image_id":{{json .Image}},"mounts":{{json .Mounts}},"state":{{json .State.Status}}}'
+              containers = []
+              images = {}
+              for container_id in ids:
+                  result = run(prefix + ["inspect", "--format", template, container_id])
+                  if result.returncode != 0:
+                      continue
+                  record = json.loads(result.stdout)
+                  containers.append(record)
+                  image_id = record["image_id"]
+                  if image_id not in images:
+                      image_template = '{"id":{{json .Id}},"repo_digests":{{json .RepoDigests}},"architecture":{{json .Architecture}},"os":{{json .Os}}}'
+                      image = run(prefix + ["image", "inspect", "--format", image_template, image_id])
+                      if image.returncode == 0:
+                          images[image_id] = json.loads(image.stdout)
+              return {"docker_available": True, "containers": containers, "images": list(images.values())}
+
+          try:
+              print(json.dumps(inventory()))
+          except Exception as exc:
+              print(json.dumps({"error_type": type(exc).__name__}))
+          '''
+
+
+          def inspect_docker(host=None):
+              command = [sys.executable, "-"]
+              if host is not None:
+                  # Use only the remote host's existing identity and known_hosts;
+                  # do not add keys, change config, or probe guessed usernames.
+                  command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+                             "-o", "ConnectionAttempts=1", "-o", "StrictHostKeyChecking=yes",
+                             "-o", "UpdateHostKeys=no", host, "python3", "-"]
+              section = "aio_host_docker" if host else "specta_host_docker"
+              try:
+                  result = subprocess.run(command, input=inventory_source, capture_output=True,
+                                          text=True, timeout=90)
+                  values = json.loads(result.stdout) if result.returncode == 0 else {}
+                  emit(section, command_ok=result.returncode == 0, exit_code=result.returncode, **values)
+              except Exception as exc:
+                  emit(section, command_ok=False, error_type=type(exc).__name__)
+
+
+          def payload_data(payload):
+              return payload.get("data") if isinstance(payload.get("data"), dict) else payload
+
+
+          async def inspect_api(base_url, token):
+              headers = {"Authorization": "Bearer " + token} if token else {}
+              async with httpx.AsyncClient(timeout=20, follow_redirects=False, trust_env=False) as client:
+                  for path in ("/v1/sandbox", "/v1/browser/info", "/vnc/vnc_lite.html"):
+                      try:
+                          response = await client.get(base_url.rstrip("/") + path, headers=headers)
+                          values = {"path": path, "http_status": response.status_code}
+                          if response.status_code == 200 and path == "/v1/sandbox":
+                              payload = response.json()
+                              data = payload_data(payload)
+                              values.update(version=payload.get("version") or data.get("version"),
+                                            home_dir=data.get("home_dir") or payload.get("home_dir"))
+                          elif response.status_code == 200 and path == "/v1/browser/info":
+                              data = payload_data(response.json())
+                              for key in ("cdp_url", "vnc_url"):
+                                  url = data.get(key)
+                                  values[key + "_available"] = bool(url)
+                                  values[key + "_path"] = urlsplit(url).path if isinstance(url, str) else None
+                          elif response.status_code == 200:
+                              html = response.text
+                              values.update(
+                                  content_sha256=hashlib.sha256(response.content).hexdigest(),
+                                  module_script=bool(re.search(r'<script[^>]+type=["\x27]module', html)),
+                                  rfb_import=bool(re.search(r'import\s+RFB\s+from', html)),
+                                  rfb_connect_listener=bool(re.search(r'rfb\.addEventListener\(\s*["\x27]connect', html)),
+                                  rfb_disconnect_listener=bool(re.search(r'rfb\.addEventListener\(\s*["\x27]disconnect', html)),
+                              )
+                          emit("aio_api", **values)
+                      except Exception as exc:
+                          emit("aio_api", path=path, error_type=type(exc).__name__)
+
+
+          async def inspect_activity():
+              try:
+                  from sqlalchemy import text
+                  from app.core.database import AsyncSessionLocal
+
+                  async with AsyncSessionLocal() as db:
+                      await db.execute(text("SET TRANSACTION READ ONLY"))
+                      for table, active in (
+                          ("analysis_tasks", ("pending", "running")),
+                          ("task_runs", ("queued", "claimed", "running", "waiting_input", "cancelling")),
+                      ):
+                          rows = (await db.execute(text(
+                              f"SELECT status::text AS status, count(*) AS count FROM {table} GROUP BY status"
+                          ))).mappings().all()
+                          counts = {str(row["status"]).lower(): row["count"] for row in rows}
+                          emit("activity", table=table, counts_by_status=counts,
+                               active_statuses=list(active), active_count=sum(counts.get(s, 0) for s in active))
+              except Exception as exc:
+                  emit("activity", error_type=type(exc).__name__)
+
+
+          async def main():
+              load_shared_env()
+              current = Path("/srv/ageo-deploy/current").resolve()
+              release_sha = Path(".release-sha")
+              sha = release_sha.read_text().strip() if release_sha.exists() else current.name
+              emit("specta_release", sha=sha if re.fullmatch(r"[0-9a-f]{40}", sha) else "unconfirmed")
+              base_url = os.environ.get("AIO_BASE_URL", "")
+              parsed = urlsplit(base_url)
+              host = parsed.hostname
+              emit("aio_endpoint", configured=bool(base_url), scheme=parsed.scheme,
+                   host=host, port=parsed.port, auth_configured=bool(os.environ.get("AIO_AUTH_TOKEN")))
+              if parsed.scheme in ("http", "https") and host and not parsed.username and not parsed.password:
+                  await inspect_api(base_url, os.environ.get("AIO_AUTH_TOKEN", ""))
+              inspect_docker()
+              try:
+                  private_host = bool(host and ipaddress.ip_address(host).is_private)
+              except ValueError:
+                  private_host = False
+              if private_host:
+                  inspect_docker(host)
+              else:
+                  emit("aio_host_docker", command_ok=False, reason="AIO host is not a private IP literal")
+              await inspect_activity()
+
+
+          asyncio.run(main())
+          PY
+          SCRIPT
+          )
+          for attempt in 1 2 3; do
+            if ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" 'bash -s' <<< "$remote_script"; then
+              exit 0
+            else
+              exit_code=$?
+              if (( attempt == 3 )); then exit "$exit_code"; fi
+              sleep "$((attempt * 10))"
+            fi
+          done
