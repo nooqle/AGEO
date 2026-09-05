@@ -119,6 +119,7 @@ interface AmwayAssociationCircleDashboardProps {
   entities: Entity[];
   selectedEntity: Entity;
   selectedEntityId: string | null;
+  enabledPlatforms: string[];
   centerOptions: string[];
   selectedCenterTerm: string | null;
   home?: DashboardHomeData | null;
@@ -158,6 +159,7 @@ interface AmwayAssociationCircleDashboardProps {
 export function AmwayAssociationCircleDashboard({
   selectedEntity,
   selectedEntityId,
+  enabledPlatforms,
   centerOptions,
   selectedCenterTerm,
   home,
@@ -266,9 +268,11 @@ export function AmwayAssociationCircleDashboard({
   const evidenceFindings = projection.evidence_findings || [];
   const sourceAppendix = projection.source_appendix || [];
   const answerCount = sampleAnswerCount(sampleScope);
-  const targetPlatformCount = numericSampleValue(sampleScope.requested_platform_count)
-    || targetPlatforms.length
-    || samplePlatformCountFromScope(sampleScope);
+  const configuredPlatformCount = isRunActive
+    ? targetPlatforms.length
+      || numericSampleValue(sampleScope.requested_platform_count)
+      || samplePlatformCountFromScope(sampleScope)
+    : enabledPlatforms.length;
   const hasPeriodReport = Boolean(
     periodView?.report_id && hasReportContent(periodView.projection),
   );
@@ -410,7 +414,7 @@ export function AmwayAssociationCircleDashboard({
     ? (runningScope?.fetch_mode === 'fast' ? 'fast' : 'full')
     : fetchMode;
   const configuredFetchModeLabel = configuredFetchMode === 'full' ? '浏览器采集' : 'API 采集';
-  const runConfigurationSummary = `${configuredQuestionSetLabel} · ${configuredFetchModeLabel} · ${targetPlatformCount || 4} 个平台`;
+  const runConfigurationSummary = `${configuredQuestionSetLabel} · ${configuredFetchModeLabel} · ${configuredPlatformCount} 个平台`;
   const runButtonLabel = isRunSubmitting
     ? '正在启动…'
     : isRunActive

@@ -1166,6 +1166,7 @@ export function AmwayAssociationCircleConsolePage({
             entities={amwayEntities}
             selectedEntity={selectedEntity}
             selectedEntityId={selectedEntityId}
+            enabledPlatforms={readEnabledFlowPlatforms(selectedEntity.id)}
             centerOptions={centerOptions}
             selectedCenterTerm={effectiveCenterTerm}
             home={home}
