@@ -120,10 +120,12 @@ async function withTimeout<T>(
 
 interface BrowserTakeoverContentProps {
   content: BrowserCanvasContent;
+  onReopen?: () => Promise<void>;
 }
 
 export function BrowserTakeoverContent({
   content,
+  onReopen,
 }: BrowserTakeoverContentProps) {
   const browserState = content.data.browserState;
   const takeover = browserState.takeover ?? null;
@@ -159,13 +161,21 @@ export function BrowserTakeoverContent({
   );
   const [statusText, setStatusText] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [recordLoaded, setRecordLoaded] = useState(false);
 
   const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const browserUiRef = useRef<BrowserUiController | null>(null);
-  const vncRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vncFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   const canvasCdpEndpoint = canvasConfig?.cdpEndpoint ?? null;
   const takeoverState = takeoverRecord?.takeoverState || 'issued';
+  const isTerminal = ['resolved', 'expired', 'cancelled', 'resume_failed'].includes(takeoverState);
+
+  useEffect(() => {
+    if (takeoverId && renderState === 'error') {
+      useAioTakeoverStore.getState().setConnectionStatus(takeoverId, 'error');
+    }
+  }, [renderState, takeoverId]);
   const canvasConfigPath =
     takeoverRecord?.accessBundle.canvasConfigPath ??
     takeover?.canvasConfigPath ??
@@ -201,10 +211,6 @@ export function BrowserTakeoverContent({
       return;
     }
 
-    if (vncRevealTimerRef.current) {
-      clearTimeout(vncRevealTimerRef.current);
-      vncRevealTimerRef.current = null;
-    }
     setVncFrameLoaded(false);
     setVncFrameVisible(false);
     const vnc = await withTimeout(
@@ -227,20 +233,14 @@ export function BrowserTakeoverContent({
   }, [setTakeoverMode, takeoverId, vncUrlPath]);
 
   useEffect(() => {
-    return () => {
-      if (vncRevealTimerRef.current) {
-        clearTimeout(vncRevealTimerRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (!takeoverId) {
       setRenderState('hidden');
       return;
     }
 
     let cancelled = false;
+    setRecordLoaded(false);
+    setRenderState('opening');
 
     const loadTakeoverRecord = async () => {
       try {
@@ -251,6 +251,7 @@ export function BrowserTakeoverContent({
         );
         if (cancelled) return;
         upsertTakeoverRecord(record);
+        setRecordLoaded(true);
       } catch {
         if (cancelled) return;
         setRenderState('error');
@@ -262,7 +263,7 @@ export function BrowserTakeoverContent({
     return () => {
       cancelled = true;
     };
-  }, [takeoverId, upsertTakeoverRecord]);
+  }, [takeoverId, upsertTakeoverRecord, reloadNonce]);
 
   useEffect(() => {
     if (!takeoverId || !takeoverRegistration?.mode) {
@@ -272,7 +273,7 @@ export function BrowserTakeoverContent({
   }, [takeoverId, takeoverRegistration?.mode]);
 
   useEffect(() => {
-    if (!takeoverId) {
+    if (!takeoverId || !recordLoaded || isTerminal) {
       return;
     }
 
@@ -349,7 +350,42 @@ export function BrowserTakeoverContent({
     setTakeoverMode,
     takeoverId,
     vncUrlPath,
+    recordLoaded,
+    isTerminal,
   ]);
+
+  useEffect(() => {
+    if (!takeoverId || !vncConfig?.url || renderState !== 'vnc_ready' || isTerminal) return;
+    const frameOrigin = new URL(vncConfig.url, window.location.href).origin;
+    const setConnectionStatus = useAioTakeoverStore.getState().setConnectionStatus;
+    setConnectionStatus(takeoverId, 'connecting');
+    const failConnection = () => {
+      setVncFrameVisible(false);
+      setRenderState('error');
+      setStatusText('登录窗口连接已中断或超时，请重新打开登录窗口后继续。');
+      setConnectionStatus(takeoverId, 'error');
+    };
+    const timeout = window.setTimeout(failConnection, TAKEOVER_REQUEST_TIMEOUT_MS);
+    const handleVncStatus = (event: MessageEvent) => {
+      if (event.source !== vncFrameRef.current?.contentWindow || event.origin !== frameOrigin) return;
+      const data = event.data;
+      if (!data || data.type !== 'specta-vnc-status' || data.takeoverId !== takeoverId) return;
+      if (data.status === 'connected') {
+        window.clearTimeout(timeout);
+        setVncFrameLoaded(true);
+        setVncFrameVisible(true);
+        setConnectionStatus(takeoverId, 'connected');
+      } else if (data.status === 'disconnected' || data.status === 'error') {
+        window.clearTimeout(timeout);
+        failConnection();
+      }
+    };
+    window.addEventListener('message', handleVncStatus);
+    return () => {
+      window.clearTimeout(timeout);
+      window.removeEventListener('message', handleVncStatus);
+    };
+  }, [isTerminal, renderState, takeoverId, vncConfig?.url]);
 
   useEffect(() => {
     if (
@@ -408,6 +444,7 @@ export function BrowserTakeoverContent({
         }
 
         browserUiRef.current = instance as BrowserUiController;
+        useAioTakeoverStore.getState().setConnectionStatus(takeoverId, 'connected');
         setRenderState('canvas_ready');
         setStatusText(null);
       } catch (error) {
@@ -466,7 +503,7 @@ export function BrowserTakeoverContent({
     if (takeoverState === 'expired') {
       removeRegistration(takeoverId);
       setRenderState('error');
-      setStatusText('当前浏览器会话已失效，请回到左侧聊天卡片重新打开。');
+      setStatusText('当前登录窗口已失效，请重新打开登录窗口。');
       return;
     }
     if (takeoverState === 'cancelled') {
@@ -478,7 +515,7 @@ export function BrowserTakeoverContent({
     if (takeoverState === 'resume_failed') {
       removeRegistration(takeoverId);
       setRenderState('error');
-      setStatusText('暂未检测到当前平台操作已完成，请回到左侧聊天卡片重新打开或再次确认。');
+      setStatusText('暂未检测到操作已完成，请重新打开登录窗口后继续。');
     }
   }, [removeRegistration, takeoverId, takeoverState]);
 
@@ -499,6 +536,10 @@ export function BrowserTakeoverContent({
   };
 
   const handleRetry = () => {
+    if (onReopen) {
+      void onReopen();
+      return;
+    }
     setRenderState('opening');
     setStatusText(null);
     setReloadNonce((current) => current + 1);
@@ -561,7 +602,7 @@ export function BrowserTakeoverContent({
                   border: '1px solid rgba(245, 158, 11, 0.2)',
                 }}
               >
-                {TAKEOVER_STATE_LABELS[takeoverState]}
+                {renderState === 'error' ? '连接不可用' : !vncFrameVisible && currentMode === 'vnc_fallback' && !isTerminal ? '正在连接' : TAKEOVER_STATE_LABELS[takeoverState]}
               </span>
               {expiryText && (
                 <span style={{ color: 'var(--text-tertiary)' }}>操作窗口至 {expiryText}</span>
@@ -620,9 +661,10 @@ export function BrowserTakeoverContent({
             </div>
           )}
 
-          {renderState === 'vnc_ready' && vncConfig?.url && (
+          {renderState === 'vnc_ready' && !isTerminal && vncConfig?.url && (
             <div className="relative h-full w-full bg-[#f8fafc]">
               <iframe
+                ref={vncFrameRef}
                 title={`${platformLabel} takeover`}
                 src={vncConfig.url}
                 className="h-full w-full bg-[#f8fafc]"
@@ -632,15 +674,7 @@ export function BrowserTakeoverContent({
                 }}
                 allow="fullscreen; clipboard-read; clipboard-write"
                 allowFullScreen
-                onLoad={() => {
-                  setVncFrameLoaded(true);
-                  if (vncRevealTimerRef.current) {
-                    clearTimeout(vncRevealTimerRef.current);
-                  }
-                  vncRevealTimerRef.current = setTimeout(() => {
-                    setVncFrameVisible(true);
-                  }, 1200);
-                }}
+                onLoad={() => setVncFrameLoaded(true)}
               />
               {(!vncFrameLoaded || !vncFrameVisible) && (
                 <div className="absolute inset-0 flex items-center justify-center bg-[#f8fafc]">
@@ -691,7 +725,9 @@ export function BrowserTakeoverContent({
                 ? `请在当前云电脑中完成操作：${targetUrl}`
                 : browserState.message)}
             <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>
-              完成登录或验证后，关闭当前窗口，在对应状态卡点击“我已完成”继续。
+              {renderState === 'error'
+                ? '请先恢复登录窗口连接，完成登录前无需点击“我已完成”。'
+                : '完成登录或验证后，关闭当前窗口，在对应状态卡点击“我已完成”继续。'}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -720,7 +756,7 @@ export function BrowserTakeoverContent({
                 }}
               >
                 <RiRefreshLine className="h-3.5 w-3.5" />
-                重新连接
+                {onReopen ? '重新打开登录窗口' : '重新连接'}
               </button>
             )}
           </div>

@@ -272,12 +272,15 @@ export function AmwayFlowCanvas({
   const [browserTakeoverContent, setBrowserTakeoverContent] = useState<BrowserCanvasContent | null>(null);
   const [openingTakeoverKey, setOpeningTakeoverKey] = useState<string | null>(null);
   const [resolvingTakeoverKey, setResolvingTakeoverKey] = useState<string | null>(null);
+  const [openedBrowserStates, setOpenedBrowserStates] = useState<Record<string, BrowserState>>({});
   const upsertTakeoverRegistration = useAioTakeoverStore((state) => state.upsertRegistration);
   const upsertTakeoverRecord = useAioTakeoverStore((state) => state.upsertRecord);
   const removeTakeoverRegistration = useAioTakeoverStore((state) => state.removeRegistration);
   const clearTakeover = useAioTakeoverStore((state) => state.clearTakeover);
   const markTakeoverOpened = useAioTakeoverStore((state) => state.markTakeoverOpened);
   const openedTakeoverIds = useAioTakeoverStore((state) => state.openedTakeoverIds);
+  const takeoverConnections = useAioTakeoverStore((state) => state.connectionStatus);
+  const takeoverRecords = useAioTakeoverStore((state) => state.records);
   const openedAtMsByTakeoverId = useAioTakeoverStore((state) => state.openedAtMsByTakeoverId);
   // Phase 3a 自定义拓扑（视图层编排）。3b-1.4 起后端为权威存储，
   // localStorage 降级为首帧缓存与离线回退。
@@ -541,6 +544,7 @@ export function AmwayFlowCanvas({
       const key = flowRuntimeActionKey(stateBlocker.platform);
       const existing = cards.get(key);
       cards.set(key, {
+        browserState: stateBlocker.browserState,
         blocker: {
           ...existing?.blocker,
           ...stateBlocker,
@@ -557,6 +561,11 @@ export function AmwayFlowCanvas({
       .forEach((state) => {
         const key = flowRuntimeActionKey(state.platform);
         const existing = cards.get(key);
+        const durable = durablePlatformStateBlockers.find((item) => flowRuntimeActionKey(item.platform) === key);
+        // A delayed WS packet must not replace a different durable request or
+        // resurrect a finished platform. The next task poll supplies new gates.
+        if (durable && (durable.status === 'failed'
+          || (durable.requestId && durable.requestId !== state.requestId))) return;
         const blocker: FlowRuntimeBlocker = {
           id: existing?.blocker.id || state.requestId || key,
           platform: flowRuntimePlatform(state.platform),
@@ -570,13 +579,21 @@ export function AmwayFlowCanvas({
           questionsCompleted: existing?.blocker.questionsCompleted || null,
           questionsTotal: existing?.blocker.questionsTotal || null,
         };
-        cards.set(key, { blocker, browserState: state });
+        cards.set(key, { blocker, browserState: {
+          ...state,
+          takeover: (state.requestId === existing?.browserState?.requestId
+            ? existing?.browserState?.takeover : undefined) || state.takeover,
+        } });
       });
 
+    cards.forEach((card, key) => {
+      const openedState = card.blocker.requestId ? openedBrowserStates[card.blocker.requestId] : undefined;
+      if (openedState) cards.set(key, { ...card, browserState: openedState });
+    });
     return [...cards.values()].sort((left, right) => (
       left.blocker.platform.localeCompare(right.blocker.platform)
     ));
-  }, [browserActionStates, durablePlatformStateBlockers, durableRuntimeBlockers]);
+  }, [browserActionStates, durablePlatformStateBlockers, durableRuntimeBlockers, openedBrowserStates]);
 
   // Flow does not mount ChatPanel, so it owns the takeover registration and
   // heartbeat lifecycle while a browser window is open.
@@ -595,7 +612,7 @@ export function AmwayFlowCanvas({
   }, [browserActionStates, browserTakeoverContent, upsertTakeoverRegistration]);
 
   const openedTakeovers = useMemo(() => {
-    const states = browserActionStates.concat(
+    const states = runtimeBlockerCards.flatMap((card) => card.browserState ? [card.browserState] : []).concat(
       browserTakeoverContent ? [browserTakeoverContent.data.browserState] : [],
     );
     const byId = new Map<string, NonNullable<BrowserState['takeover']>>();
@@ -606,7 +623,7 @@ export function AmwayFlowCanvas({
       }
     });
     return [...byId.values()];
-  }, [browserActionStates, browserTakeoverContent, openedTakeoverIds]);
+  }, [runtimeBlockerCards, browserTakeoverContent, openedTakeoverIds]);
 
   useAioTakeoverHeartbeat(openedTakeovers, openedAtMsByTakeoverId);
 
@@ -646,6 +663,9 @@ export function AmwayFlowCanvas({
         },
       );
       upsertTakeoverRecord(nextRecord);
+      if (!['issued', 'active'].includes(nextRecord.takeoverState)) {
+        throw new Error('当前登录窗口已失效，请刷新任务状态后重新打开。');
+      }
       if (nextRecord.takeoverId !== takeover.takeoverId) {
         clearTakeover(takeover.takeoverId);
       }
@@ -658,6 +678,11 @@ export function AmwayFlowCanvas({
         reasonCode: nextTakeover.reasonCode ?? state.reasonCode,
         requiresAction: true,
       };
+      upsertTakeoverRegistration(nextTakeover);
+      useAioTakeoverStore.getState().setConnectionStatus(nextRecord.takeoverId, 'connecting');
+      if (state.requestId) {
+        setOpenedBrowserStates((current) => ({ ...current, [state.requestId!]: nextState }));
+      }
       markTakeoverOpened(nextRecord.takeoverId, undefined, state.requestId);
       const content = buildBrowserCanvasContent(nextState);
       if (content) {
@@ -681,9 +706,16 @@ export function AmwayFlowCanvas({
     }
 
     const takeover = state.takeover;
+    if (resolution === 'completed' && !takeover?.takeoverId) {
+      toast.error('当前平台没有可用的登录窗口，请刷新任务状态后打开窗口完成登录。');
+      return;
+    }
     if (resolution === 'completed' && takeover?.takeoverId) {
       const registration = useAioTakeoverStore.getState().registrations[takeover.takeoverId];
-      if (!registration?.frontendId || !openedTakeoverIds[takeover.takeoverId]) {
+      const store = useAioTakeoverStore.getState();
+      if (!registration?.frontendId || !openedTakeoverIds[takeover.takeoverId]
+        || store.connectionStatus[takeover.takeoverId] !== 'connected'
+        || !['issued', 'active'].includes(store.records[takeover.takeoverId]?.takeoverState || '')) {
         toast.error('请先打开登录窗口，完成操作后再确认。');
         return;
       }
@@ -1542,6 +1574,9 @@ export function AmwayFlowCanvas({
                     const isWaiting = blocker.status === 'waiting_input';
                     const takeoverId = browserState?.takeover?.takeoverId;
                     const isTakeoverOpened = Boolean(takeoverId && openedTakeoverIds[takeoverId]);
+                    const canCompleteTakeover = Boolean(takeoverId && isTakeoverOpened
+                      && takeoverConnections[takeoverId] === 'connected'
+                      && ['issued', 'active'].includes(takeoverRecords[takeoverId]?.takeoverState || ''));
                     const blockerKey = flowRuntimeActionKey(blocker.platform);
                     const isOpening = openingTakeoverKey === blockerKey;
                     const isResolving = resolvingTakeoverKey === blockerKey;
@@ -1586,7 +1621,11 @@ export function AmwayFlowCanvas({
                             </p>
                             {isWaiting ? (
                               <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
-                                操作指引：{blocker.actionHint || '请在当前浏览器窗口完成验证或登录，完成后回到这里确认。'}
+                                操作指引：{!takeoverId
+                                  ? '当前平台未获得可用登录窗口。请等待其他平台释放窗口后刷新任务状态；若仍不可用，可跳过此平台，稍后单独补采。完成登录前无法确认完成。'
+                                  : takeoverConnections[takeoverId] === 'error'
+                                    ? '登录窗口连接已中断，请重新打开登录窗口，完成登录后再确认。'
+                                    : blocker.actionHint || '请先打开登录窗口，完成验证或登录后回到这里确认。'}
                               </p>
                             ) : (
                               <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
@@ -1616,7 +1655,7 @@ export function AmwayFlowCanvas({
                                       || (takeoverId ? !onDismissBrowserAction : !onResolveBrowserAction)
                                       || isOpening
                                       || isResolving
-                                      || Boolean(takeoverId && !isTakeoverOpened)
+                                      || !canCompleteTakeover
                                   }
                                   onClick={() => {
                                     if (browserState) {
@@ -2172,7 +2211,11 @@ export function AmwayFlowCanvas({
               </button>
             </div>
             <div className="min-h-0 flex-1">
-              <BrowserTakeoverContent content={browserTakeoverContent} />
+              <BrowserTakeoverContent
+                key={`${browserTakeoverContent.data.takeoverId}-${browserTakeoverContent.createdAt.getTime()}`}
+                content={browserTakeoverContent}
+                onReopen={() => openBrowserTakeover(browserTakeoverContent.data.browserState)}
+              />
             </div>
           </div>
         </div>

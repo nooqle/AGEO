@@ -360,6 +360,7 @@ async def _sync_authoritative_browser_action_issue(
     blocking_fingerprint: str | None,
     action_type: str | None,
     reason_code: str | None,
+    takeover: dict[str, Any] | None = None,
 ) -> None:
     """Write one authoritative takeover-required row when a browser action is issued."""
 
@@ -395,6 +396,7 @@ async def _sync_authoritative_browser_action_issue(
                 target_url=target_url,
                 blocking_url=blocking_url,
                 blocking_fingerprint=blocking_fingerprint,
+                takeover=takeover,
             )
             await db.commit()
     except Exception as exc:
@@ -427,6 +429,7 @@ async def persist_browser_action_takeover(
     resolved_blocking_fingerprint = blocking_fingerprint
     resolved_reason_code = reason_code
     if isinstance(takeover, dict):
+        _aio_takeover_by_request_id[request_id] = dict(takeover)
         resolved_target_url = resolved_target_url or takeover.get("target_url")
         resolved_blocking_url = resolved_blocking_url or takeover.get("blocking_url")
         resolved_blocking_fingerprint = resolved_blocking_fingerprint or takeover.get(
@@ -544,6 +547,7 @@ async def emit_browser_action_handoff(
             blocking_fingerprint=blocking_fingerprint,
             action_type=action_type,
             reason_code=reason_code,
+            takeover=takeover,
         )
         await send_browser_state_event(
             session_id=session_id,
@@ -600,9 +604,12 @@ async def wait_for_browser_action_outcome(
         await clear_browser_action_request(request_id)
 
 
-async def _expire_aio_takeover_for_request(request_id: str) -> None:
-    request = await get_browser_action_request(request_id)
-    takeover = request.takeover if request is not None else None
+async def _expire_aio_takeover_for_request(
+    request_id: str, *, takeover: dict[str, Any] | None = None
+) -> None:
+    if takeover is None:
+        request = await get_browser_action_request(request_id)
+        takeover = request.takeover if request is not None else None
     if not takeover:
         takeover = _aio_takeover_by_request_id.get(request_id)
     takeover_id = takeover.get("takeover_id") if isinstance(takeover, dict) else None

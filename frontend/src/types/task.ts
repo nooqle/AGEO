@@ -41,6 +41,9 @@ export interface TaskRunChildAttemptRecord {
 }
 
 export interface FetchRunPlatformStateRecord {
+  takeover?: Record<string, unknown> | null;
+  target_url?: string | null;
+  blocking_url?: string | null;
   id: string;
   task_run_id: string;
   task_id: string;

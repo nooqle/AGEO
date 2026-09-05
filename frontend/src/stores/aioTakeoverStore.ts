@@ -33,6 +33,8 @@ interface AioTakeoverStoreState {
   openedTakeoverIds: Record<string, true>;
   openedRequestIds: Record<string, true>;
   openedAtMsByTakeoverId: Record<string, number>;
+  connectionStatus: Record<string, 'connecting' | 'connected' | 'error'>;
+  setConnectionStatus: (takeoverId: string, status: 'connecting' | 'connected' | 'error') => void;
   upsertRegistration: (access: BrowserTakeoverAccess) => void;
   markTakeoverOpened: (
     takeoverId: string,
@@ -53,6 +55,10 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
   openedTakeoverIds: {},
   openedRequestIds: {},
   openedAtMsByTakeoverId: {},
+  connectionStatus: {},
+  setConnectionStatus: (takeoverId, status) => set((state) => ({
+    connectionStatus: { ...state.connectionStatus, [takeoverId]: status },
+  })),
 
   upsertRegistration: (access) =>
     set((state) => {
@@ -115,20 +121,23 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
 
   clearTakeover: (takeoverId) =>
     set((state) => {
-      if (!state.registrations[takeoverId] && !state.records[takeoverId]) {
+      if (!state.registrations[takeoverId] && !state.records[takeoverId] && !state.connectionStatus[takeoverId]) {
         return state;
       }
       const registrations = { ...state.registrations };
       const records = { ...state.records };
+      const connectionStatus = { ...state.connectionStatus };
       const openedTakeoverIds = { ...state.openedTakeoverIds };
       const openedAtMsByTakeoverId = { ...state.openedAtMsByTakeoverId };
       delete registrations[takeoverId];
       delete records[takeoverId];
+      delete connectionStatus[takeoverId];
       delete openedTakeoverIds[takeoverId];
       delete openedAtMsByTakeoverId[takeoverId];
       return {
         registrations,
         records,
+        connectionStatus,
         openedTakeoverIds,
         openedAtMsByTakeoverId,
       };
@@ -201,5 +210,6 @@ export const useAioTakeoverStore = create<AioTakeoverStoreState>((set) => ({
     openedTakeoverIds: {},
     openedRequestIds: {},
     openedAtMsByTakeoverId: {},
+    connectionStatus: {},
   }),
 }));

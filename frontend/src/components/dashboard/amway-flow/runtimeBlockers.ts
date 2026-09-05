@@ -1,3 +1,6 @@
+import { buildBrowserState } from '@/hooks/websocket/execution';
+import type { BrowserState } from '@/types/agent';
+
 export type RuntimeChildAttemptLike = {
   id?: string;
   platform?: string | null;
@@ -25,9 +28,13 @@ export type RuntimePlatformStateLike = {
   questions_total?: number | null;
   updated_at?: string | null;
   created_at?: string | null;
+  takeover?: Record<string, unknown> | null;
+  target_url?: string | null;
+  blocking_url?: string | null;
 };
 
 export type FlowRuntimeBlocker = {
+  browserState?: BrowserState;
   id: string;
   platform: string;
   actionType: string;
@@ -133,6 +140,17 @@ export function buildFlowPlatformStateBlockers(
       if (!waiting && !failed) return null;
       const actionType = String(state.action_type || 'browser_action').trim() || 'browser_action';
       return {
+        browserState: waiting ? buildBrowserState({
+          platform,
+          state: 'waiting_for_login',
+          requires_action: true,
+          action_type: actionType,
+          request_id: state.request_id || undefined,
+          reason_code: state.reason_code || undefined,
+          blocking_url: state.blocking_url || state.target_url || undefined,
+          takeover: state.takeover || undefined,
+          message: state.error_message || '',
+        }) : undefined,
         id: String(state.id || state.request_id || `${platform}:${actionType}`),
         platform,
         actionType,

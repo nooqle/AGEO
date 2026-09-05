@@ -707,13 +707,22 @@ async def clear_browser_action_request(
     error_message: str | None = "等待用户操作超时或请求已失效",
 ) -> None:
     request = _requests_by_id.get(request_id)
-    clear_browser_action_request_local(request_id)
-
     client = await _get_redis()
     if request is None and client is not None:
         request = await get_browser_action_request(request_id)
 
     if request is not None and request.resolution is None:
+        # Base-handler timeouts and cancelled waiters also clear requests here;
+        # release their live browser lease before discarding the only bundle.
+        from app.workflow.browser_action_contract import (
+            _expire_aio_takeover_for_request,
+            _release_browser_action_handoff_slot,
+        )
+
+        await _expire_aio_takeover_for_request(
+            request_id, takeover=request.takeover
+        )
+        await _release_browser_action_handoff_slot(request_id)
         await _finalize_unresolved_child_attempt(
             request_id,
             final_status=unresolved_status,
@@ -724,6 +733,7 @@ async def clear_browser_action_request(
             ),
         )
 
+    clear_browser_action_request_local(request_id)
     if client is None:
         return
 

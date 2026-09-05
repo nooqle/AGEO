@@ -41,7 +41,7 @@ def fetch_run_platform_state_to_dict(row: FetchRunPlatformState) -> dict[str, An
 
     Keep the full packet out of the task API response.  The packet can contain
     question-level answer data, while task status pages only need the platform
-    status, coverage counters, and failure reason.
+    status, coverage counters, failure reason, and actionable takeover bundle.
     """
 
     packet = row.latest_packet if isinstance(row.latest_packet, dict) else {}
@@ -66,7 +66,16 @@ def fetch_run_platform_state_to_dict(row: FetchRunPlatformState) -> dict[str, An
         "auth_state": row.auth_state,
         "action_type": packet.get("action_type") or "browser_action",
         "reason_code": packet.get("reason_code"),
-        "request_id": row.latest_takeover_request_id,
+        "request_id": row.latest_takeover_request_id or packet.get("request_id"),
+        "takeover": (
+            packet.get("takeover")
+            if row.status == "takeover_required"
+            and isinstance(packet.get("takeover"), dict)
+            else None
+        ),
+        "target_url": packet.get("target_url"),
+        "blocking_url": packet.get("blocking_url"),
+        "blocking_fingerprint": packet.get("blocking_fingerprint"),
         "questions_completed": _count("completed"),
         "questions_total": _count("total"),
         "mention_count": _count("mentions"),
@@ -395,9 +404,17 @@ class FetchRunPlatformStateService:
         """
 
         merged = {**current, **incoming}
+        incoming_request_id = incoming.get("request_id")
+        replaces_request = (
+            cls._has_packet_metadata(incoming_request_id)
+            and incoming_request_id != current.get("request_id")
+        )
         for key in _TAKEOVER_PACKET_METADATA_KEYS:
             incoming_value = incoming.get(key)
             if not cls._has_packet_metadata(incoming_value):
+                if replaces_request:
+                    merged.pop(key, None)
+                    continue
                 current_value = current.get(key)
                 if cls._has_packet_metadata(current_value):
                     merged[key] = current_value
@@ -595,6 +612,7 @@ class FetchRunPlatformStateService:
         blocking_url: str | None,
         blocking_fingerprint: str | None,
         timing_json: dict[str, Any] | None = None,
+        takeover: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "platform": platform,
@@ -607,6 +625,7 @@ class FetchRunPlatformStateService:
             "blocking_url": blocking_url,
             "blocking_fingerprint": blocking_fingerprint,
             "timing_json": timing_json or {},
+            "takeover": takeover,
         }
 
     async def _get_existing_row(
@@ -1202,6 +1221,7 @@ class FetchRunPlatformStateService:
         timing_json: dict[str, Any] | None = None,
         error_kind: str | None = None,
         error_message: str | None = None,
+        takeover: dict[str, Any] | None = None,
     ) -> FetchRunPlatformState:
         normalized_platform = self.canonicalize_platform(platform)
         normalized_status = self._normalize_status(status)
@@ -1236,6 +1256,7 @@ class FetchRunPlatformStateService:
             blocking_url=blocking_url,
             blocking_fingerprint=blocking_fingerprint,
             timing_json=timing_json,
+            takeover=takeover,
         )
         row = {
             "task_run_id": task_run_id,
@@ -1259,6 +1280,22 @@ class FetchRunPlatformStateService:
         }
         persisted = await self.upsert_many([row])
         return persisted[0]
+
+    async def update_takeover_bundle(
+        self, *, task_run_id: UUID, platform: str, request_id: str,
+        takeover: dict[str, Any],
+    ) -> None:
+        row = await self._get_existing_row(
+            task_run_id=task_run_id, platform=self.canonicalize_platform(platform)
+        )
+        if (
+            row is not None
+            and row.status == "takeover_required"
+            and row.latest_takeover_request_id == request_id
+        ):
+            row.latest_packet = {
+                **(row.latest_packet or {}), "takeover": takeover,
+            }
 
     async def mark_browser_action_resolution(
         self,

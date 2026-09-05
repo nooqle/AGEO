@@ -240,6 +240,31 @@ def _rewrite_novnc_html(content: bytes, content_type: str | None) -> bytes:
     if "specta-novnc-controls" in html:
         return content
 
+    # vnc_lite owns RFB in module scope, not window.rfb. Attach to that
+    # instance before its existing listeners; iframe load is not a VNC handshake.
+    import re
+
+    listener = re.search(r'''rfb\.addEventListener\(\s*["']connect["']''', html)
+    if listener is not None:
+        bridge = r'''
+        // specta-vnc-status-bridge
+        const spectaTakeoverMatch = window.location.pathname.match(/\/takeovers\/([^/]+)\//);
+        const spectaPostVncStatus = (status) => {
+            if (!spectaTakeoverMatch || window.parent === window) return;
+            window.parent.postMessage({
+                type: 'specta-vnc-status',
+                status,
+                takeoverId: decodeURIComponent(spectaTakeoverMatch[1]),
+            }, window.location.origin);
+        };
+        rfb.addEventListener('connect', () => spectaPostVncStatus('connected'));
+        rfb.addEventListener('disconnect', () => spectaPostVncStatus('disconnected'));
+        rfb.addEventListener('securityfailure', () => spectaPostVncStatus('error'));
+        '''
+        html = html[:listener.start()] + bridge + html[listener.start():]
+    else:
+        logger.warning("aio.vnc_proxy.status_bridge_unavailable")
+
     injected_style = """
 <style id="specta-novnc-controls">
   #noVNC_control_bar,
@@ -400,6 +425,10 @@ async def _reserve_takeover_foreground(
             reason,
             exc,
         )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="另一个平台正在使用登录窗口，请先完成或退出该接管，再重新打开。",
+        ) from exc
     except Exception as exc:
         logger.warning(
             "aio.foreground.reserve_failed takeover_id=%s platform=%s reason=%s error=%s",
@@ -408,6 +437,10 @@ async def _reserve_takeover_foreground(
             reason,
             exc,
         )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="暂时无法准备登录窗口，请稍后重新打开。",
+        ) from exc
 
 
 async def _release_takeover_foreground(takeover: SpectaAioTakeover) -> None:
@@ -575,6 +608,63 @@ async def get_takeover(
     }
 
 
+async def _require_pending_takeover_request(takeover: SpectaAioTakeover) -> None:
+    """Do not revive a browser window after its task stopped waiting for input."""
+
+    if not takeover.request_id:
+        return
+    request = await get_browser_action_request(takeover.request_id)
+    if request is not None and request.resolution is None:
+        return
+    if request is None and takeover.run_id:
+        from app.models.task_run_child_attempt import TaskRunChildAttemptStatus
+        from app.services.task_run_child_attempt_service import TaskRunChildAttemptService
+
+        async with AsyncSessionLocal() as db:
+            attempt = await TaskRunChildAttemptService(db).get_by_request_id(
+                takeover.request_id
+            )
+        if (
+            attempt is not None
+            and str(attempt.task_run_id) == str(takeover.run_id)
+            and attempt.status == TaskRunChildAttemptStatus.WAITING_INPUT
+            and attempt.resolved_at is None
+        ):
+            return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="该登录请求已结束或超时，请返回采集任务重试此平台，再打开新的登录窗口。",
+    )
+
+
+async def _persist_opened_takeover(takeover: SpectaAioTakeover, target_url: str) -> None:
+    if not takeover.request_id:
+        return
+    from app.workflow.browser_action_contract import persist_browser_action_takeover
+
+    payload = _serialize_takeover_with_target(takeover, target_url=target_url)
+    bundle = {
+        **payload["access_bundle"],
+        "takeover_id": takeover.takeover_id,
+        "mode": takeover.mode,
+        "expires_at": payload["expires_at"],
+        "action_type": takeover.action_type,
+    }
+    request = await get_browser_action_request(takeover.request_id)
+    await persist_browser_action_takeover(
+        request_id=takeover.request_id,
+        state=getattr(request, "state", None) or "waiting_for_login",
+        takeover=bundle, target_url=target_url,
+    )
+    if takeover.run_id:
+        async with AsyncSessionLocal() as db:
+            await FetchRunPlatformStateService(db).update_takeover_bundle(
+                task_run_id=UUID(str(takeover.run_id)), platform=takeover.platform,
+                request_id=takeover.request_id, takeover=bundle,
+            )
+            await db.commit()
+
+
 @router.post("/takeovers/{takeover_id}/open")
 async def open_takeover(
     takeover_id: str,
@@ -584,6 +674,10 @@ async def open_takeover(
     """Open or reopen a takeover and reset its user-facing operation window."""
 
     try:
+        existing = await aio_session_manager.get_takeover(takeover_id)
+        if existing.user_id != str(current_user.id):
+            raise PermissionError("当前用户无权操作该 takeover")
+        await _require_pending_takeover_request(existing)
         takeover = await aio_session_manager.open_takeover(
             takeover_id=takeover_id,
             user_id=str(current_user.id),
@@ -606,6 +700,8 @@ async def open_takeover(
             status_code=status.HTTP_409_CONFLICT,
             detail="当前接管未找到有效目标页面，请重新申请新的 takeover。",
         )
+    # Persist a reissued ID before acquiring its lease, including failed opens.
+    await _persist_opened_takeover(takeover, target_url)
     session = await aio_session_manager.get_session(takeover.session_id)
     await _reserve_takeover_foreground(
         takeover=takeover,
@@ -784,12 +880,11 @@ async def relay_takeover_vnc(websocket: WebSocket, takeover_id: str):
             max_size=None,
         )
     except Exception as exc:
-        logger.exception(
-            "aio.vnc_relay.connect_failed takeover_id=%s session_id=%s upstream=%s error=%s",
+        logger.warning(
+            "aio.vnc_relay.connect_failed takeover_id=%s session_id=%s error_type=%s",
             takeover_id,
             session.session_id,
-            upstream_url,
-            exc,
+            type(exc).__name__,
         )
         await websocket.close(code=1011, reason="Failed to connect upstream VNC")
         return
@@ -856,12 +951,11 @@ async def relay_takeover_vnc(websocket: WebSocket, takeover_id: str):
     for task in done:
         exc = task.exception()
         if exc and not isinstance(exc, ConnectionClosed):
-            logger.exception(
-                "aio.vnc_relay.relay_failed takeover_id=%s session_id=%s upstream=%s error=%s",
+            logger.warning(
+                "aio.vnc_relay.relay_failed takeover_id=%s session_id=%s error_type=%s",
                 takeover_id,
                 session.session_id,
-                upstream_url,
-                exc,
+                type(exc).__name__,
             )
 
 
