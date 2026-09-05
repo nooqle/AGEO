@@ -121,11 +121,13 @@ async function withTimeout<T>(
 interface BrowserTakeoverContentProps {
   content: BrowserCanvasContent;
   onReopen?: () => Promise<void>;
+  embedded?: boolean;
 }
 
 export function BrowserTakeoverContent({
   content,
   onReopen,
+  embedded = false,
 }: BrowserTakeoverContentProps) {
   const browserState = content.data.browserState;
   const takeover = browserState.takeover ?? null;
@@ -576,26 +578,26 @@ export function BrowserTakeoverContent({
   }, []);
 
   return (
-    <div className="flex h-full min-h-0 flex-col p-4" style={{ background: 'var(--bg-secondary)' }}>
+    <div className={`flex h-full min-h-0 min-w-0 flex-col ${embedded ? '' : 'p-4'}`} style={{ background: 'var(--bg-secondary)' }}>
       <div
-        className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl"
+        className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden ${embedded ? '' : 'rounded-2xl'}`}
         style={{
           background: 'var(--bg-primary)',
-          border: '1px solid var(--border-subtle)',
-          boxShadow: '0 18px 60px rgba(15, 23, 42, 0.12)',
+          border: embedded ? undefined : '1px solid var(--border-subtle)',
+          boxShadow: embedded ? undefined : '0 18px 60px rgba(15, 23, 42, 0.12)',
         }}
       >
         <div
-          className="flex shrink-0 items-center justify-between gap-3 px-4 py-3"
+          className={`flex shrink-0 items-center justify-between gap-3 px-3 ${embedded ? 'py-1' : 'py-3'}`}
           style={{ borderBottom: '1px solid var(--border-subtle)' }}
         >
-          <div className="min-w-0">
-            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+          <div className={`min-w-0 ${embedded ? 'flex w-full items-center gap-3' : ''}`}>
+            <div className={embedded ? 'min-w-0 truncate text-xs' : 'text-sm font-medium'} style={{ color: 'var(--text-primary)' }}>
               {browserState.actionHint || browserState.message}
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+            <div className={`${embedded ? '' : 'mt-1'} flex shrink-0 flex-wrap items-center gap-2 text-[11px]`}>
               <span
-                className="rounded-full px-2 py-1"
+                className={`rounded-full px-2 ${embedded ? 'py-0.5' : 'py-1'}`}
                 style={{
                   background: 'rgba(245, 158, 11, 0.14)',
                   color: 'var(--warning)',
@@ -667,7 +669,7 @@ export function BrowserTakeoverContent({
                 ref={vncFrameRef}
                 title={`${platformLabel} takeover`}
                 src={vncConfig.url}
-                className="h-full w-full bg-[#f8fafc]"
+                className="block h-full w-full bg-[#f8fafc]"
                 style={{
                   opacity: vncFrameVisible ? 1 : 0,
                   transition: 'opacity 180ms ease',
@@ -716,15 +718,15 @@ export function BrowserTakeoverContent({
         </div>
 
         <div
-          className="flex shrink-0 items-center justify-between gap-3 px-4 py-3"
+          className={`flex shrink-0 flex-wrap items-center justify-between gap-2 px-3 ${embedded ? 'py-1' : 'py-3'}`}
           style={{ borderTop: '1px solid var(--border-subtle)' }}
         >
           <div className="min-w-0 text-xs" style={{ color: 'var(--text-secondary)' }}>
-            {statusText
+            {!embedded && (statusText
               || (targetUrl
                 ? `请在当前云电脑中完成操作：${targetUrl}`
-                : browserState.message)}
-            <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>
+                : browserState.message))}
+            <div className={embedded ? '' : 'mt-1'} style={{ color: 'var(--text-tertiary)' }}>
               {renderState === 'error'
                 ? '请先恢复登录窗口连接，完成登录前无需点击“我已完成”。'
                 : '完成登录或验证后，关闭当前窗口，在对应状态卡点击“我已完成”继续。'}

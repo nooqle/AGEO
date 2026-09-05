@@ -18,6 +18,8 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   Play,
+  Maximize,
+  Minimize,
   Plus,
   RotateCcw,
   Settings2,
@@ -270,6 +272,9 @@ export function AmwayFlowCanvas({
   const [measuredSizes, setMeasuredSizes] = useState<Record<string, { width: number; height: number }>>({});
   const [panel, setPanel] = useState<PanelState>(null);
   const [browserTakeoverContent, setBrowserTakeoverContent] = useState<BrowserCanvasContent | null>(null);
+  const [takeoverFullscreen, setTakeoverFullscreen] = useState(false);
+  const takeoverDialogRef = useRef<HTMLDivElement>(null);
+  const takeoverCloseRef = useRef<HTMLButtonElement>(null);
   const [openingTakeoverKey, setOpeningTakeoverKey] = useState<string | null>(null);
   const [resolvingTakeoverKey, setResolvingTakeoverKey] = useState<string | null>(null);
   const [openedBrowserStates, setOpenedBrowserStates] = useState<Record<string, BrowserState>>({});
@@ -628,18 +633,49 @@ export function AmwayFlowCanvas({
   useAioTakeoverHeartbeat(openedTakeovers, openedAtMsByTakeoverId);
 
   const closeBrowserTakeover = useCallback(() => {
+    if (document.fullscreenElement === takeoverDialogRef.current) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+    setTakeoverFullscreen(false);
     setBrowserTakeoverContent(null);
   }, []);
 
+  const toggleTakeoverFullscreen = async () => {
+    if (takeoverFullscreen) {
+      if (document.fullscreenElement === takeoverDialogRef.current) {
+        await document.exitFullscreen().catch(() => undefined);
+      }
+      setTakeoverFullscreen(false);
+      return;
+    }
+    try {
+      if (!takeoverDialogRef.current?.requestFullscreen) throw new Error('fullscreen_unavailable');
+      await takeoverDialogRef.current.requestFullscreen();
+    } catch {
+      toast.error('当前浏览器暂时无法进入全屏，可继续在登录窗口内操作。');
+    }
+  };
+
   useEffect(() => {
     if (!browserTakeoverContent) return undefined;
+    const previousFocus = document.activeElement;
+    takeoverCloseRef.current?.focus();
+    const handleFullscreenChange = () => {
+      setTakeoverFullscreen(document.fullscreenElement === takeoverDialogRef.current);
+    };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (document.fullscreenElement) return;
         closeBrowserTakeover();
       }
     };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (previousFocus instanceof HTMLElement) previousFocus.focus();
+    };
   }, [browserTakeoverContent, closeBrowserTakeover]);
 
   const openBrowserTakeover = useCallback(async (state: BrowserState) => {
@@ -2183,7 +2219,8 @@ export function AmwayFlowCanvas({
       </div>
       {browserTakeoverContent ? (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-[rgba(15,23,42,0.52)] p-3 sm:p-6"
+          ref={takeoverDialogRef}
+          className={`fixed inset-0 z-[70] flex items-center justify-center bg-[rgba(15,23,42,0.52)] ${takeoverFullscreen ? '' : 'p-2 sm:p-4 [@media(max-height:500px)]:p-2'}`}
           role="dialog"
           aria-modal="true"
           aria-labelledby="amway-flow-takeover-title"
@@ -2191,29 +2228,40 @@ export function AmwayFlowCanvas({
             if (event.target === event.currentTarget) closeBrowserTakeover();
           }}
         >
-          <div className="flex h-[min(760px,calc(100vh-24px))] w-[min(980px,calc(100vw-24px))] min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-[0_24px_70px_rgba(15,23,42,0.24)] sm:h-[min(760px,calc(100vh-48px))]">
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
+          <div className={`flex w-full min-w-0 flex-col overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-sm ${takeoverFullscreen ? 'h-dvh' : 'h-[calc(100dvh-16px)] rounded-xl sm:h-[calc(100dvh-32px)] [@media(max-height:500px)]:h-[calc(100dvh-16px)]'}`}>
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-0.5 sm:px-4">
               <div className="min-w-0">
                 <h2 id="amway-flow-takeover-title" className="truncate text-sm font-semibold text-[var(--text-primary)]">
                   {getPlatformDisplayName(browserTakeoverContent.data.platform)}登录窗口
                 </h2>
-                <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">
-                  请在窗口内完成登录或验证，完成后回到状态卡确认。
-                </p>
               </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  aria-label={takeoverFullscreen ? '退出全屏' : '全屏显示登录窗口'}
+                  aria-pressed={takeoverFullscreen}
+                  onClick={() => void toggleTakeoverFullscreen()}
+                  className="inline-flex h-11 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--brand-primary)]"
+                >
+                  {takeoverFullscreen ? <Minimize size={16} aria-hidden /> : <Maximize size={16} aria-hidden />}
+                  {takeoverFullscreen ? '退出全屏' : '全屏'}
+                </button>
               <button
+                ref={takeoverCloseRef}
                 type="button"
                 aria-label="关闭登录窗口"
                 onClick={closeBrowserTakeover}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--brand-primary)]"
               >
                 <X size={15} aria-hidden />
               </button>
+              </div>
             </div>
             <div className="min-h-0 flex-1">
               <BrowserTakeoverContent
                 key={`${browserTakeoverContent.data.takeoverId}-${browserTakeoverContent.createdAt.getTime()}`}
                 content={browserTakeoverContent}
+                embedded
                 onReopen={() => openBrowserTakeover(browserTakeoverContent.data.browserState)}
               />
             </div>
