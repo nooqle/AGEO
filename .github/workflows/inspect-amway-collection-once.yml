@@ -1,0 +1,205 @@
+name: Inspect Amway Collection Once
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/amway-live-diagnostic-20260905
+    paths:
+      - .github/workflows/inspect-amway-collection-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate SSH configuration
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${DEMO_SSH_HOST:?Missing DEMO_SSH_HOST secret}"
+          : "${DEMO_SSH_USER:?Missing DEMO_SSH_USER secret}"
+          : "${DEMO_SSH_KEY:?Missing DEMO_SSH_KEY secret}"
+
+      - name: Read sanitized collection state
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_amway_inspect_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(
+            -i "$key_path"
+            -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+
+          remote_script=$(cat <<'SCRIPT'
+          set -euo pipefail
+          current="$(readlink -f /srv/ageo-deploy/current)"
+          backend="$current/aeo-platform/backend"
+          python_bin="$backend/.venv/bin/python"
+          cd "$backend"
+          "$python_bin" - <<'PY'
+          import asyncio
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          from sqlalchemy import text
+
+
+          def load_env(path: Path) -> None:
+              if not path.exists():
+                  return
+              for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  if key.strip() and key.strip() not in os.environ:
+                      os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+
+          def clean(value: object, limit: int = 600) -> str:
+              result = re.sub(r"\s+", " ", str(value or "")).strip()
+              result = re.sub(r"(Bearer\s+)[A-Za-z0-9._-]+", r"\1[REDACTED]", result)
+              result = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED_SK]", result)
+              return result[:limit]
+
+
+          def emit(section: str, rows) -> None:
+              print(f"== {section} ==")
+              print("rows=", len(rows))
+              for row in rows:
+                  payload = {key: clean(value) for key, value in dict(row).items()}
+                  print(json.dumps(payload, ensure_ascii=False))
+              print()
+
+
+          async def main() -> None:
+              load_env(Path("/srv/ageo-deploy/shared/backend/.env.local"))
+              from app.core.database import AsyncSessionLocal
+
+              release_sha = Path(".release-sha")
+              print("release_sha=", release_sha.read_text().strip() if release_sha.exists() else "missing")
+              async with AsyncSessionLocal() as db:
+                  entity_filter = """
+                    select id from entities
+                    where lower(name) like '%amway%' or name like '%安利%'
+                  """
+                  product_runs = (await db.execute(text(f"""
+                    select bir.id::text as run_id, bir.entity_id::text as entity_id,
+                           e.name as entity_name, bir.analysis_task_id::text as task_id,
+                           bir.status, bir.stage, bir.progress, bir.message,
+                           bir.requires_user_action, bir.user_action_type,
+                           bir.blocking_reason, bir.error_code, bir.error_message,
+                           bir.created_at, bir.started_at, bir.completed_at,
+                           bir.failed_at, bir.updated_at
+                    from brand_intelligence_runs bir
+                    join entities e on e.id = bir.entity_id
+                    where bir.entity_id in ({entity_filter})
+                    order by bir.created_at desc
+                    limit 12
+                  """))).mappings().all()
+                  emit("recent_amway_product_runs", product_runs)
+
+                  tasks = (await db.execute(text(f"""
+                    select at.id::text as task_id, at.entity_id::text as entity_id,
+                           at.status::text as status, at.current_stage, at.progress,
+                           at.progress_message, at.error_stage, at.error_message,
+                           at.created_at, at.started_at, at.completed_at, at.updated_at
+                    from analysis_tasks at
+                    where at.entity_id in ({entity_filter})
+                    order by at.created_at desc
+                    limit 12
+                  """))).mappings().all()
+                  emit("recent_amway_analysis_tasks", tasks)
+
+                  task_runs = (await db.execute(text(f"""
+                    select tr.id::text as task_run_id, tr.task_id::text as task_id,
+                           tr.status::text as status, tr.run_kind::text as run_kind,
+                           tr.executor_kind::text as executor_kind, tr.checkpoint_stage,
+                           tr.error_kind, tr.error_message, tr.submitted_at,
+                           tr.started_at, tr.finished_at, tr.heartbeat_at
+                    from task_runs tr
+                    join analysis_tasks at on at.id = tr.task_id
+                    where at.entity_id in ({entity_filter})
+                    order by tr.submitted_at desc
+                    limit 20
+                  """))).mappings().all()
+                  emit("recent_amway_task_runs", task_runs)
+
+                  child_attempts = (await db.execute(text(f"""
+                    select ca.task_run_id::text as task_run_id, tr.task_id::text as task_id,
+                           ca.platform, ca.action_type, ca.status::text as status,
+                           ca.request_id, ca.message, ca.action_hint, ca.resolution,
+                           ca.error_message, ca.created_at, ca.updated_at, ca.resolved_at
+                    from task_run_child_attempts ca
+                    join task_runs tr on tr.id = ca.task_run_id
+                    join analysis_tasks at on at.id = tr.task_id
+                    where at.entity_id in ({entity_filter})
+                    order by ca.created_at desc
+                    limit 80
+                  """))).mappings().all()
+                  emit("recent_amway_browser_actions", child_attempts)
+
+                  platform_states = (await db.execute(text(f"""
+                    select fps.task_id::text as task_id, fps.platform, fps.status,
+                           fps.attempt_no, fps.auth_state,
+                           fps.latest_packet::text as latest_packet,
+                           fps.error_kind, fps.error_message,
+                           fps.started_at, fps.finished_at, fps.updated_at
+                    from fetch_run_platform_states fps
+                    join analysis_tasks at on at.id = fps.task_id
+                    where at.entity_id in ({entity_filter})
+                    order by fps.updated_at desc
+                    limit 40
+                  """))).mappings().all()
+                  emit("recent_amway_platform_states", platform_states)
+
+                  sessions = (await db.execute(text("""
+                    select workspace_id, session_id, session_state::text as session_state,
+                           ref_count, jsonb_array_length(holders_json::jsonb) as holder_count,
+                           automation_lock, human_takeover_lock, current_takeover_id,
+                           last_seen_at, last_healthcheck_at, expires_at, updated_at
+                    from aio_runtime_sessions
+                    where workspace_id like '%::aio-platform::%'
+                    order by updated_at desc
+                    limit 12
+                  """))).mappings().all()
+                  emit("recent_aio_runtime_sessions", sessions)
+
+
+          asyncio.run(main())
+          PY
+
+          echo "== recent_backend_browser_logs =="
+          sudo journalctl -u ageo-backend.service --since '3 hours ago' --no-pager -o short-iso |
+            grep -Ei 'A4|aio|browser.action|takeover|auth.required|login|timeout|failed|exception|traceback' |
+            sed -E \
+              -e 's/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/[REDACTED_SK]/g' \
+              -e 's/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g' |
+            tail -n 700 || true
+          SCRIPT
+          )
+
+          ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" "bash -s" <<< "$remote_script"
