@@ -1231,7 +1231,7 @@ export function AmwayFlowCanvas({
 
   return (
     <div className="flex h-full min-h-[calc(100vh-64px)] flex-col">
-      <div className="px-5 pt-4 lg:px-7 2xl:px-10">
+      <div className="shrink-0 px-5 pt-4 lg:px-7 2xl:px-10">
         <section className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-5 py-4 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
@@ -1555,10 +1555,14 @@ export function AmwayFlowCanvas({
         </section>
       </div>
 
-      <div className="relative flex-1 px-5 pb-5 pt-3 lg:px-7 2xl:px-10">
+      {/*
+        Header/orchestration can be tall; flex-1 alone shrinks the canvas on 720p.
+        Floor height keeps React Flow + absolute drawer usable; page may scroll.
+      */}
+      <div className="relative min-h-[520px] flex-1 px-5 pb-5 pt-3 lg:px-7 2xl:px-10">
         <ReactFlow
           key={canvasKey}
-          className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]"
+          className="h-full min-h-[520px] overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]"
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
@@ -1707,8 +1711,8 @@ export function AmwayFlowCanvas({
 
 
         {panel ? (
-          <aside className="amway-flow-drawer absolute bottom-5 right-5 top-3 z-10 flex w-[min(560px,92%)] flex-col rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-[-8px_0_24px_-16px_rgba(38,45,43,0.25)] lg:right-7 2xl:right-10">
-            <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-5 py-3.5">
+          <aside className="amway-flow-drawer absolute bottom-5 right-5 top-3 z-10 flex min-h-0 w-[min(560px,92%)] flex-col rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-[-8px_0_24px_-16px_rgba(38,45,43,0.25)] lg:right-7 2xl:right-10">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-5 py-3.5">
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-[var(--text-primary)]">
                   {panel.kind === 'node' && selectedNode
@@ -1734,7 +1738,7 @@ export function AmwayFlowCanvas({
                 <X size={14} />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto px-5 py-4">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
               {panel.kind === 'node' && selectedNode ? (
                 (() => {
                   const customNode = topology.customNodes.find((item) => item.id === selectedNode.id);
