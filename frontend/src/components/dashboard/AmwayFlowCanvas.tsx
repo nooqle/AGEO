@@ -27,11 +27,17 @@ import {
 import { api } from '@/services/api';
 import { getPlatformDisplayName } from '@/config/platformLabel';
 import { AmwayFlowOrchestrationPanel } from '@/components/dashboard/AmwayFlowOrchestrationPanel';
+import { BrowserTakeoverContent } from '@/components/canvas/contents/BrowserTakeoverContent';
 import { useTheme } from '@/hooks/useTheme';
+import { useAioTakeoverHeartbeat } from '@/hooks/useAioTakeoverHeartbeat';
+import { useAioTakeoverStore } from '@/stores/aioTakeoverStore';
+import { toast } from '@/components/ui/toast';
 import type { DashboardHomeData } from '@/types/dashboard';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
 import type { AnalysisTask } from '@/types/task';
 import type { BrowserState } from '@/types/agent';
+import type { AioTakeoverRecord } from '@/types/aio';
+import type { BrowserCanvasContent } from '@/types/canvas';
 import type { StageResult } from '@/types/snapshot';
 import type { AmwayCirclePeriodViewResponse, AmwayQuestionHistorySet } from '@/types/amwayChina';
 import type {
@@ -143,8 +149,62 @@ function flowRuntimePlatform(value: string | null | undefined): string {
   return platform === 'yuanbao' ? 'hunyuan' : platform;
 }
 
-function flowRuntimeActionKey(platform: string | null | undefined, actionType: string | null | undefined): string {
-  return `${flowRuntimePlatform(platform)}:${String(actionType || 'browser_action').trim()}`;
+function flowRuntimeActionKey(platform: string | null | undefined): string {
+  // A platform's login/verify/browser_action rows describe one user action
+  // from different persistence layers. Keep one visible card per platform.
+  return flowRuntimePlatform(platform);
+}
+
+const STABLE_AIO_TAKEOVER_MODE = 'vnc_fallback' as const;
+
+function buildBrowserTakeoverFromRecord(
+  record: AioTakeoverRecord,
+): NonNullable<BrowserState['takeover']> {
+  const actionType = record.actionType ?? record.accessBundle.actionType;
+  return {
+    takeoverId: record.takeoverId,
+    mode: record.mode,
+    actionType:
+      actionType === 'login' || actionType === 'verify' || actionType === 'modal'
+        ? actionType
+        : undefined,
+    reasonCode: record.reasonCode ?? record.accessBundle.reasonCode ?? undefined,
+    openPath: record.accessBundle.openPath ?? undefined,
+    canvasConfigPath: record.accessBundle.canvasConfigPath || undefined,
+    vncUrlPath: record.accessBundle.vncUrlPath || undefined,
+    heartbeatPath: record.accessBundle.heartbeatPath || undefined,
+    resolvePath: record.accessBundle.resolvePath || undefined,
+    cancelPath: record.accessBundle.cancelPath || undefined,
+    expiresAt: record.expiresAt || undefined,
+    targetUrl: record.targetUrl ?? record.accessBundle.targetUrl ?? undefined,
+    blockingUrl: record.blockingUrl ?? record.accessBundle.blockingUrl ?? undefined,
+    blockingFingerprint:
+      record.blockingFingerprint ?? record.accessBundle.blockingFingerprint ?? undefined,
+  };
+}
+
+function buildBrowserCanvasContent(state: BrowserState): BrowserCanvasContent | null {
+  const takeover = state.takeover;
+  if (!takeover?.takeoverId) return null;
+  const targetUrl = state.blockingUrl || takeover.blockingUrl || takeover.targetUrl;
+  return {
+    id: `amway_browser_takeover_${takeover.takeoverId}`,
+    type: 'browser',
+    title: '云电脑工作区',
+    data: {
+      takeoverId: takeover.takeoverId,
+      platform: state.platform,
+      browserState: state,
+      mode: takeover.mode,
+      targetUrl,
+      description: state.message,
+      itemCount: 1,
+    },
+    createdAt: new Date(),
+    relatedMessageId: state.relatedMessageId || '',
+    versions: [],
+    currentVersionIndex: -1,
+  };
 }
 
 type FlowRuntimeBlockerCard = {
@@ -167,6 +227,7 @@ export function AmwayFlowCanvas({
   liveStageResults = [],
   browserActionStates = [],
   onResolveBrowserAction,
+  onDismissBrowserAction,
   onQuickRun,
   onConfirmFlowPlan,
   onRefreshFlowPlan,
@@ -188,6 +249,8 @@ export function AmwayFlowCanvas({
   isAwaitingPlanConfirm?: boolean;
   liveStageResults?: StageResult[];
   browserActionStates?: BrowserState[];
+  /** Remove a takeover card locally after the AIO HTTP request is settled. */
+  onDismissBrowserAction?: (requestId: string, platform?: string) => void;
   onResolveBrowserAction?: (requestId: string, resolution: 'completed' | 'skip') => void;
   onQuickRun: () => void;
   onConfirmFlowPlan?: () => void;
@@ -206,6 +269,16 @@ export function AmwayFlowCanvas({
   // 必须随 userNode 回传，否则运行状态翻转等高频更新时节点可能停留在 visibility:hidden。
   const [measuredSizes, setMeasuredSizes] = useState<Record<string, { width: number; height: number }>>({});
   const [panel, setPanel] = useState<PanelState>(null);
+  const [browserTakeoverContent, setBrowserTakeoverContent] = useState<BrowserCanvasContent | null>(null);
+  const [openingTakeoverKey, setOpeningTakeoverKey] = useState<string | null>(null);
+  const [resolvingTakeoverKey, setResolvingTakeoverKey] = useState<string | null>(null);
+  const upsertTakeoverRegistration = useAioTakeoverStore((state) => state.upsertRegistration);
+  const upsertTakeoverRecord = useAioTakeoverStore((state) => state.upsertRecord);
+  const removeTakeoverRegistration = useAioTakeoverStore((state) => state.removeRegistration);
+  const clearTakeover = useAioTakeoverStore((state) => state.clearTakeover);
+  const markTakeoverOpened = useAioTakeoverStore((state) => state.markTakeoverOpened);
+  const openedTakeoverIds = useAioTakeoverStore((state) => state.openedTakeoverIds);
+  const openedAtMsByTakeoverId = useAioTakeoverStore((state) => state.openedAtMsByTakeoverId);
   // Phase 3a 自定义拓扑（视图层编排）。3b-1.4 起后端为权威存储，
   // localStorage 降级为首帧缓存与离线回退。
   const [topology, setTopology] = useState<FlowTopology>(() => readFlowTopology(entityId));
@@ -462,10 +535,10 @@ export function AmwayFlowCanvas({
   const runtimeBlockerCards = useMemo<FlowRuntimeBlockerCard[]>(() => {
     const cards = new Map<string, FlowRuntimeBlockerCard>();
     durableRuntimeBlockers.forEach((blocker) => {
-      cards.set(flowRuntimeActionKey(blocker.platform, blocker.actionType), { blocker });
+      cards.set(flowRuntimeActionKey(blocker.platform), { blocker });
     });
     durablePlatformStateBlockers.forEach((stateBlocker) => {
-      const key = flowRuntimeActionKey(stateBlocker.platform, stateBlocker.actionType);
+      const key = flowRuntimeActionKey(stateBlocker.platform);
       const existing = cards.get(key);
       cards.set(key, {
         blocker: {
@@ -482,7 +555,7 @@ export function AmwayFlowCanvas({
     browserActionStates
       .filter((state) => state.requiresAction)
       .forEach((state) => {
-        const key = flowRuntimeActionKey(state.platform, state.actionType);
+        const key = flowRuntimeActionKey(state.platform);
         const existing = cards.get(key);
         const blocker: FlowRuntimeBlocker = {
           id: existing?.blocker.id || state.requestId || key,
@@ -504,6 +577,191 @@ export function AmwayFlowCanvas({
       left.blocker.platform.localeCompare(right.blocker.platform)
     ));
   }, [browserActionStates, durablePlatformStateBlockers, durableRuntimeBlockers]);
+
+  // Flow does not mount ChatPanel, so it owns the takeover registration and
+  // heartbeat lifecycle while a browser window is open.
+  useEffect(() => {
+    browserActionStates
+      .filter((state) => state.requiresAction && state.takeover?.takeoverId)
+      .forEach((state) => {
+        if (state.takeover) {
+          upsertTakeoverRegistration(state.takeover);
+        }
+      });
+    const currentState = browserTakeoverContent?.data.browserState;
+    if (currentState?.takeover) {
+      upsertTakeoverRegistration(currentState.takeover);
+    }
+  }, [browserActionStates, browserTakeoverContent, upsertTakeoverRegistration]);
+
+  const openedTakeovers = useMemo(() => {
+    const states = browserActionStates.concat(
+      browserTakeoverContent ? [browserTakeoverContent.data.browserState] : [],
+    );
+    const byId = new Map<string, NonNullable<BrowserState['takeover']>>();
+    states.forEach((state) => {
+      const takeover = state.takeover;
+      if (takeover?.takeoverId && openedTakeoverIds[takeover.takeoverId]) {
+        byId.set(takeover.takeoverId, takeover);
+      }
+    });
+    return [...byId.values()];
+  }, [browserActionStates, browserTakeoverContent, openedTakeoverIds]);
+
+  useAioTakeoverHeartbeat(openedTakeovers, openedAtMsByTakeoverId);
+
+  const closeBrowserTakeover = useCallback(() => {
+    setBrowserTakeoverContent(null);
+  }, []);
+
+  useEffect(() => {
+    if (!browserTakeoverContent) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeBrowserTakeover();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [browserTakeoverContent, closeBrowserTakeover]);
+
+  const openBrowserTakeover = useCallback(async (state: BrowserState) => {
+    const takeover = state.takeover;
+    if (!takeover?.takeoverId) {
+      toast.error('当前平台没有可用的登录窗口，请刷新任务状态后重试。');
+      return;
+    }
+
+    const takeoverKey = flowRuntimeActionKey(state.platform);
+    setOpeningTakeoverKey(takeoverKey);
+    upsertTakeoverRegistration(takeover);
+    const registration = useAioTakeoverStore.getState().registrations[takeover.takeoverId];
+
+    try {
+      const nextRecord = await api.openAioTakeover(
+        takeover.openPath || `/api/v1/aio/takeovers/${takeover.takeoverId}/open`,
+        {
+          frontendId: registration?.frontendId ?? null,
+          mode: STABLE_AIO_TAKEOVER_MODE,
+        },
+      );
+      upsertTakeoverRecord(nextRecord);
+      if (nextRecord.takeoverId !== takeover.takeoverId) {
+        clearTakeover(takeover.takeoverId);
+      }
+      const nextTakeover = buildBrowserTakeoverFromRecord(nextRecord);
+      const nextState: BrowserState = {
+        ...state,
+        takeover: nextTakeover,
+        blockingUrl: nextTakeover.blockingUrl ?? state.blockingUrl,
+        blockingFingerprint: nextTakeover.blockingFingerprint ?? state.blockingFingerprint,
+        reasonCode: nextTakeover.reasonCode ?? state.reasonCode,
+        requiresAction: true,
+      };
+      markTakeoverOpened(nextRecord.takeoverId, undefined, state.requestId);
+      const content = buildBrowserCanvasContent(nextState);
+      if (content) {
+        setBrowserTakeoverContent(content);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '打开登录窗口失败，请重试。');
+    } finally {
+      setOpeningTakeoverKey(null);
+    }
+  }, [clearTakeover, markTakeoverOpened, upsertTakeoverRecord, upsertTakeoverRegistration]);
+
+  const resolveBrowserAction = useCallback(async (
+    state: BrowserState,
+    resolution: 'completed' | 'skip',
+  ) => {
+    const requestId = state.requestId;
+    if (!requestId) {
+      toast.error('当前浏览器操作缺少任务编号，请刷新后重试。');
+      return;
+    }
+
+    const takeover = state.takeover;
+    if (resolution === 'completed' && takeover?.takeoverId) {
+      const registration = useAioTakeoverStore.getState().registrations[takeover.takeoverId];
+      if (!registration?.frontendId || !openedTakeoverIds[takeover.takeoverId]) {
+        toast.error('请先打开登录窗口，完成操作后再确认。');
+        return;
+      }
+      if (!takeover.resolvePath) {
+        toast.error('登录窗口信息不完整，请重新打开登录窗口。');
+        return;
+      }
+
+      const takeoverKey = flowRuntimeActionKey(state.platform);
+      setResolvingTakeoverKey(takeoverKey);
+      try {
+        const nextRecord = await api.resolveAioTakeover(takeover.resolvePath, {
+          frontendId: registration.frontendId,
+          mode: registration.mode,
+          clientObservation: 'user_confirmed_done_from_amway_flow',
+        });
+        upsertTakeoverRecord(nextRecord);
+        if (nextRecord.takeoverState !== 'resolved') {
+          toast.error('当前接管尚未完成，请确认登录或验证后再试。');
+          return;
+        }
+        removeTakeoverRegistration(takeover.takeoverId);
+        if (browserTakeoverContent?.data.takeoverId === takeover.takeoverId) {
+          setBrowserTakeoverContent(null);
+        }
+        // AIO has already settled this request over HTTP. Remove the live
+        // Flow card locally; sending the legacy WS resolution here would
+        // duplicate the settlement and omit the frontend registration.
+        onDismissBrowserAction?.(requestId, state.platform);
+        toast.success('已收到完成确认，正在继续当前平台采集。');
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : '提交完成失败，请重试。');
+      } finally {
+        setResolvingTakeoverKey(null);
+      }
+      return;
+    }
+
+    if (resolution === 'skip' && takeover?.takeoverId) {
+      if (!takeover.cancelPath) {
+        toast.error('登录窗口信息不完整，请重新打开登录窗口。');
+        return;
+      }
+      const registration = useAioTakeoverStore.getState().registrations[takeover.takeoverId];
+      try {
+        const nextRecord = await api.cancelAioTakeover(takeover.cancelPath, {
+          frontendId: registration?.frontendId ?? null,
+          reason: 'user_skipped_from_amway_flow',
+        });
+        upsertTakeoverRecord(nextRecord);
+        removeTakeoverRegistration(takeover.takeoverId);
+        if (browserTakeoverContent?.data.takeoverId === takeover.takeoverId) {
+          setBrowserTakeoverContent(null);
+        }
+        onDismissBrowserAction?.(requestId, state.platform);
+        toast.success('已跳过当前平台，继续其他平台采集。');
+        return;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : '跳过平台失败，请重试。');
+        return;
+      }
+    }
+
+    // Legacy browser states without an AIO takeover still use the task WS
+    // resolution path.
+    if (!onResolveBrowserAction) {
+      toast.error('当前浏览器操作暂不可确认，请刷新后重试。');
+      return;
+    }
+    onResolveBrowserAction(requestId, resolution);
+  }, [
+    browserTakeoverContent,
+    onDismissBrowserAction,
+    onResolveBrowserAction,
+    openedTakeoverIds,
+    removeTakeoverRegistration,
+    upsertTakeoverRecord,
+  ]);
 
   // M1: local topology preview + authoritative run.flow_plan when a task is active
   const executionPlan = useMemo<FlowExecutionPlan>(() => {
@@ -1279,9 +1537,14 @@ export function AmwayFlowCanvas({
                   data-testid="amway-flow-runtime-status"
                   className="mt-4 space-y-2"
                 >
-                  {runtimeBlockerCards.map(({ blocker }) => {
+                  {runtimeBlockerCards.map(({ blocker, browserState }) => {
                     const platformLabel = getPlatformDisplayName(blocker.platform);
                     const isWaiting = blocker.status === 'waiting_input';
+                    const takeoverId = browserState?.takeover?.takeoverId;
+                    const isTakeoverOpened = Boolean(takeoverId && openedTakeoverIds[takeoverId]);
+                    const blockerKey = flowRuntimeActionKey(blocker.platform);
+                    const isOpening = openingTakeoverKey === blockerKey;
+                    const isResolving = resolvingTakeoverKey === blockerKey;
                     const reason = blocker.errorMessage || blocker.message || (
                       isWaiting ? '当前平台需要人工处理后才能继续。' : '当前平台本轮未完成采集。'
                     );
@@ -1332,25 +1595,53 @@ export function AmwayFlowCanvas({
                             )}
                             {isWaiting ? (
                               <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                                {browserState?.takeover?.takeoverId ? (
+                                  <button
+                                    type="button"
+                                    data-testid={`amway-flow-runtime-open-${blocker.platform}`}
+                                    disabled={isOpening || isResolving}
+                                    onClick={() => {
+                                      void openBrowserTakeover(browserState);
+                                    }}
+                                    className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {isOpening ? '正在打开…' : isTakeoverOpened ? '重新打开登录窗口' : '打开登录窗口'}
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   data-testid={`amway-flow-runtime-complete-${blocker.platform}`}
-                                  disabled={!blocker.requestId || !onResolveBrowserAction}
+                                  disabled={
+                                    !blocker.requestId
+                                      || (takeoverId ? !onDismissBrowserAction : !onResolveBrowserAction)
+                                      || isOpening
+                                      || isResolving
+                                      || Boolean(takeoverId && !isTakeoverOpened)
+                                  }
                                   onClick={() => {
-                                    if (blocker.requestId) {
+                                    if (browserState) {
+                                      void resolveBrowserAction(browserState, 'completed');
+                                    } else if (blocker.requestId) {
                                       onResolveBrowserAction?.(blocker.requestId, 'completed');
                                     }
                                   }}
                                   className="inline-flex h-8 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                  我已完成
+                                  {isResolving ? '正在确认…' : '我已完成'}
                                 </button>
                                 <button
                                   type="button"
                                   data-testid={`amway-flow-runtime-skip-${blocker.platform}`}
-                                  disabled={!blocker.requestId || !onResolveBrowserAction}
+                                  disabled={
+                                    !blocker.requestId
+                                      || (takeoverId ? !onDismissBrowserAction : !onResolveBrowserAction)
+                                      || isOpening
+                                      || isResolving
+                                  }
                                   onClick={() => {
-                                    if (blocker.requestId) {
+                                    if (browserState) {
+                                      void resolveBrowserAction(browserState, 'skip');
+                                    } else if (blocker.requestId) {
                                       onResolveBrowserAction?.(blocker.requestId, 'skip');
                                     }
                                   }}
@@ -1851,6 +2142,41 @@ export function AmwayFlowCanvas({
           </aside>
         ) : null}
       </div>
+      {browserTakeoverContent ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-[rgba(15,23,42,0.52)] p-3 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="amway-flow-takeover-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeBrowserTakeover();
+          }}
+        >
+          <div className="flex h-[min(760px,calc(100vh-24px))] w-[min(980px,calc(100vw-24px))] min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] shadow-[0_24px_70px_rgba(15,23,42,0.24)] sm:h-[min(760px,calc(100vh-48px))]">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:px-5">
+              <div className="min-w-0">
+                <h2 id="amway-flow-takeover-title" className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                  {getPlatformDisplayName(browserTakeoverContent.data.platform)}登录窗口
+                </h2>
+                <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">
+                  请在窗口内完成登录或验证，完成后回到状态卡确认。
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭登录窗口"
+                onClick={closeBrowserTakeover}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] transition hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+              >
+                <X size={15} aria-hidden />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <BrowserTakeoverContent content={browserTakeoverContent} />
+            </div>
+          </div>
+        </div>
+      ) : null}
       <style>{`
         .amway-flow-node-pulse {
           animation: amwayFlowNodePulse 1.6s ease-in-out infinite;

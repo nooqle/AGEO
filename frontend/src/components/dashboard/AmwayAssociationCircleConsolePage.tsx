@@ -192,6 +192,15 @@ function parseBrowserActionAck(raw: string): string | null {
   }
 }
 
+function canonicalBrowserPlatform(value: string | null | undefined): string {
+  const platform = String(value || '').trim().toLowerCase();
+  return platform === 'hunyuan' ? 'yuanbao' : platform;
+}
+
+function browserActionStateKey(state: Pick<BrowserState, 'platform'>): string {
+  return canonicalBrowserPlatform(state.platform);
+}
+
 function appendUniqueStageResult(
   current: StageResult[],
   next: StageResult,
@@ -692,6 +701,9 @@ export function AmwayAssociationCircleConsolePage({
 
   const resolveFlowBrowserAction = useCallback(
     (requestId: string, resolution: 'completed' | 'skip') => {
+      // Legacy browser states without an AIO takeover use this task-WS path.
+      // AIO takeover resolve/cancel is settled over HTTP in AmwayFlowCanvas
+      // and dismissed locally via dismissFlowBrowserAction.
       const socket = flowSocketRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         toast.error('生产线连接已断开，请刷新后重试。');
@@ -703,6 +715,16 @@ export function AmwayAssociationCircleConsolePage({
       }));
     },
   []);
+
+  const dismissFlowBrowserAction = useCallback((requestId: string, platform?: string) => {
+    if (!requestId && !platform) return;
+    const canonicalPlatform = canonicalBrowserPlatform(platform);
+    setBrowserActionStates((current) => current.filter((item) => {
+      if (requestId && item.requestId === requestId) return false;
+      if (canonicalPlatform && browserActionStateKey(item) === canonicalPlatform) return false;
+      return true;
+    }));
+  }, []);
 
   useEffect(() => {
     const { sessionId } = liveTaskLookup;
@@ -731,11 +753,12 @@ export function AmwayAssociationCircleConsolePage({
         const browserState = parseBrowserActionState(event.data);
         if (browserState) {
           setBrowserActionStates((current) => {
-            const key = browserState.requestId
-              || browserState.takeover?.takeoverId
-              || `${browserState.platform}:${browserState.actionType || browserState.state}`;
+            // A platform has one human takeover gate at a time. Match by
+            // platform so login and browser_action events cannot render two
+            // cards for the same platform.
+            const key = browserActionStateKey(browserState);
             const index = current.findIndex((item) => (
-              (item.requestId || item.takeover?.takeoverId || `${item.platform}:${item.actionType || item.state}`) === key
+              browserActionStateKey(item) === key
             ));
             if (index < 0) return [...current, browserState];
             const next = [...current];
@@ -1192,6 +1215,7 @@ export function AmwayAssociationCircleConsolePage({
             activeTask={activeTask}
             browserActionStates={browserActionStates}
             onResolveBrowserAction={resolveFlowBrowserAction}
+            onDismissBrowserAction={dismissFlowBrowserAction}
             isRunActive={isSelectedRunExecuting}
             isRunSubmitting={Boolean(submittingByEntity[selectedEntity.id])}
             isCancellingRun={isCancellingRun}

@@ -24,6 +24,16 @@ _STATUS_PRIORITY = {
     "succeeded": 5,
 }
 _TERMINAL_STATUSES = {"skipped", "failed", "succeeded"}
+_TAKEOVER_PACKET_METADATA_KEYS = (
+    "action_type",
+    "reason_code",
+    "request_id",
+    "takeover",
+    "target_url",
+    "blocking_url",
+    "blocking_fingerprint",
+    "needs_handoff",
+)
 
 
 def fetch_run_platform_state_to_dict(row: FetchRunPlatformState) -> dict[str, Any]:
@@ -357,6 +367,42 @@ class FetchRunPlatformStateService:
             return "pending"
         return "failed"
 
+    @staticmethod
+    def _has_packet_metadata(value: Any) -> bool:
+        """Treat blank metadata as absent so it cannot erase a live handoff."""
+
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, dict):
+            return bool(value)
+        return True
+
+    @classmethod
+    def _merge_packet_metadata(
+        cls,
+        current: dict[str, Any],
+        incoming: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Merge packets without dropping metadata for an active takeover.
+
+        A fetch-result packet normally carries question results but no browser
+        action fields.  If it follows the takeover packet, a plain dictionary
+        replacement would make the UI fall back to ``browser_action`` and lose
+        the login request.  New non-empty values remain authoritative; absent
+        values keep the existing handoff metadata.
+        """
+
+        merged = {**current, **incoming}
+        for key in _TAKEOVER_PACKET_METADATA_KEYS:
+            incoming_value = incoming.get(key)
+            if not cls._has_packet_metadata(incoming_value):
+                current_value = current.get(key)
+                if cls._has_packet_metadata(current_value):
+                    merged[key] = current_value
+        return merged
+
     @classmethod
     def _merge_latest_packets(
         cls,
@@ -370,10 +416,10 @@ class FetchRunPlatformStateService:
 
         current_results = current.get("question_results")
         incoming_results = incoming.get("question_results")
-        merged_packet = {**current, **incoming}
+        merged_packet = cls._merge_packet_metadata(current, incoming)
 
         if not isinstance(current_results, list):
-            return incoming
+            return merged_packet
         if not isinstance(incoming_results, list):
             merged_packet["question_results"] = current_results
             if "stats" in current:

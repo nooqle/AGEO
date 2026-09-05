@@ -691,7 +691,7 @@ export function BrowserTakeoverContent({
                 ? `请在当前云电脑中完成操作：${targetUrl}`
                 : browserState.message)}
             <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>
-              完成登录或验证后，请回到左侧聊天卡片点击“我已完成”继续。
+              完成登录或验证后，关闭当前窗口，在对应状态卡点击“我已完成”继续。
             </div>
           </div>
           <div className="flex items-center gap-2">

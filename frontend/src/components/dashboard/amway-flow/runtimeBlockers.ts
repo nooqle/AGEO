@@ -54,7 +54,9 @@ function attemptTimestamp(attempt: RuntimeChildAttemptLike): number {
 
 /**
  * Project the durable child-attempt history into one current blocker per
- * platform/action pair. Terminal successful/skipped attempts clear a prior
+ * platform. A single browser action can be represented by both a child
+ * attempt and a fetch-platform row, so action type is intentionally not part
+ * of this projection key. Terminal successful/skipped attempts clear a prior
  * blocker; expired/failed attempts remain visible as final evidence.
  */
 export function buildFlowRuntimeBlockers(
@@ -63,9 +65,8 @@ export function buildFlowRuntimeBlockers(
   const latestByKey = new Map<string, RuntimeChildAttemptLike>();
   for (const attempt of attempts || []) {
     const platform = canonicalPlatform(attempt.platform);
-    const actionType = String(attempt.action_type || 'browser_action').trim();
     if (!platform) continue;
-    const key = `${platform}:${actionType}`;
+    const key = platform;
     const current = latestByKey.get(key);
     if (!current || attemptTimestamp(attempt) >= attemptTimestamp(current)) {
       latestByKey.set(key, attempt);
@@ -107,7 +108,17 @@ export function buildFlowRuntimeBlockers(
 export function buildFlowPlatformStateBlockers(
   states: RuntimePlatformStateLike[] | null | undefined,
 ): FlowRuntimeBlocker[] {
-  return (states || [])
+  const latestByPlatform = new Map<string, RuntimePlatformStateLike>();
+  for (const state of states || []) {
+    const platform = canonicalPlatform(state.platform);
+    if (!platform) continue;
+    const current = latestByPlatform.get(platform);
+    if (!current || attemptTimestamp(state) >= attemptTimestamp(current)) {
+      latestByPlatform.set(platform, state);
+    }
+  }
+
+  return [...latestByPlatform.values()]
     .map<FlowRuntimeBlocker | null>((state) => {
       const platform = canonicalPlatform(state.platform);
       if (!platform) return null;
