@@ -5,6 +5,7 @@
 'use client';
 
 import { useEffect, useRef, type ReactNode } from 'react';
+import { semanticTypeLabels } from '../amwaySemanticLabels';
 import { X } from 'lucide-react';
 import type {
   OntologyAssociationCircleEvidence,
@@ -214,6 +215,21 @@ export function OrbitNodeInsightPanel({
             </InsightLayer>
 
             <InsightLayer index="03" label="感知" title="具体证据数据">
+              {node.contribution_mode && <p className="mb-2 text-sm text-[var(--text-secondary)]">
+                {node.contribution_label}：直接提及 {node.direct_answer_count || 0} 条回答，对象归组 {node.mapped_answer_count || 0} 条回答；两者重合 {node.overlap_answer_count || 0} 条，合计去重 {node.supporting_answer_count || 0} 条。
+              </p>}
+              {Boolean(node.topic_contributions?.length) && <details className="mb-3 text-sm">
+                <summary>查看独立对象与主题贡献（同一回答只计一次）</summary>
+                <div className="mt-2 divide-y divide-[var(--border-subtle)]">
+                  {node.topic_contributions?.map((item, index) => <div key={`${item.entity_id}-${item.answer_id}-${index}`} className="py-2">
+                    <p className="font-medium">{item.entity_name} · {item.platform} · {item.contribution_kind === 'direct' ? '直接提及' : '主题映射'}</p>
+                    <p className="text-xs text-[var(--text-tertiary)]">{semanticTypeLabels[item.semantic_type || ''] || '旧版分类'} · 对象 ID：{item.entity_id}</p>
+                    <p>当前回答证据：{item.evidence_text}</p>
+                    {item.source_refs?.map((source, sourceIndex) => <p key={sourceIndex} className="text-xs text-[var(--text-secondary)]">对象文章来源：{source.source_id} / {source.locator}：“{source.quote}”</p>)}
+                    {item.mapping_sources?.map((source, sourceIndex) => <p key={sourceIndex} className="text-xs text-[var(--text-tertiary)]">主题映射依据：{source.source_id} / {source.locator}：“{source.quote}”</p>)}
+                  </div>)}
+                </div>
+              </details>}
               <p>
                 {nodeEvidenceSummaryText({
                   term: node.term,

@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _load_editable_lexicon_registry(entity_uuid, *, enabled: bool = True):
-    """Shared lexicon loader (P2-4). Returns None when disabled or on failure."""
+    """Return None only when intentionally disabled; never hide load failures."""
     if not enabled or entity_uuid is None:
         return None
     try:
@@ -55,7 +55,7 @@ async def _load_editable_lexicon_registry(entity_uuid, *, enabled: bool = True):
             return await AmwayEntityLexiconService(db).registry_for_entity(entity_uuid)
     except Exception as exc:
         logger.warning("[Amway] Failed to load editable lexicon: %s", exc)
-        return None
+        raise RuntimeError("Unable to load effective Amway lexicon") from exc
 
 
 async def _load_lexicon_entries(entity_uuid) -> list[Any]:
@@ -129,12 +129,21 @@ async def amway_extract_node(state: AgentState) -> Command:
         logger.info(
             "[AmwayExtract] Lexicon edge disconnected; skipping editable lexicon load."
         )
-    registry = await _load_editable_lexicon_registry(
-        entity_uuid, enabled=load_lexicon
-    )
+    realtime = state.get("realtime_entity_extraction_result") or {}
+    frozen_snapshot = realtime.get("effective_lexicon_snapshot")
+    if frozen_snapshot:
+        from app.ontology import AmwayEntityOntologyRegistry
+        registry = AmwayEntityOntologyRegistry.from_snapshot(frozen_snapshot)
+        if registry.effective_hash != realtime.get("effective_lexicon_hash"):
+            raise ValueError("Realtime lexicon snapshot hash mismatch")
+    else:
+        registry = await _load_editable_lexicon_registry(entity_uuid, enabled=load_lexicon)
 
     extraction_service = AmwayEntityExtractionService(registry=registry)
     extraction_result = extraction_service.extract_from_fetch_results(fetch_results)
+    extraction_result["lexicon_source"] = realtime.get("lexicon_source") if frozen_snapshot else (
+        "editable" if entity_uuid and load_lexicon else "bundled"
+    )
 
     realtime_extraction_result = state.get("realtime_entity_extraction_result")
     realtime_signal_count = 0
@@ -271,17 +280,16 @@ async def amway_projection_node(state: AgentState) -> Command:
         AmwayEntityExtractionService,
     )
 
-    entity_uuid = _uuid_or_none(state.get("entity_id"))
-    # Projection still uses lexicon for calibration when available; respect
-    # lexicon edge if topology is loaded (same gate as extract).
-    flow_topology_for_lex = await load_flow_topology(state.get("entity_id"))
-    registry = await _load_editable_lexicon_registry(
-        entity_uuid, enabled=lexicon_chain_enabled(flow_topology_for_lex)
-    )
+    # Calibration uses the extraction snapshot, including its chosen lexicon gate.
+    frozen_snapshot = extraction_result.get("effective_lexicon_snapshot")
+    if not frozen_snapshot:
+        raise ValueError("Extraction has no frozen lexicon; explicitly rerun extraction before calibration")
+    from app.ontology import AmwayEntityOntologyRegistry
+    registry = AmwayEntityOntologyRegistry.from_snapshot(frozen_snapshot)
 
     extraction_service = AmwayEntityExtractionService(registry=registry)
     calibration_service = AmwayEntityCalibrationService(
-        extraction_service=extraction_service
+        registry=registry, extraction_service=extraction_service
     )
     calibration_result = calibration_service.calibrate(
         fetch_results=fetch_results,

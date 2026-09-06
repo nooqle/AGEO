@@ -599,7 +599,27 @@ export interface OntologyRecommendationTaskResponse {
   world: OntologyWorldSummary;
 }
 
+export interface AmwayTopicContribution {
+  entity_id: string;
+  entity_name: string;
+  semantic_type?: string;
+  contribution_kind: 'mapped' | 'direct';
+  matched_text?: string;
+  evidence_text?: string;
+  answer_id?: string;
+  platform?: string;
+  mapping_sources?: Array<{ source_id: string; locator: string; quote: string }>;
+  source_refs?: Array<{ source_id: string; locator: string; quote: string }>;
+}
+
   export interface OntologyAssociationCircleNode {
+    contribution_mode?: 'direct' | 'mapped' | 'mixed';
+    contribution_label?: string;
+    direct_answer_count?: number;
+    mapped_answer_count?: number;
+    overlap_answer_count?: number;
+    supporting_answer_count?: number;
+    topic_contributions?: AmwayTopicContribution[];
     node_id: string;
     entity_id?: string;
     entity_type?: string;
@@ -655,6 +675,7 @@ export interface OntologyRecommendationTaskResponse {
   }
 
 export interface OntologyAssociationCircleEvidence {
+  topic_contributions?: AmwayTopicContribution[];
   evidence_id: string;
   entity_id?: string;
   lexicon_entity_id?: string;
@@ -979,6 +1000,7 @@ export interface OntologyAssociationCircleStorylineAnalysis {
 }
 
 export interface OntologyAssociationCircleProjection {
+  object_index?: Array<{ entity_id: string; entity_name: string; evidence_text: string; platform: string; answer_id: string; semantic_definition?: { semantic_type?: string } }>;
   dashboard_variant?: string | null;
   analysis_mode?: string;
   report_kind?: string;

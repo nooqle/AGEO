@@ -70,6 +70,7 @@ class AmwayEntityLexiconOverride(Base):
     aliases: Mapped[list | None] = mapped_column(JSONText, nullable=True)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     related_terms: Mapped[list | None] = mapped_column(JSONText, nullable=True)
+    semantic_definition: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
     graph_policy: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
     source_policy: Mapped[dict | None] = mapped_column(JSONText, nullable=True)
     review_status: Mapped[str] = mapped_column(

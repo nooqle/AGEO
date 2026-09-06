@@ -39,6 +39,7 @@ from app.services.amway_entity_calibration_service import (
     SUPPORTIVE_CONTEXT_CUES,
 )
 from app.services.amway_entity_extraction_service import EXTRACTION_SCHEMA_VERSION
+from app.services.amway_topic_projection import topic_support_summary
 from app.tools.a4_fetch_agent import normalize_public_platform_id
 from app.workflow.a5.association_circle import (
     REPORT_COPY_CONSTRAINT_VERSION,
@@ -299,7 +300,7 @@ class AmwayCircleTrackingService:
                 projection,
                 [row.id for row in current_runs],
             )
-        if projection is not None:
+        if projection is not None and projection.get("status") != "incompatible_versions":
             current_summary = _dict(projection.get("sample_scope"))
         if projection is None:
             projection = _empty_period_projection(
@@ -523,6 +524,8 @@ class AmwayCircleTrackingService:
         )
         if not _int(_dict(view.get("current_period")).get("run_count")):
             raise ValueError("当前周期没有可用采集轮次，无法生成报告。")
+        if _dict(view.get("projection")).get("status") == "incompatible_versions":
+            raise ValueError("所选轮次口径不同，请选择单轮生成报告。")
         if view.get("report_id"):
             return view
 
@@ -770,6 +773,17 @@ class AmwayCircleTrackingService:
         )
         if circle_run is None and not create_run_if_missing:
             return None
+        incoming_extraction = _dict(state.get("entity_extraction_result"))
+        if circle_run is not None and (
+            circle_run.extraction_version != (incoming_extraction.get("schema_version") or circle_run.extraction_version)
+            or (incoming_extraction.get("effective_lexicon_hash") and circle_run.lexicon_hash
+                and circle_run.lexicon_hash != incoming_extraction["effective_lexicon_hash"])
+        ):
+            # A semantic repair never relabels a persisted historical run.
+            raise ValueError(
+                "incompatible_version: 本轮已保存的词库或抽取版本与输入不同；"
+                "旧记录保持不变，请新建分析轮次。"
+            )
         if circle_run is not None and create_report:
             projection = (
                 (
@@ -821,15 +835,25 @@ class AmwayCircleTrackingService:
         extraction_result = _dict(state.get("entity_extraction_result"))
         calibration_result = _dict(state.get("entity_calibration_result"))
         artifact_calibration = _dict(artifact.get("entity_calibration_result"))
+        effective_hash = extraction_result.get("effective_lexicon_hash")
+        if extraction_result.get("schema_version") == EXTRACTION_SCHEMA_VERSION and not effective_hash:
+            raise ValueError("Semantic extraction requires an effective lexicon hash")
+        if effective_hash:
+            from app.ontology import AmwayEntityOntologyRegistry
+            frozen = AmwayEntityOntologyRegistry.from_snapshot(extraction_result.get("effective_lexicon_snapshot") or {})
+            if frozen.effective_hash != effective_hash:
+                raise ValueError("Extraction snapshot hash does not match persisted run")
+            calibration_hash = calibration_result.get("effective_lexicon_hash") or artifact_calibration.get("effective_lexicon_hash")
+            if calibration_hash != effective_hash:
+                raise ValueError("Extraction and calibration used different effective lexicons")
         calibrated = str(
             projection_body.get("generated_from") or ""
         ) == "entity_calibration" or bool(calibration_result)
-        ontology = load_default_amway_entity_ontology().definition
         ontology_version = str(
             calibration_result.get("ontology_version")
             or extraction_result.get("ontology_version")
             or artifact_calibration.get("ontology_version")
-            or ontology.version
+            or "legacy_unknown"
         )
         completed_at = _datetime_or_now(
             artifact.get("updated_at") or calibration_result.get("generated_at")
@@ -883,14 +907,14 @@ class AmwayCircleTrackingService:
             },
             "question_signature": _question_signature(question_bank),
             "lexicon_version": ontology_version,
-            "lexicon_hash": _payload_hash(ontology.model_dump(mode="json")),
+            "lexicon_hash": extraction_result.get("effective_lexicon_hash") or "legacy_unknown",
             "extraction_version": str(
-                extraction_result.get("schema_version") or EXTRACTION_SCHEMA_VERSION
+                extraction_result.get("schema_version") or "legacy_unknown"
             ),
             "calibration_version": str(
                 calibration_result.get("schema_version")
                 or artifact_calibration.get("schema_version")
-                or CALIBRATION_SCHEMA_VERSION
+                or "legacy_unknown"
             ),
             "projection_version": str(artifact.get("schema_version") or "v1"),
             "include_in_cumulative": include_in_cumulative,
@@ -927,6 +951,12 @@ class AmwayCircleTrackingService:
             artifact=artifact,
             projection_body=projection_body,
         )
+        projection_body = {
+            **projection_body,
+            "effective_lexicon_hash": extraction_result.get("effective_lexicon_hash"),
+            "extraction_version": extraction_result.get("schema_version") or "legacy_unknown",
+            "object_index": calibration_result.get("object_index", []),
+        }
         projection = await self._upsert_run_projection(
             circle_run=circle_run,
             artifact=artifact,
@@ -2378,6 +2408,9 @@ def _comparison_notice(
     previous_runs: list[AmwayCircleRun],
     question_set_changed: bool,
 ) -> str:
+    versions = {(row.extraction_version, row.lexicon_hash) for row in [*current_runs, *previous_runs]}
+    if len(versions) > 1:
+        return "所选轮次的词库或抽取口径不同，主题指标不可直接合并或比较；请查看单轮结果。"
     if not current_runs:
         return "当前周期没有可用采集轮次，本报告仅作为空周期提示。"
     if not previous_runs:
@@ -2395,6 +2428,10 @@ def _aggregate_projection(
         return None
     bodies = _projection_bodies(projections)
     body = _period_projection_shell(bodies[0][1])
+    if len({_semantic_version(value) for _, value in bodies}) > 1:
+        return {**body, "status": "incompatible_versions", "nodes": [],
+                "comparison_notice": "所选轮次的词库或抽取口径不同，请查看单轮结果。",
+                "version_groups": sorted({_semantic_version(value) for _, value in bodies})}
     body["nodes"] = _aggregate_nodes(list(reversed(bodies)))
     question_bank = _aggregate_question_bank(bodies)
     # 实时聚合路径同样需要携带证据与答案原文（报告路径 _build_period_report_artifact
@@ -2967,7 +3004,13 @@ def _period_projection_shell(base: dict[str, Any]) -> dict[str, Any]:
         "nodes": [],
         "edges": [],
         "artifact_id": None,
+        "effective_lexicon_hash": base.get("effective_lexicon_hash"),
+        "extraction_version": base.get("extraction_version") or "legacy_unknown",
     }
+
+
+def _semantic_version(body: dict[str, Any]) -> str:
+    return f"{body.get('extraction_version') or 'legacy_unknown'}:{body.get('effective_lexicon_hash') or 'legacy_unknown'}"
 
 
 def _build_period_report_artifact(
@@ -2978,6 +3021,8 @@ def _build_period_report_artifact(
     *,
     entity_id: UUID | None = None,
 ) -> dict[str, Any]:
+    if len({_semantic_version(value) for _, value in bodies}) > 1:
+        raise ValueError("Cannot combine different lexicon or extraction versions in one report")
     evidence_samples = _aggregate_period_items(
         bodies,
         field="evidence_samples",
@@ -3520,6 +3565,7 @@ def _aggregate_nodes(
                     "count_modes": set(),
                     "stance_summary": {},
                     "relation_type_distribution": {},
+                    "topic_contributions": [],
                 },
             )
             answers = _node_answers(node)
@@ -3531,6 +3577,10 @@ def _aggregate_nodes(
                 bucket["fallback_evidence"] = evidence
             weight = max(answers, 1)
             bucket["answers"] += answers
+            bucket["topic_contributions"].extend(
+                {**item, "answer_id": f"{run_id}:{item.get('answer_id', '')}"}
+                for item in node.get("topic_contributions", []) if isinstance(item, dict)
+            )
             bucket["questions"] += _int(node.get("question_count"))
             bucket["question_ids"].update(_string_list(node.get("trigger_questions")))
             bucket["evidence"] += evidence
@@ -3572,6 +3622,10 @@ def _aggregate_nodes(
     rows: list[dict[str, Any]] = []
     for bucket in buckets.values():
         node = deepcopy(bucket["latest_node"] or bucket["fallback_node"] or {})
+        node["topic_contributions"] = bucket["topic_contributions"]
+        if node["topic_contributions"]:
+            node.update(topic_support_summary(node["topic_contributions"]))
+            node["origin_label"] = node["contribution_label"]
         platform_summary = bucket["platform_summary"]
         answer_count, count_semantics, is_exact, keep_refs = (
             _merged_answer_count_semantics(
@@ -3712,6 +3766,8 @@ def _change_top5(
     current_projection: dict[str, Any] | None,
     previous_projection: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
+    if _semantic_version(current_projection or {}) != _semantic_version(previous_projection or {}):
+        return []
     current = _node_map(current_projection)
     previous = _node_map(previous_projection)
     current_answers = _projection_valid_answer_count(current_projection)

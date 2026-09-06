@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 MainOrbitPolicy = Literal[
@@ -57,6 +57,56 @@ class AmwaySourcePolicy(BaseModel):
     user_confirmed: bool = False
 
 
+class AmwaySemanticSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    quote: str = Field(min_length=1)
+
+
+class AmwayTopicMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_entity_id: str = Field(min_length=1)
+    review_status: ReviewStatus = "pending_review"
+    source_refs: tuple[AmwaySemanticSource, ...] = Field(min_length=1)
+
+
+class AmwayObjectRelation(AmwayTopicMapping):
+    relation_type: Literal[
+        "contains", "produced_by", "authored_by", "supports", "used_by",
+        "associated_with", "part_of", "uses_technology", "hosted_by",
+    ]
+
+
+class AmwaySemanticDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    semantic_type: Literal[
+        "brand", "organization", "product", "material", "tool", "person",
+        "concept", "topic", "unresolved", "document", "event", "place", "program",
+    ]
+    identity_scope: str = Field(min_length=1)
+    match_policy: Literal["exact", "contextual", "disabled"] = "disabled"
+    context_terms: tuple[str, ...] = ()
+    graph_role: Literal["topic", "object", "context", "anchor"]
+    merged_into: str | None = None
+    repair_id: str | None = None
+    source_manifest_hash: str | None = None
+    source_refs: tuple[AmwaySemanticSource, ...] = Field(min_length=1)
+    topic_mappings: tuple[AmwayTopicMapping, ...] = ()
+    relations: tuple[AmwayObjectRelation, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_matching(self):
+        if self.match_policy == "contextual" and not any(self.context_terms):
+            raise ValueError("contextual matching requires context_terms")
+        if self.semantic_type == "unresolved" and self.match_policy != "disabled":
+            raise ValueError("unresolved identities cannot match automatically")
+        return self
+
+
 class AmwayEntityDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -69,6 +119,7 @@ class AmwayEntityDefinition(BaseModel):
     graph_policy: AmwayGraphPolicy
     source_policy: AmwaySourcePolicy
     review_status: ReviewStatus = "approved"
+    semantic_definition: AmwaySemanticDefinition | None = None
 
 
 class AmwayRelationTypeDefinition(BaseModel):

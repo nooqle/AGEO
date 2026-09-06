@@ -6686,6 +6686,7 @@ def _build_report_from_calibrated_input(
         "entity_calibration_result": {
             "schema_version": entity_calibration_result.get("schema_version"),
             "ontology_version": entity_calibration_result.get("ontology_version"),
+            "effective_lexicon_hash": entity_calibration_result.get("effective_lexicon_hash"),
             "generated_at": entity_calibration_result.get("generated_at"),
         },
         "updated_at": datetime.now(timezone.utc).isoformat(),

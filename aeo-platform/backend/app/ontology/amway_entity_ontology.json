@@ -1,6 +1,6 @@
 {
   "ontology_id": "amway_entity_ontology",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "source_document": "docs/amway-entity-lexicon-v0.1-2026-06-15.md",
   "center_brand_policy": {
     "default_center_brand": "安利",
@@ -14,6 +14,15 @@
     ]
   },
   "entity_types": [
+    {
+      "type_id": "Object",
+      "label": "独立对象",
+      "definition": "具体身份由语义类型声明，仅作为主题下钻对象。",
+      "default_graph_role": "evidence",
+      "extractable_from": ["question", "answer"],
+      "allowed_relation_types": ["MENTIONED_IN_QUESTION", "MENTIONED_IN_ANSWER"],
+      "review_required": true
+    },
     {
       "type_id": "CenterBrand",
       "label": "中心品牌",

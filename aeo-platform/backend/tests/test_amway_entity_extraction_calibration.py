@@ -39,8 +39,11 @@ def test_model_citation_markers_are_removed_before_rendering(raw, expected):
 
 
 def test_amway_entity_extraction_outputs_answer_bound_signals():
+    fetch_results = amway_association_fetch_results()
+    # A solution must be mentioned explicitly; a subbrand cue is not identity.
+    fetch_results[0]["platform_results"][0]["answer"]["content"] += "营养早餐。"
     extraction = AmwayEntityExtractionService().extract_from_fetch_results(
-        amway_association_fetch_results()
+        fetch_results
     )
 
     signals = extraction["signals"]
@@ -148,7 +151,8 @@ def test_answer_extraction_does_not_use_related_terms_as_answer_evidence():
     signals = extraction["signals"]
 
     assert not [signal for signal in signals if signal["entity_name"] == "传销/拉人头"]
-    assert any(
+    # The bundled direct-selling entry is pending review and cannot match.
+    assert not any(
         signal["entity_name"] == "直销" and signal["matched_text"] == "直销"
         for signal in signals
     )
@@ -777,7 +781,7 @@ def test_strategy_validation_excludes_market_context_questions_from_evidence_ref
                     "platform": "豆包",
                     "success": True,
                     "answer": {
-                        "content": "可以参加老友俱乐部、兴趣社群和志愿服务，获得朋友、陪伴和价值感。"
+                        "content": "可以参加老友俱乐部、兴趣社群和志愿服务，建立良好关系，获得朋友、陪伴和价值感。"
                     },
                 }
             ],
@@ -792,7 +796,7 @@ def test_strategy_validation_excludes_market_context_questions_from_evidence_ref
                     "platform": "Kimi",
                     "success": True,
                     "answer": {
-                        "content": "安利可以通过美好生活社群提供朋友、陪伴和社群支持，但也要看投入和风险。"
+                        "content": "安利可以通过美好生活社群建立良好关系，提供朋友、陪伴和社群支持，但也要看投入和风险。"
                     },
                 }
             ],
@@ -1070,7 +1074,7 @@ def test_positive_regulation_context_does_not_become_amway_risk():
                     "success": True,
                     "answer": {
                         "content": (
-                            "汤臣倍健有蓝帽子认证和国产合规优势，适合基础补充。"
+                            "监管信息显示：汤臣倍健有蓝帽子认证和国产合规优势，适合基础补充。"
                             "纽崔莱属于中高价路线，直销加线上渠道，有专业营养指导，长期投入高。"
                         )
                     },
@@ -1260,7 +1264,7 @@ def test_review_regression_negative_context_does_not_become_positive_validation(
                             "安利确实会把良好关系、社群陪伴和事业机会放在一起讲，"
                             "也会提到收入与保障。但直销基因的枷锁仍然存在，"
                             "其商业模式的核心依然是直销。少数赚钱、多数陪跑，"
-                            "现实中的风险并未消失。2005年《直销管理条例》禁止多层计酬后，"
+                            "现实中的风险并未消失。相关监管信息：2005年《直销管理条例》禁止多层计酬后，"
                             "销售体系受到巨大影响。"
                         )
                     },

@@ -11,6 +11,7 @@ export interface AmwayEntityTypeDefinition {
 }
 
 export interface AmwayEntityLexiconEntry {
+  semantic_definition?: AmwaySemanticDefinition | null;
   id: string;
   entity_id: string;
   canonical_name: string;
@@ -35,6 +36,7 @@ export interface AmwayEntityLexiconEntry {
 }
 
 export interface AmwayEntityLexiconResponse {
+  effective_hash?: string;
   entity_id: string;
   entity_name: string;
   ontology_id: string;
@@ -45,12 +47,33 @@ export interface AmwayEntityLexiconResponse {
 }
 
 export interface AmwayEntityLexiconMutationInput {
+  semantic_definition?: AmwaySemanticDefinition;
   canonical_name?: string;
   entity_type?: string;
   aliases?: string[];
   description?: string;
   related_terms?: string[];
   review_status?: string;
+}
+
+export interface AmwaySemanticSource {
+  source_id: string;
+  locator: string;
+  quote: string;
+}
+
+export interface AmwaySemanticDefinition {
+  semantic_type: string;
+  identity_scope: string;
+  match_policy: 'exact' | 'contextual' | 'disabled';
+  context_terms: string[];
+  graph_role: 'topic' | 'object' | 'context' | 'anchor';
+  merged_into?: string | null;
+  repair_id?: string | null;
+  source_manifest_hash?: string | null;
+  source_refs: AmwaySemanticSource[];
+  topic_mappings: Array<{ target_entity_id: string; review_status: string; source_refs: AmwaySemanticSource[] }>;
+  relations: Array<{ target_entity_id: string; relation_type: string; review_status: string; source_refs: AmwaySemanticSource[] }>;
 }
 
 export interface AmwayQuestionHistorySet {

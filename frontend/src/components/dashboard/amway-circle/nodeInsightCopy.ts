@@ -105,6 +105,9 @@ export function orbitBandExplanationText(node: OntologyAssociationCircleNode, di
   const evidencePhrase = nodeCountPhrase(node, evidence || 0);
   const platform = nodePlatformCount(node);
   const closeness = nodeClosenessValue(node);
+  if (node.contribution_mode === 'mapped') {
+    return `系统贴近值为 ${closeness || 0}，反映回答中对象对本主题的归组支持程度，覆盖 ${platform || 0} 个平台；不能据此认为平台直接提及了“${node.term}”。`;
+  }
   if (distanceBand === 'risk') {
     return isCompetitorNode(node)
       ? `竞争参照单独展开，避免和品牌风险共用同一解释。本轮 ${evidencePhrase}将它作为竞争或替代对象，覆盖 ${platform || 0} 个平台。`
@@ -120,10 +123,20 @@ export function orbitBandExplanationText(node: OntologyAssociationCircleNode, di
 }
 
 export function nodeOriginShortLabel(kind: ReturnType<typeof nodeOriginRead>['kind']) {
+  if (kind === 'mapped') return '归组';
+  if (kind === 'mixed') return '混合';
   return kind === 'strategy' ? '战略' : '回答';
 }
 
 export function nodeOriginRead(node: OntologyAssociationCircleNode, strategyTerms: string[]) {
+  if (node.contribution_mode === 'mapped') {
+    return { kind: 'mapped' as const, label: '对象归组主题',
+      description: '回答提及了独立对象，再依据已审定的对应关系归入本主题；回答未直接提及本主题。' };
+  }
+  if (node.contribution_mode === 'mixed') {
+    return { kind: 'mixed' as const, label: '直接提及与对象归组',
+      description: '本主题同时有直接提及和对象归组贡献，回答交集只计一次。' };
+  }
   const backendOrigin = String(node.term_origin || '').toLowerCase();
   const isStrategy = backendOrigin === 'strategy' || (
     backendOrigin !== 'answer' && nodeMatchesStrategyTerms(node, strategyTerms)
@@ -167,6 +180,12 @@ export function nodeBrandRelationText(
 ) {
   const groupKey = classifyAssociationNode(node);
   const path = associationPathLabel(node);
+  if (node.contribution_mode === 'mapped') {
+    return `“${node.term}”是对象归组主题：${node.mapped_answer_count || 0} 条回答中的对象映射到本主题，未直接提及本主题。它与${centerTerm}的连接来自对象证据和已审定的主题归属，需分别核对。`;
+  }
+  if (node.contribution_mode === 'mixed') {
+    return `“${node.term}”有 ${node.direct_answer_count || 0} 条回答直接提及，另有 ${node.mapped_answer_count || 0} 条回答提供对象归组贡献；两者重合 ${node.overlap_answer_count || 0} 条，合计去重 ${node.supporting_answer_count || 0} 条。对象归组部分不能当作主题名称的直接提及。`;
+  }
 
   if (groupKey === 'risk') {
     if (isCompetitorNode(node)) {
@@ -197,6 +216,12 @@ export function nodeBrandImplicationText(
   centerTerm: string,
   origin: ReturnType<typeof nodeOriginRead>,
 ) {
+  if (node.contribution_mode === 'mapped') {
+    return '应分别核对回答中的对象原文、对象文章来源和主题映射依据；目前不能把这个归组主题视为平台直接使用的品牌表达。';
+  }
+  if (node.contribution_mode === 'mixed') {
+    return '应分别观察直接提及和对象归组贡献的变化，并按回答去重；不能把两类计数直接相加。';
+  }
   const groupKey = classifyAssociationNode(node);
   if (groupKey === 'risk') {
     if (isCompetitorNode(node)) {
@@ -240,7 +265,11 @@ export function nodeEvidenceSummaryText({
   const questionPart = questionCount ? `本轮围绕 ${questionCount} 个问题发问` : '本轮问题样本中';
   const answerPart = totalAnswerCount ? `，抓取到 ${totalAnswerCount} 条有效回答` : '';
   const mentionCountPhrase = nodeCountPhrase(node, mentionAnswerCount);
-  const mentionPart = mentionAnswerCount
+  const mentionPart = node.contribution_mode === 'mapped'
+    ? `其中 ${node.mapped_answer_count ?? mentionAnswerCount} 条回答中的对象映射到本主题，未直接提及“${term}”`
+    : node.contribution_mode === 'mixed'
+    ? `其中 ${node.direct_answer_count || 0} 条回答直接提及“${term}”，${node.mapped_answer_count || 0} 条提供对象归组贡献，重合 ${node.overlap_answer_count || 0} 条，合计去重 ${node.supporting_answer_count ?? mentionAnswerCount} 条`
+    : mentionAnswerCount
     ? competitionScoped
       ? `其中 ${mentionCountPhrase}将“${term}”作为竞争或替代参照`
       : riskScoped
@@ -253,7 +282,9 @@ export function nodeEvidenceSummaryText({
       : `目前还没有形成与“${term}”有关的稳定节点提及`;
   const relatedPart = relatedQuestionCount ? `，覆盖 ${relatedQuestionCount} 个相关问题` : '';
   const platformPart = platformNames.length ? `，来自 ${platformNames.join('、')}` : '';
-  const verdict = mentionAnswerCount
+  const verdict = node.contribution_mode === 'mapped'
+    ? '这是有回答对象支持的归组线索，需结合对象文章来源和主题映射依据解读。'
+    : mentionAnswerCount
     ? competitionScoped
       ? '它已进入竞争观察范围，需要结合平台分布和原文判断比较发生在哪些场景。'
       : riskScoped

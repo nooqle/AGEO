@@ -57,6 +57,7 @@ class EntityLexiconEntryRequest(BaseModel):
     graph_policy: dict[str, Any] | None = None
     source_policy: dict[str, Any] | None = None
     review_status: str | None = None
+    semantic_definition: dict[str, Any] | None = None
 
 
 class SaveQuestionSetRequest(BaseModel):
@@ -246,6 +247,32 @@ async def get_entity_lexicon(
     payload["entity_id"] = str(entity.id)
     payload["entity_name"] = entity.name
     return payload
+
+
+@router.get("/entities/{entity_id}/entity-lexicon/repair-export")
+async def export_entity_lexicon_repair(
+    entity_id: str, current_user=Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    from app.services.amway_lexicon_repair_service import export_repair_state
+    entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
+    return await export_repair_state(AmwayEntityLexiconService(db), entity.id)
+
+
+@router.post("/entities/{entity_id}/entity-lexicon/repair")
+async def apply_entity_lexicon_repair(
+    entity_id: str, body: dict[str, Any], apply: bool = Query(False),
+    current_user=Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    from app.services.amway_lexicon_repair_service import repair_lexicon
+    entity = await _require_amway_entity(db, current_user, entity_id, manage=True)
+    try:
+        return await repair_lexicon(
+            AmwayEntityLexiconService(db), entity=entity,
+            user_id=current_user.id, package=body, apply=apply,
+        )
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/entities/{entity_id}/entity-lexicon", status_code=201)

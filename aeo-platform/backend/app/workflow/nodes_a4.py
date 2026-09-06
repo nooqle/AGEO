@@ -2526,6 +2526,18 @@ async def _activate_plan_after_question_confirmation(
         return {}
 
 
+async def _amway_realtime_extractor(entity_uuid, *, enabled=True):
+    from app.core.database import AsyncSessionLocal
+    from app.services.amway_entity_lexicon_service import AmwayEntityLexiconService
+    from app.services.amway_entity_extraction_service import AmwayEntityExtractionService
+
+    registry = None
+    if entity_uuid is not None and enabled:
+        async with AsyncSessionLocal() as db:
+            registry = await AmwayEntityLexiconService(db).registry_for_entity(entity_uuid)
+    return AmwayEntityExtractionService(registry=registry)
+
+
 async def a4_fetch_node(state: AgentState) -> Command:
     """A4: Fetch answers from AI platforms for all questions.
 
@@ -2710,36 +2722,15 @@ async def a4_fetch_node(state: AgentState) -> Command:
     realtime_entity_extraction_result: dict[str, Any] | None = None
     if _is_association_circle_context(state):
         try:
-            from app.services.amway_entity_extraction_service import (
-                AmwayEntityExtractionService,
-            )
-
-            registry = None
             entity_uuid = _uuid_or_none(state.get("entity_id"))
-            if entity_uuid is not None:
-                try:
-                    from app.core.database import AsyncSessionLocal
-                    from app.services.amway_entity_lexicon_service import (
-                        AmwayEntityLexiconService,
-                    )
-
-                    async with AsyncSessionLocal() as db:
-                        registry = await AmwayEntityLexiconService(
-                            db
-                        ).registry_for_entity(entity_uuid)
-                except Exception as lexicon_err:
-                    logger.warning(
-                        "[A4] Failed to load realtime Amway editable lexicon: %s",
-                        lexicon_err,
-                    )
-
-            realtime_entity_extraction_service = AmwayEntityExtractionService(
-                registry=registry
-            )
+            from app.workflow.topology_resolver import lexicon_chain_enabled
+            lexicon_enabled = lexicon_chain_enabled(flow_topology)
+            realtime_entity_extraction_service = await _amway_realtime_extractor(entity_uuid, enabled=lexicon_enabled)
             realtime_entity_extraction_result = (
                 realtime_entity_extraction_service.extract_from_fetch_results([])
             )
             realtime_entity_extraction_result["realtime_extraction_enabled"] = True
+            realtime_entity_extraction_result["lexicon_source"] = "editable" if entity_uuid and lexicon_enabled else "bundled"
             realtime_entity_extraction_result["realtime_answer_ids"] = []
         except Exception as extraction_init_err:
             logger.warning(
@@ -2748,6 +2739,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             )
             realtime_entity_extraction_service = None
             realtime_entity_extraction_result = None
+            raise RuntimeError("Amway effective lexicon initialization failed; collection was not started") from extraction_init_err
 
     try:
         # Initialize fetchers based on fetch_mode

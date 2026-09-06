@@ -15,12 +15,13 @@ from typing import Any
 
 from app.ontology import AmwayEntityDefinition, AmwayEntityOntologyRegistry
 from app.ontology import load_default_amway_entity_ontology
+from app.services.amway_topic_projection import topic_support_summary
 from app.services.amway_entity_extraction_service import (
     AmwayEntityExtractionService,
 )
 
 
-CALIBRATION_SCHEMA_VERSION = "2026-07-14"
+CALIBRATION_SCHEMA_VERSION = "2026-09-06-semantic-v2"
 RISK_ORBIT = "risk_shadow"
 STRATEGY_ENTITY_TYPES = {"BrandStrategy", "FourValue", "FlowerDimension"}
 EXCLUDED_RELATION_TYPES = {"MARKET_CONTEXT_ONLY", "RISK_DENIED"}
@@ -202,7 +203,7 @@ class AmwayEntityCalibrationService:
         registry: AmwayEntityOntologyRegistry | None = None,
         extraction_service: AmwayEntityExtractionService | None = None,
     ) -> None:
-        self.registry = registry or load_default_amway_entity_ontology()
+        self.registry = registry or (extraction_service.registry if extraction_service else None) or load_default_amway_entity_ontology()
         self.extraction_service = extraction_service or AmwayEntityExtractionService(
             self.registry
         )
@@ -217,13 +218,32 @@ class AmwayEntityCalibrationService:
         question_bank = _build_question_bank(fetch_results)
         question_signals = self._extract_question_signals(question_bank)
         signals = _dedupe_answer_signals(extraction_result.get("signals"))
+        raw_signals = signals
+        object_index = [signal for signal in signals
+                        if isinstance(signal.get("semantic_definition"), dict)
+                        and signal["semantic_definition"].get("graph_role") in {"object", "context"}]
+        snapshot = extraction_result.get("effective_lexicon_snapshot")
+        if extraction_result.get("schema_version") == CALIBRATION_SCHEMA_VERSION and not snapshot:
+            raise ValueError("Semantic extraction requires a frozen lexicon snapshot")
+        if snapshot:
+            frozen = AmwayEntityOntologyRegistry.from_snapshot(snapshot)
+            if frozen.effective_hash != extraction_result.get("effective_lexicon_hash"):
+                raise ValueError("Effective lexicon snapshot hash mismatch")
+            if frozen.effective_hash != self.registry.effective_hash:
+                raise ValueError("Calibration registry differs from extraction snapshot")
+        from app.services.amway_topic_projection import project_topic_signals
+        signals = project_topic_signals(
+            [signal for signal in signals if signal.get("relation_type") not in EXCLUDED_RELATION_TYPES],
+            self.registry,
+        )
         accumulators = self._build_accumulators(signals)
         sample_scope = self._build_sample_scope(
             fetch_results=fetch_results,
             extraction_result=extraction_result,
             question_bank=question_bank,
-            signals=signals,
+            signals=raw_signals,
         )
+        sample_scope["topic_signal_count"] = len(signals)
         requested_platforms = _all_platform_names(fetch_results, signals)
         valid_platforms = _valid_platform_names(fetch_results, signals)
         platforms = valid_platforms or requested_platforms
@@ -265,6 +285,8 @@ class AmwayEntityCalibrationService:
             "nodes": nodes,
             "evidence_samples": evidence_samples,
             "generated_from": "entity_calibration",
+            "effective_lexicon_hash": extraction_result.get("effective_lexicon_hash"),
+            "extraction_version": extraction_result.get("schema_version") or "legacy_unknown",
         }
         evidence_findings = _build_evidence_findings(
             nodes=nodes,
@@ -300,6 +322,9 @@ class AmwayEntityCalibrationService:
             "tracking_projection": tracking_projection,
         }
         projection = {
+            "object_index": object_index,
+            "effective_lexicon_hash": extraction_result.get("effective_lexicon_hash"),
+            "extraction_version": extraction_result.get("schema_version") or "legacy_unknown",
             "center_terms": association_map["center_terms"],
             "nodes": nodes,
             "evidence_samples": evidence_samples,
@@ -321,9 +346,11 @@ class AmwayEntityCalibrationService:
 
         return {
             "service": "AmwayEntityCalibrationService",
+            "object_index": object_index,
             "schema_version": CALIBRATION_SCHEMA_VERSION,
             "ontology_id": self.registry.definition.ontology_id,
             "ontology_version": self.registry.definition.version,
+            "effective_lexicon_hash": extraction_result.get("effective_lexicon_hash"),
             "sample_scope": sample_scope,
             "association_map": association_map,
             "risk_map": risk_map,
@@ -485,7 +512,11 @@ class AmwayEntityCalibrationService:
                 )
                 evidence_samples.append(evidence_payload)
                 node_evidence_ids.append(evidence_id)
+            contributions = [contribution for signal in acc.signals
+                             for contribution in signal.get("topic_contributions", [])]
+            support = topic_support_summary(contributions)
             node = {
+                **support,
                 "node_id": node_id,
                 "entity_id": acc.entity_id,
                 "entity_type": acc.entity_type,
@@ -494,10 +525,11 @@ class AmwayEntityCalibrationService:
                     item for item, _count in acc.matched_texts.most_common(8) if item
                 ],
                 "term_origin": acc.term_origin,
-                "origin_label": "战略词" if acc.term_origin == "strategy" else "回答词",
+                "origin_label": support["contribution_label"],
                 "source_policy": acc.source_policy,
                 "graph_policy": acc.graph_policy,
                 "review_status": acc.review_status,
+                "topic_contributions": contributions,
                 "orbit": orbit,
                 "orbit_label": orbit_label,
                 "business_tag": _business_tag(acc, score, is_risk),
@@ -545,6 +577,8 @@ class AmwayEntityCalibrationService:
                     platform_count=len([item for item in acc.platforms if item]),
                 ),
             }
+            if support["contribution_mode"] != "direct":
+                node["orbit_reason"] = f"{support['contribution_label']}支持；" + node["orbit_reason"]
             nodes.append(node)
         nodes.sort(key=_node_sort_key)
         return nodes, evidence_samples
@@ -1241,6 +1275,7 @@ def _evidence_payload(
         "question": signal.get("question"),
         "matched_text": signal.get("matched_text"),
         "match_source": signal.get("match_source"),
+        "topic_contributions": signal.get("topic_contributions", []),
         "answer_excerpt": signal.get("evidence_text"),
         "answer_position": signal.get("answer_position"),
         "relation_type": signal.get("relation_type"),

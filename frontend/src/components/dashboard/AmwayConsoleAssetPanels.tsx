@@ -10,6 +10,8 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/services/api';
+import { AmwayLexiconRepairControls } from './AmwayLexiconRepairControls';
+import { semanticTypeLabels, semanticRelationLabels, lexiconStatusLabels } from './amwaySemanticLabels';
 import type {
   AmwayEntityLexiconEntry,
   AmwayEntityLexiconMutationInput,
@@ -196,6 +198,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
 
   return (
     <section className="space-y-4">
+      <AmwayLexiconRepairControls key={entityId} entityId={entityId} onApplied={load} />
       <AssetPanelHeader
         eyebrow="实体词库"
         title="安利实体词库"
@@ -269,7 +272,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                         <StatusPill label={typeLabelById.get(entry.entity_type) || entry.entity_type} />
                         <StatusPill label={ORIGIN_LABELS[entry.origin] || entry.origin} tone="neutral" />
                         <StatusPill
-                          label={REVIEW_STATUS_LABELS[entry.review_status] || entry.review_status}
+                          label={lexiconStatusLabels[entry.review_status] || entry.review_status}
                           tone={entry.review_status === 'approved' ? 'success' : 'warning'}
                         />
                       </div>
@@ -281,6 +284,18 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                           别名：{entry.aliases.slice(0, 8).join('、')}
                         </p>
                       ) : null}
+                      {entry.semantic_definition && <details className="mt-2 text-xs leading-6 text-[var(--text-secondary)]">
+                        <summary>对象类型：{semanticTypeLabels[entry.semantic_definition.semantic_type] || entry.semantic_definition.semantic_type} · 身份范围：{entry.semantic_definition.identity_scope}</summary>
+                        <p>匹配：{entry.semantic_definition.match_policy === 'disabled' ? '停用' : entry.semantic_definition.match_policy === 'contextual' ? '须近邻上下文' : '标准名与同义名称'}；主图角色：{entry.semantic_definition.graph_role === 'object' ? '独立对象下钻' : entry.semantic_definition.graph_role === 'anchor' ? '品牌锚点' : entry.semantic_definition.graph_role === 'topic' ? '主题' : '上下文'}</p>
+                        {entry.semantic_definition.topic_mappings.map((mapping) => <p key={mapping.target_entity_id}>
+                          主题归属：{entries.find((item) => item.entity_id === mapping.target_entity_id)?.canonical_name || mapping.target_entity_id}（{REVIEW_STATUS_LABELS[mapping.review_status]}）
+                        </p>)}
+                        {entry.semantic_definition.relations.map((relation, index) => <p key={index}>
+                          对象关系：{semanticRelationLabels[relation.relation_type] || relation.relation_type} → {entries.find((item) => item.entity_id === relation.target_entity_id)?.canonical_name || relation.target_entity_id}（{REVIEW_STATUS_LABELS[relation.review_status]}）
+                          {relation.source_refs.map((source) => ` ${source.locator}：${source.quote}`).join('；')}
+                        </p>)}
+                        {entry.semantic_definition.source_refs.map((source, index) => <p key={index}>来源：{source.source_id} / {source.locator}：{source.quote}</p>)}
+                      </details>}
                     </div>
                     <div className="text-sm leading-6 text-[var(--text-secondary)]">
                       <div>主图谱：{graphPolicyLabel(entry.graph_policy?.main_orbit)}</div>
@@ -344,7 +359,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                   placeholder="例如：营养早餐"
                 />
               </LexiconField>
-              <LexiconField label="实体类型">
+              <LexiconField label="业务分类">
                 <select
                   value={form.entity_type}
                   onChange={(event) => setForm((current) => ({ ...current, entity_type: event.target.value }))}
@@ -358,7 +373,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                   ))}
                 </select>
               </LexiconField>
-              <LexiconField label="别名">
+              <LexiconField label="同义名称（必须指向同一对象）">
                 <textarea
                   value={form.aliases}
                   onChange={(event) => setForm((current) => ({ ...current, aliases: event.target.value }))}
@@ -374,12 +389,12 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                   placeholder="说明这个实体在安利图谱中的含义"
                 />
               </LexiconField>
-              <LexiconField label="相关词">
+              <LexiconField label="关联线索（不直接计实体命中）">
                 <textarea
                   value={form.related_terms}
                   onChange={(event) => setForm((current) => ({ ...current, related_terms: event.target.value }))}
                   className="min-h-20 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-sm leading-6 text-[var(--text-primary)] outline-none focus:border-[var(--brand-primary)]"
-                  placeholder="用于辅助识别的相关表达"
+                  placeholder="仅供复核参考，不参与实体命中"
                 />
               </LexiconField>
               <LexiconField label="状态">

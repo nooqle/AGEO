@@ -15,6 +15,7 @@ import type {
   AmwayQuestionHistorySet,
 } from '@/types/amwayChina';
 import { api } from '@/services/api';
+import { semanticTypeLabels } from './amwaySemanticLabels';
 import type {
   OntologyAssociationCircleEvidence,
   OntologyAssociationCircleEvidenceFinding,
@@ -491,6 +492,15 @@ export function AmwayAssociationCircleDashboard({
           />
         ) : (
         <section className="min-w-0 space-y-4">
+          {Boolean(projection.object_index?.length) && <details className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4 text-sm">
+            <summary>独立对象证据（含未归入主题的对象）</summary>
+            <div className="mt-2 max-h-80 overflow-y-auto divide-y divide-[var(--border-subtle)]">
+              {projection.object_index?.map((item, index) => <div className="py-2" key={`${item.entity_id}-${item.answer_id}-${index}`}>
+                <p className="font-medium">{item.entity_name} · {semanticTypeLabels[item.semantic_definition?.semantic_type || ''] || '对象'} · {item.platform}</p>
+                <p>{item.evidence_text}</p><p className="text-xs text-[var(--text-tertiary)]">对象 ID：{item.entity_id}</p>
+              </div>)}
+            </div>
+          </details>}
           {runError ? (
             <InlineActionError message={runError} actionLabel="重试运行" onAction={handleStart} />
           ) : null}
@@ -1012,6 +1022,7 @@ function stageResultStableKey(item: StageResult): string {
 }
 
 type LiveSignal = {
+  semantic_definition?: { graph_role?: string };
   entity_name?: string;
   entity_type?: string;
   matched_text?: string;
@@ -1053,6 +1064,8 @@ export function buildLiveAssociationProjection(
 
     signals.forEach((item) => {
       const signal = item as LiveSignal;
+      const semantic = signal.semantic_definition as { graph_role?: string } | undefined;
+      if (semantic?.graph_role === 'object' || semantic?.graph_role === 'context') return;
       const term = stringValue(signal.entity_name || signal.matched_text);
       if (!term) return;
       if (blockedTerms.has(term)) return;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Iterable, TypeVar
 
@@ -36,9 +37,14 @@ class AmwayEntityOntologyRegistry:
             definition.relation_types, "relation_type", "relation_types"
         )
         self._entities = _index_by(definition.entities, "entity_id", "entities")
-        self._entities_by_name = _index_by(
-            definition.entities, "canonical_name", "entities.canonical_name"
-        )
+        self._entities_by_name = {}
+        duplicate_names = set()
+        for entity in definition.entities:
+            if entity.canonical_name in self._entities_by_name:
+                duplicate_names.add(entity.canonical_name)
+            self._entities_by_name[entity.canonical_name] = entity
+        for name in duplicate_names:
+            del self._entities_by_name[name]
         self._ambiguous_aliases: set[str] = set()
         self._alias_index = self._build_alias_index(definition.entities)
         self._validate_references()
@@ -79,6 +85,21 @@ class AmwayEntityOntologyRegistry:
 
     def get_entity(self, entity_id: str) -> AmwayEntityDefinition | None:
         return self._entities.get(entity_id)
+
+    def snapshot(self) -> dict:
+        return self.definition.model_dump(mode="json")
+
+    @property
+    def effective_hash(self) -> str:
+        payload = self.snapshot()
+        payload["entities"] = sorted(payload["entities"], key=lambda row: row["entity_id"])
+        return hashlib.sha256(json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")).hexdigest()
+
+    @classmethod
+    def from_snapshot(cls, payload: dict) -> "AmwayEntityOntologyRegistry":
+        return cls(AmwayEntityOntologyDefinition.model_validate(payload))
 
     def require_entity(self, entity_id: str) -> AmwayEntityDefinition:
         return _require(self._entities, entity_id, "Amway entity")
@@ -145,6 +166,31 @@ class AmwayEntityOntologyRegistry:
 
         for entity in self.entities:
             _require_key(entity_type_keys, entity.entity_type, f"{entity.entity_id}.type")
+            semantic = entity.semantic_definition
+            if semantic is None:
+                if entity.entity_type == "Object":
+                    raise OntologyRegistryError("Object entries require semantic_definition")
+                continue
+            if entity.entity_type == "Object" and semantic.graph_role != "object":
+                raise OntologyRegistryError("Object business type requires object graph role")
+            if semantic.graph_role == "anchor" and entity.entity_type not in {"CenterBrand", "SubBrand", "Competitor"}:
+                raise OntologyRegistryError("Only center brands, subbrands and competitors may be anchors")
+            if semantic.merged_into:
+                target = self.require_entity(semantic.merged_into)
+                if target.entity_id == entity.entity_id or entity.review_status != "merged":
+                    raise OntologyRegistryError("Invalid merged identity")
+                if target.review_status == "merged":
+                    raise OntologyRegistryError("Merge target must be a surviving identity")
+            for mapping in semantic.topic_mappings:
+                target = self.require_entity(mapping.target_entity_id)
+                if target.entity_id == entity.entity_id:
+                    raise OntologyRegistryError("Self topic mapping is not allowed")
+                if target.semantic_definition and target.semantic_definition.graph_role != "topic":
+                    raise OntologyRegistryError("Topic mapping target must have topic graph role")
+            for relation in semantic.relations:
+                target = self.require_entity(relation.target_entity_id)
+                if target.entity_id == entity.entity_id:
+                    raise OntologyRegistryError("Self object relation is not allowed")
 
         default_center = self.definition.center_brand_policy.default_center_brand
         allowed_centers = set(self.definition.center_brand_policy.allowed_center_brands)

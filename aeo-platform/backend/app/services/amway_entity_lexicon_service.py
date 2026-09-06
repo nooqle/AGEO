@@ -50,9 +50,13 @@ class AmwayEntityLexiconService:
         }
         entries = await self.merged_entities_for_entity(entity_id)
         default_ids = {item.entity_id for item in self.base_registry.entities}
+        effective = AmwayEntityOntologyRegistry(self.base_registry.definition.model_copy(
+            update={"entities": tuple(entries)}
+        ))
         return {
             "ontology_id": self.base_registry.definition.ontology_id,
             "version": self.base_registry.definition.version,
+            "effective_hash": effective.effective_hash,
             "entity_types": [
                 item.model_dump() for item in self.base_registry.entity_types
             ],
@@ -102,6 +106,7 @@ class AmwayEntityLexiconService:
         current_user_id: UUID | None,
         payload: dict[str, Any],
     ) -> AmwayEntityLexiconOverride:
+        await self._lock_entity(entity.id)
         canonical_name = _required_text(payload.get("canonical_name"), "canonical_name")
         entity_type = _required_text(payload.get("entity_type"), "entity_type")
         self.base_registry.require_entity_type(entity_type)
@@ -117,6 +122,7 @@ class AmwayEntityLexiconService:
             aliases=_string_list(payload.get("aliases")),
             description=_text(payload.get("description")),
             related_terms=_string_list(payload.get("related_terms")),
+            semantic_definition=payload.get("semantic_definition"),
             graph_policy=_graph_policy_for_payload(payload, entity_type),
             source_policy=_source_policy_for_payload(payload),
             review_status=_review_status(payload.get("review_status")),
@@ -126,7 +132,7 @@ class AmwayEntityLexiconService:
             created_at=now,
             updated_at=now,
         )
-        _override_to_definition(row, base=None)
+        await self._validate_change(entity.id, _override_to_definition(row, base=None), creating=True)
         self.db.add(row)
         await self.db.commit()
         await self.db.refresh(row)
@@ -140,6 +146,7 @@ class AmwayEntityLexiconService:
         current_user_id: UUID | None,
         payload: dict[str, Any],
     ) -> AmwayEntityLexiconOverride:
+        await self._lock_entity(entity.id)
         entity_id = _required_text(lexicon_entity_id, "entity_id")
         base = self.base_registry.get_entity(entity_id)
         row = await self._override_for_entry(entity.id, entity_id)
@@ -167,6 +174,10 @@ class AmwayEntityLexiconService:
             row.description = _text(payload.get("description"))
         if "related_terms" in payload:
             row.related_terms = _string_list(payload.get("related_terms"))
+        if "semantic_definition" in payload:
+            if payload["semantic_definition"] is None:
+                raise ValueError("semantic_definition cannot be cleared; use disabled matching")
+            row.semantic_definition = payload["semantic_definition"]
         if "graph_policy" in payload:
             row.graph_policy = _graph_policy_for_payload(payload, row.entity_type)
         if "review_status" in payload:
@@ -175,7 +186,7 @@ class AmwayEntityLexiconService:
         row.is_deleted = False
         row.updated_by_user_id = current_user_id
         row.updated_at = datetime.now(timezone.utc)
-        _override_to_definition(row, base=base)
+        await self._validate_change(entity.id, _override_to_definition(row, base=base))
         await self.db.commit()
         await self.db.refresh(row)
         return row
@@ -187,7 +198,13 @@ class AmwayEntityLexiconService:
         lexicon_entity_id: str,
         current_user_id: UUID | None,
     ) -> AmwayEntityLexiconOverride:
+        await self._lock_entity(entity.id)
         entity_id = _required_text(lexicon_entity_id, "entity_id")
+        remaining = [item for item in await self.merged_entities_for_entity(entity.id)
+                     if item.entity_id != entity_id]
+        AmwayEntityOntologyRegistry(self.base_registry.definition.model_copy(
+            update={"entities": tuple(remaining)}
+        ))
         base = self.base_registry.get_entity(entity_id)
         row = await self._override_for_entry(entity.id, entity_id)
         if row is None:
@@ -216,6 +233,19 @@ class AmwayEntityLexiconService:
             .order_by(AmwayEntityLexiconOverride.created_at)
         )
         return list(result.scalars().all())
+
+    async def _lock_entity(self, entity_id: UUID) -> None:
+        await self.db.execute(select(Entity.id).where(Entity.id == entity_id).with_for_update())
+
+    async def _validate_change(self, entity_id, entry, *, creating=False) -> None:
+        with self.db.no_autoflush:
+            entries = await self.merged_entities_for_entity(entity_id)
+        if creating and any(item.entity_id == entry.entity_id for item in entries):
+            raise ValueError("entity_id already exists")
+        entries = [item for item in entries if item.entity_id != entry.entity_id] + [entry]
+        AmwayEntityOntologyRegistry(self.base_registry.definition.model_copy(
+            update={"entities": tuple(entries)}
+        ))
 
     async def _override_for_entry(
         self,
@@ -276,6 +306,11 @@ def _override_to_definition(
                     else base.related_terms if base else []
                 )
             ),
+            "semantic_definition": (
+                row.semantic_definition
+                if row.semantic_definition is not None
+                else base.semantic_definition.model_dump() if base and base.semantic_definition else None
+            ),
             "graph_policy": row.graph_policy
             or (
                 base.graph_policy.model_dump()
@@ -306,6 +341,7 @@ def _row_from_base_entity(
         aliases=list(base.aliases),
         description=base.description,
         related_terms=list(base.related_terms),
+        semantic_definition=base.semantic_definition.model_dump() if base.semantic_definition else None,
         graph_policy=base.graph_policy.model_dump(),
         source_policy=base.source_policy.model_dump(),
         review_status=base.review_status,

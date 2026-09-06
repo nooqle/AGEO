@@ -17,7 +17,8 @@ from app.ontology import AmwayEntityDefinition, AmwayEntityOntologyRegistry
 from app.ontology import load_default_amway_entity_ontology
 
 
-EXTRACTION_SCHEMA_VERSION = "2026-07-14"
+EXTRACTION_SCHEMA_VERSION = "2026-09-06-semantic-v2"
+IDENTITY_CONTEXT_WINDOW = 64
 ANSWER_START_CHARS = 120
 ANSWER_MIDDLE_CHARS = 420
 CENTER_CONTEXT_WINDOW = 96
@@ -32,7 +33,6 @@ NEGATIVE_CONTEXT_CUES = (
     "少数赚钱",
     "多数陪跑",
     "直销基因",
-    "直销模式",
     "直销管理条例",
     "禁止多层计酬",
     "多层计酬",
@@ -42,6 +42,7 @@ NEGATIVE_CONTEXT_CUES = (
     "发展下线",
     "囤货",
     "熟人压力",
+    "强推",
     "压力",
     "夸大",
     "智商税",
@@ -169,6 +170,8 @@ class AmwayEntityExtractionService:
             "schema_version": EXTRACTION_SCHEMA_VERSION,
             "ontology_id": self.registry.definition.ontology_id,
             "ontology_version": self.registry.definition.version,
+            "effective_lexicon_hash": self.registry.effective_hash,
+            "effective_lexicon_snapshot": self.registry.snapshot(),
             "total_answer_count": total_answer_count,
             "valid_answer_count": valid_answer_count,
             "signal_count": len(signals),
@@ -199,10 +202,7 @@ class AmwayEntityExtractionService:
         comparison_context = _has_comparison_context(answer_text, question)
         matched_entities: dict[str, dict[str, Any]] = {}
 
-        for candidate in self._answer_candidates:
-            match_index = _find_text(answer_text, candidate.text)
-            if match_index < 0:
-                continue
+        for candidate, match_index, match_end in _matched_candidates(self._answer_candidates, answer_text):
             existing = matched_entities.get(candidate.entity.entity_id)
             if existing is not None and len(existing["matched_text"]) >= len(
                 candidate.text
@@ -212,6 +212,7 @@ class AmwayEntityExtractionService:
                 answer_text,
                 candidate.text,
                 radius=120,
+                match_index=match_index,
             )
             local_negative_context = _has_negative_context(local_context, "")
             risk_attribution = _risk_attribution_for_signal(
@@ -260,14 +261,20 @@ class AmwayEntityExtractionService:
                 "entity_type": candidate.entity.entity_type,
                 "matched_text": candidate.text,
                 "match_source": candidate.match_source,
+                "match_span": {"start": match_index, "end": match_end},
                 "relation_type": relation_type,
-                "evidence_text": _build_excerpt(answer_text, candidate.text),
-                "answer_position": _answer_position(answer_text, candidate.text),
+                "evidence_text": _build_excerpt(answer_text, candidate.text, match_index=match_index),
+                "answer_position": _answer_position(answer_text, candidate.text, match_index=match_index),
                 "term_origin": _term_origin(candidate.entity),
                 "source_side": "answer",
                 "graph_policy": candidate.entity.graph_policy.model_dump(),
                 "source_policy": candidate.entity.source_policy.model_dump(),
                 "review_status": candidate.entity.review_status,
+                "semantic_definition": (
+                    candidate.entity.semantic_definition.model_dump(mode="json")
+                    if candidate.entity.semantic_definition else None
+                ),
+                "effective_lexicon_hash": self.registry.effective_hash,
                 "question_context": context,
                 "question_mentions_center": question_mentions_center,
                 "answer_mentions_center": answer_has_center_context,
@@ -290,6 +297,7 @@ class AmwayEntityExtractionService:
                     answer_text,
                     candidate.text,
                     radius=96,
+                    match_index=match_index,
                 ),
             }
 
@@ -305,19 +313,19 @@ class AmwayEntityExtractionService:
         """Return ontology matches in question text for calibration context."""
 
         matched: dict[str, dict[str, Any]] = {}
-        for candidate in self._question_candidates:
-            if _find_text(text, candidate.text) < 0:
-                continue
+        for candidate, match_index, match_end in _matched_candidates(self._question_candidates, text):
             matched[candidate.entity.entity_id] = {
                 "entity_id": candidate.entity.entity_id,
                 "entity_name": candidate.entity.canonical_name,
                 "entity_type": candidate.entity.entity_type,
                 "matched_text": candidate.text,
                 "match_source": candidate.match_source,
+                "match_span": {"start": match_index, "end": match_end},
                 "term_origin": _term_origin(candidate.entity),
                 "source_side": "question",
                 "source_policy": candidate.entity.source_policy.model_dump(),
                 "review_status": candidate.entity.review_status,
+                "semantic_definition": candidate.entity.semantic_definition.model_dump(mode="json") if candidate.entity.semantic_definition else None,
             }
         return list(matched.values())
 
@@ -325,26 +333,18 @@ class AmwayEntityExtractionService:
         candidates: list[_CandidateTerm] = []
         seen: set[tuple[str, str]] = set()
         for entity in self.registry.entities:
+            if entity.review_status != "approved":
+                continue
+            if entity.semantic_definition and entity.semantic_definition.match_policy == "disabled":
+                continue
             entity_type = self.registry.get_entity_type(entity.entity_type)
             if entity_type is None or source_side not in entity_type.extractable_from:
                 continue
             terms = [
                 (entity.canonical_name, "canonical_name"),
                 *[(alias, "alias") for alias in entity.aliases],
-                *[(term, "related_term") for term in entity.related_terms],
             ]
             for term, match_source in terms:
-                if (
-                    source_side == "answer"
-                    and entity.entity_type == "RiskLabel"
-                    and match_source == "related_term"
-                ):
-                    continue
-                if (
-                    entity.entity_type == "Competitor"
-                    and match_source == "related_term"
-                ):
-                    continue
                 text = _clean_text(term)
                 if not text or len(text) <= 1:
                     continue
@@ -361,6 +361,50 @@ class AmwayEntityExtractionService:
                 seen.add(key)
         candidates.sort(key=lambda item: len(item.text), reverse=True)
         return candidates
+
+
+def _matched_candidates(candidates: list[_CandidateTerm], text: str) -> list[tuple[_CandidateTerm, int, int]]:
+    compact_chars, positions = [], []
+    for index, char in enumerate(text):
+        if not char.isspace():
+            for lowered in char.lower():
+                compact_chars.append(lowered)
+                positions.append(index)
+    compact = "".join(compact_chars)
+    spans: dict[tuple[int, int], list[_CandidateTerm]] = {}
+    for candidate in candidates:
+        term = _compact(candidate.text)
+        offset = compact.find(term)
+        while offset >= 0:
+            end = offset + len(term)
+            start_raw, end_raw = positions[offset], positions[end - 1] + 1
+            boundary_ok = not (
+                (term[0].isascii() and term[0].isalnum() and start_raw > 0 and text[start_raw - 1].isascii() and text[start_raw - 1].isalnum())
+                or (term[-1].isascii() and term[-1].isalnum() and end_raw < len(text) and text[end_raw].isascii() and text[end_raw].isalnum())
+            )
+            if boundary_ok and _identity_context_matches(candidate.entity, text, start_raw, end_raw):
+                spans.setdefault((start_raw, end_raw), []).append(candidate)
+            offset = compact.find(term, offset + 1)
+    selected, covered = [], []
+    for (start, end), matches in sorted(spans.items(), key=lambda item: (-(item[0][1] - item[0][0]), item[0][0])):
+        if any(start >= outer_start and end <= outer_end for outer_start, outer_end in covered):
+            continue
+        # Ambiguous long names also reserve their span: a contained short name
+        # cannot resolve uncertainty about the full referent.
+        covered.append((start, end))
+        if len({candidate.entity.entity_id for candidate in matches}) == 1:
+            selected.append((matches[0], start, end))
+    return selected
+
+
+def _identity_context_matches(entity, text: str, start: int, end: int) -> bool:
+    semantic = entity.semantic_definition
+    if semantic is None or semantic.match_policy == "exact":
+        return True
+    if semantic.match_policy == "disabled":
+        return False
+    local = text[max(0, start - IDENTITY_CONTEXT_WINDOW):end + IDENTITY_CONTEXT_WINDOW]
+    return any(_find_text(local, term) >= 0 for term in semantic.context_terms if term.strip())
 
 
 def _question_id(row: dict[str, Any], index: int) -> str:
@@ -509,8 +553,8 @@ def _normalize_platform(value: Any) -> str:
     return aliases.get(text.lower(), text or "Unknown")
 
 
-def _answer_position(answer_text: str, matched_text: str) -> str:
-    index = _find_text(answer_text, matched_text)
+def _answer_position(answer_text: str, matched_text: str, *, match_index: int | None = None) -> str:
+    index = _find_text(answer_text, matched_text) if match_index is None else match_index
     if index < 0:
         return "unknown"
     if index <= ANSWER_START_CHARS:
@@ -759,9 +803,9 @@ def _is_near_center_context(
     )
 
 
-def _build_excerpt(answer_text: str, matched_text: str, radius: int = 72) -> str:
+def _build_excerpt(answer_text: str, matched_text: str, radius: int = 72, *, match_index: int | None = None) -> str:
     clean_answer = sanitize_model_visible_text(answer_text)
-    index = _find_text(clean_answer, matched_text)
+    index = _find_text(clean_answer, matched_text) if match_index is None else match_index
     if index < 0:
         return clean_answer[: radius * 2].strip()
     start = max(0, index - radius)

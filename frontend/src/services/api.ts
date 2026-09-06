@@ -103,6 +103,7 @@ import type {
   AmwayCircleRunSummary,
   AmwayEntityLexiconMutationInput,
   AmwayEntityLexiconResponse,
+  AmwaySemanticDefinition,
   AmwayNodeInsight,
   AmwayProjectionScope,
   AmwayQuestionHistoryResponse,
@@ -1607,6 +1608,21 @@ class ApiService {
 
   async getAmwayEntityLexicon(entityId: string): Promise<AmwayEntityLexiconResponse> {
     return this.request(`/amwaychina/entities/${entityId}/entity-lexicon`);
+  }
+
+  async exportAmwayLexiconRepair(entityId: string): Promise<Record<string, unknown>> {
+    return this.request(`/amwaychina/entities/${entityId}/entity-lexicon/repair-export`);
+  }
+
+  async previewAmwayLexiconRepair(entityId: string, data: Record<string, unknown>, apply = false): Promise<{
+    status: string; changed_ids: string[]; before_hash: string; effective_hash: string;
+    before_image: Record<string, unknown>; entries: Array<{ entity_id: string; canonical_name: string }>;
+    changes: Array<{ entity_id: string; before: { canonical_name: string; aliases: string[]; review_status: string; semantic_definition?: AmwaySemanticDefinition | null } | null;
+      after: { canonical_name: string; aliases: string[]; review_status: string; semantic_definition?: AmwaySemanticDefinition | null } }>;
+  }> {
+    return this.request(`/amwaychina/entities/${entityId}/entity-lexicon/repair?apply=${apply}`, {
+      method: 'POST', body: JSON.stringify(data),
+    });
   }
 
   async createAmwayEntityLexiconEntry(
