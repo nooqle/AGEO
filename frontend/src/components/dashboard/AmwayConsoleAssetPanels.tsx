@@ -12,6 +12,7 @@ import {
 import { api } from '@/services/api';
 import { AmwayLexiconRepairControls } from './AmwayLexiconRepairControls';
 import { semanticTypeLabels, semanticRelationLabels, lexiconStatusLabels } from './amwaySemanticLabels';
+import { indexLexiconViews, matchesLexiconQuery, type LexiconView } from './amwayLexiconViews';
 import type {
   AmwayEntityLexiconEntry,
   AmwayEntityLexiconMutationInput,
@@ -66,6 +67,10 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
   const [data, setData] = useState<AmwayEntityLexiconResponse | null>(null);
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [view, setView] = useState<LexiconView>('topics');
+  const [topicFilter, setTopicFilter] = useState('all');
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const detailRef = useRef<HTMLElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<LexiconFormState>(EMPTY_FORM);
   const [isLoading, setIsLoading] = useState(false);
@@ -93,38 +98,45 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
 
   const entries = useMemo(() => data?.entries || [], [data?.entries]);
   const entityTypes = useMemo(() => data?.entity_types || [], [data?.entity_types]);
+  const legacyEntityTypes = useMemo(() => entityTypes.filter((item) => item.type_id !== 'Object'), [entityTypes]);
   const typeLabelById = useMemo(
     () => new Map(entityTypes.map((item) => [item.type_id, item.label])),
     [entityTypes],
   );
+  const { groups, byId, objectsByTopic } = useMemo(() => indexLexiconViews(entries), [entries]);
+  const selectedEntry = selectedEntryId ? byId.get(selectedEntryId) : undefined;
+  const editingEntry = entries.find((entry) => entry.id === editingId);
+  const objectTypes = useMemo(() => [...new Set(groups.objects.map((entry) => entry.semantic_definition!.semantic_type))], [groups.objects]);
   const filteredEntries = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
-    return entries.filter((entry) => {
-      if (typeFilter !== 'all' && entry.entity_type !== typeFilter) return false;
-      if (!keyword) return true;
-      return [
-        entry.canonical_name,
-        entry.entity_type,
-        entry.description,
-        ...entry.aliases,
-        ...entry.related_terms,
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(keyword);
+    return groups[view].filter((entry) => {
+      if (view === 'objects') {
+        if (typeFilter !== 'all' && entry.semantic_definition?.semantic_type !== typeFilter) return false;
+        const mappedTopics = entry.semantic_definition?.topic_mappings.filter((mapping) => mapping.review_status === 'approved' && byId.get(mapping.target_entity_id)?.semantic_definition?.graph_role === 'topic') || [];
+        if (topicFilter === 'unmapped' && mappedTopics.length) return false;
+        if (topicFilter !== 'all' && topicFilter !== 'unmapped' && !mappedTopics.some((mapping) => mapping.target_entity_id === topicFilter)) return false;
+      }
+      return matchesLexiconQuery(entry, query) || (view === 'topics' && (objectsByTopic.get(entry.entity_id) || []).some((object) => matchesLexiconQuery(object, query)));
     });
-  }, [entries, query, typeFilter]);
+  }, [groups, view, query, typeFilter, topicFilter, byId, objectsByTopic]);
+
+  const openDetails = (entry: AmwayEntityLexiconEntry) => {
+    setSelectedEntryId(entry.entity_id);
+    setEditingId(null);
+    requestAnimationFrame(() => { detailRef.current?.scrollIntoView({ block: 'nearest' }); detailRef.current?.focus(); });
+  };
 
   const beginCreate = () => {
+    setSelectedEntryId(null);
     setEditingId('__new__');
     setForm({
       ...EMPTY_FORM,
-      entity_type: entityTypes[0]?.type_id || '',
+      entity_type: legacyEntityTypes[0]?.type_id || '',
     });
     setFormError(null);
   };
 
   const beginEdit = (entry: AmwayEntityLexiconEntry) => {
+    setSelectedEntryId(entry.entity_id);
     setEditingId(entry.id);
     setForm({
       canonical_name: entry.canonical_name,
@@ -141,7 +153,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
     if (!entityId) return;
     const payload: AmwayEntityLexiconMutationInput = {
       canonical_name: form.canonical_name.trim(),
-      entity_type: form.entity_type,
+      entity_type: editingEntry?.semantic_definition ? editingEntry.entity_type : form.entity_type,
       aliases: splitTextList(form.aliases),
       description: form.description.trim(),
       related_terms: splitTextList(form.related_terms),
@@ -198,12 +210,11 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
 
   return (
     <section className="space-y-4">
-      <AmwayLexiconRepairControls key={entityId} entityId={entityId} onApplied={load} />
       <AssetPanelHeader
         eyebrow="实体词库"
-        title="安利实体词库"
-        description="这里维护回答分析时的品牌实体识别范围，调整后下一轮分析生效。"
-        meta={`${entityName || data?.entity_name || '安利实体'} · ${entries.length} 个实体词`}
+        title="安利主题与对象索引"
+        description="主图按分析主题聚合；产品、原料、工具等对象保留独立身份，通过主题下钻查看。"
+        meta={`${entityName || data?.entity_name || '安利实体'} · 名称与同义名称调整后，下一轮分析生效`}
         action={
           <div className="flex items-center gap-2">
             <button
@@ -214,19 +225,34 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
               <RefreshCw size={14} />
               刷新
             </button>
-            <button
-              type="button"
-              onClick={beginCreate}
-              className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--brand-primary)] px-3 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)]"
-            >
-              <Plus size={14} />
-              新增实体
-            </button>
           </div>
         }
       />
+      <details className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-sm">
+        <summary className="cursor-pointer text-[var(--text-secondary)]">批量维护</summary>
+        <div className="mt-3"><AmwayLexiconRepairControls key={entityId} entityId={entityId} onApplied={load} /></div>
+        <button
+          type="button"
+          onClick={beginCreate}
+          className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
+        >
+          <Plus size={14} />
+          新增旧版词条
+        </button>
+      </details>
 
       {error ? <InlineError message={error} /> : null}
+
+      <div role="group" aria-label="词库浏览视图" className="flex flex-wrap gap-2">
+        {([
+          ['topics', '分析主题'], ['objects', '对象索引'], ['context', '品牌与上下文'], ['unclassified', '未分类（旧版）'],
+        ] as const).filter(([key]) => key !== 'unclassified' || groups.unclassified.length > 0).map(([key, label]) => (
+          <button key={key} type="button" aria-pressed={view === key} onClick={() => setView(key)}
+            className={`rounded-lg border px-3 py-2 text-sm ${view === key ? 'border-[var(--brand-border)] bg-[var(--brand-bg)] text-[var(--brand-primary)]' : 'border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-secondary)]'}`}>
+            {label} {groups[key].length}
+          </button>
+        ))}
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)]">
@@ -236,23 +262,31 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索实体名、别名、相关词"
+                aria-label="搜索主题或对象名称、别名"
+                placeholder={view === 'topics' ? '搜索主题或关联对象，例如丹参' : '搜索名称、别名、相关词'}
                 className="min-w-0 flex-1 bg-transparent text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
               />
             </label>
-            <select
+            {view === 'objects' && <select
+              aria-label="对象类型"
               value={typeFilter}
               onChange={(event) => setTypeFilter(event.target.value)}
               className="h-10 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-sm text-[var(--text-secondary)] outline-none"
             >
-              <option value="all">全部类型</option>
-              {entityTypes.map((item) => (
-                <option key={item.type_id} value={item.type_id}>
-                  {item.label}
+              <option value="all">全部对象类型</option>
+              {objectTypes.map((type) => (
+                <option key={type} value={type}>
+                  {semanticTypeLabels[type] || type}
                 </option>
               ))}
-            </select>
+            </select>}
+            {view === 'objects' && <select aria-label="归属主题" value={topicFilter} onChange={(event) => setTopicFilter(event.target.value)}
+              className="h-10 max-w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-sm text-[var(--text-secondary)]">
+              <option value="all">全部主题归属</option><option value="unmapped">未归组</option>
+              {groups.topics.map((topic) => <option key={topic.entity_id} value={topic.entity_id}>{topic.canonical_name}</option>)}
+            </select>}
           </div>
+          <p role="status" className="px-4 py-2 text-xs text-[var(--text-secondary)]">当前显示 {filteredEntries.length} 项{view === 'topics' ? '分析主题；主题下的对象不另计为主题。' : view === 'context' ? '，品牌锚点与上下文分别标注。' : view === 'unclassified' ? '旧版词条，尚未设置语义身份与主图角色。' : '独立对象；主题归属不会合并对象身份。'}</p>
 
           <div className="max-h-[640px] overflow-auto">
             {isLoading ? (
@@ -262,15 +296,14 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                 {filteredEntries.map((entry) => (
                   <article
                     key={entry.id}
-                    className="grid gap-3 p-4 transition hover:bg-[var(--bg-secondary)] lg:grid-cols-[minmax(0,1fr)_220px_140px]"
+                    className="grid gap-3 p-4 transition hover:bg-[var(--bg-secondary)] lg:grid-cols-[minmax(0,1fr)_auto]"
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-base font-semibold text-[var(--text-primary)]">
                           {entry.canonical_name}
                         </h3>
-                        <StatusPill label={typeLabelById.get(entry.entity_type) || entry.entity_type} />
-                        <StatusPill label={ORIGIN_LABELS[entry.origin] || entry.origin} tone="neutral" />
+                        <StatusPill label={entry.semantic_definition ? view === 'topics' ? '分析主题' : view === 'context' ? entry.semantic_definition.graph_role === 'anchor' ? '品牌锚点' : '上下文' : semanticTypeLabels[entry.semantic_definition.semantic_type] || entry.semantic_definition.semantic_type : '未分类（旧版）'} tone="neutral" />
                         <StatusPill
                           label={lexiconStatusLabels[entry.review_status] || entry.review_status}
                           tone={entry.review_status === 'approved' ? 'success' : 'warning'}
@@ -284,34 +317,33 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                           别名：{entry.aliases.slice(0, 8).join('、')}
                         </p>
                       ) : null}
-                      {entry.semantic_definition && <details className="mt-2 text-xs leading-6 text-[var(--text-secondary)]">
-                        <summary>对象类型：{semanticTypeLabels[entry.semantic_definition.semantic_type] || entry.semantic_definition.semantic_type} · 身份范围：{entry.semantic_definition.identity_scope}</summary>
-                        <p>匹配：{entry.semantic_definition.match_policy === 'disabled' ? '停用' : entry.semantic_definition.match_policy === 'contextual' ? '须近邻上下文' : '标准名与同义名称'}；主图角色：{entry.semantic_definition.graph_role === 'object' ? '独立对象下钻' : entry.semantic_definition.graph_role === 'anchor' ? '品牌锚点' : entry.semantic_definition.graph_role === 'topic' ? '主题' : '上下文'}</p>
-                        {entry.semantic_definition.topic_mappings.map((mapping) => <p key={mapping.target_entity_id}>
-                          主题归属：{entries.find((item) => item.entity_id === mapping.target_entity_id)?.canonical_name || mapping.target_entity_id}（{REVIEW_STATUS_LABELS[mapping.review_status]}）
-                        </p>)}
-                        {entry.semantic_definition.relations.map((relation, index) => <p key={index}>
-                          对象关系：{semanticRelationLabels[relation.relation_type] || relation.relation_type} → {entries.find((item) => item.entity_id === relation.target_entity_id)?.canonical_name || relation.target_entity_id}（{REVIEW_STATUS_LABELS[relation.review_status]}）
-                          {relation.source_refs.map((source) => ` ${source.locator}：${source.quote}`).join('；')}
-                        </p>)}
-                        {entry.semantic_definition.source_refs.map((source, index) => <p key={index}>来源：{source.source_id} / {source.locator}：{source.quote}</p>)}
+                      {view === 'topics' && <details key={`${entry.entity_id}-${query}`} open={query.trim() ? true : undefined} className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
+                        <summary className="cursor-pointer">关联对象 {(objectsByTopic.get(entry.entity_id) || []).length} 项</summary>
+                        {(objectsByTopic.get(entry.entity_id) || []).length ? (objectsByTopic.get(entry.entity_id) || []).map((object) => (
+                          <div key={object.entity_id} className="mt-2 border-l-2 border-[var(--border-subtle)] pl-3">
+                            <button type="button" onClick={() => openDetails(object)} className="text-left font-medium text-[var(--brand-primary)] underline underline-offset-2">{object.canonical_name}</button>
+                            <span className="ml-2 text-xs">{semanticTypeLabels[object.semantic_definition!.semantic_type] || object.semantic_definition!.semantic_type}</span>
+                            <p className="text-xs">别名：{object.aliases.join('、') || '无'}</p>
+                            {object.semantic_definition!.topic_mappings.filter((mapping) => mapping.review_status === 'approved' && mapping.target_entity_id === entry.entity_id).map((mapping, index) => <div key={index} className="text-xs">
+                              <p>归组状态：{REVIEW_STATUS_LABELS[mapping.review_status] || mapping.review_status}</p>
+                              {mapping.source_refs.length ? mapping.source_refs.map((source, sourceIndex) => <p key={sourceIndex}>归组依据：{source.source_id} / {source.locator}：{source.quote}</p>) : <p>归组依据：未提供</p>}
+                            </div>)}
+                          </div>
+                        )) : <p className="mt-2 text-xs">暂无关联对象，主题自身的直接命中仍可参与分析。</p>}
                       </details>}
-                    </div>
-                    <div className="text-sm leading-6 text-[var(--text-secondary)]">
-                      <div>主图谱：{graphPolicyLabel(entry.graph_policy?.main_orbit)}</div>
-                      <div>风险图：{graphPolicyLabel(entry.graph_policy?.risk_view)}</div>
+                      {view === 'objects' && <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">已确认主题归属：{entry.semantic_definition?.topic_mappings.filter((mapping) => mapping.review_status === 'approved' && byId.get(mapping.target_entity_id)?.semantic_definition?.graph_role === 'topic').map((mapping) => byId.get(mapping.target_entity_id)!.canonical_name).join('、') || '未归组'}</p>}
                     </div>
                     <div className="flex items-start justify-end gap-2">
                       <button
                         type="button"
-                        onClick={() => beginEdit(entry)}
+                        onClick={() => openDetails(entry)}
                         className="inline-flex h-9 items-center gap-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]"
                       >
-                        <Edit3 size={14} />
-                        编辑
+                        查看详情
                       </button>
                       <button
                         type="button"
+                        disabled={isSaving}
                         onClick={() => void deleteEntry(entry)}
                         className={`inline-flex h-9 items-center gap-1 rounded-xl border px-3 text-sm ${
                           deleteConfirmId === entry.id
@@ -327,20 +359,20 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                 ))}
               </div>
             ) : (
-              <AssetEmptyState title="没有匹配的实体词" description="换一个关键词或实体类型再看。" />
+              <AssetEmptyState title="当前视图没有匹配项" description="可切换视图，或调整关键词与筛选条件。" />
             )}
           </div>
         </div>
 
-        <aside className="amway-surface rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4">
+        <aside ref={detailRef} tabIndex={-1} aria-label="词条详情与名称维护" className="amway-surface min-w-0 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--brand-primary)]">
           {editingId ? (
             <div className="space-y-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-xs font-medium text-[var(--text-tertiary)]">
-                    {editingId === '__new__' ? '新增实体' : '编辑实体'}
+                    {editingId === '__new__' ? '新增旧版词条' : '名称与同义名称维护'}
                   </div>
-                  <h2 className="mt-1 text-lg font-semibold">词库维护</h2>
+                  <h2 className="mt-1 text-lg font-semibold">{editingId === '__new__' ? '旧版词条维护' : editingEntry?.canonical_name}</h2>
                 </div>
                 <button
                   type="button"
@@ -351,6 +383,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                   <X size={16} />
                 </button>
               </div>
+              <p className="text-sm leading-6 text-[var(--text-secondary)]">{editingEntry?.semantic_definition ? '此处维护名称、同义名称、说明与审核状态；对象身份、主题归属和主图角色保持不变。' : '此入口维护旧版分类。保存后进入未分类（旧版）视图，尚未配置对象身份与主题归属。'}</p>
               <LexiconField label="实体名称">
                 <input
                   value={form.canonical_name}
@@ -359,20 +392,23 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                   placeholder="例如：营养早餐"
                 />
               </LexiconField>
-              <LexiconField label="业务分类">
+              {editingEntry?.semantic_definition ? <div className="text-sm text-[var(--text-secondary)]">
+                <p>对象类型：{semanticTypeLabels[editingEntry.semantic_definition.semantic_type] || editingEntry.semantic_definition.semantic_type}</p>
+                <details className="mt-2"><summary>旧业务分类（只读）</summary><p>{typeLabelById.get(form.entity_type) || form.entity_type}</p></details>
+              </div> : <LexiconField label="旧业务分类（不设置语义身份）">
                 <select
                   value={form.entity_type}
                   onChange={(event) => setForm((current) => ({ ...current, entity_type: event.target.value }))}
                   className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--brand-primary)]"
                 >
                   <option value="">选择类型</option>
-                  {entityTypes.map((item) => (
+                  {legacyEntityTypes.map((item) => (
                     <option key={item.type_id} value={item.type_id}>
                       {item.label}
                     </option>
                   ))}
                 </select>
-              </LexiconField>
+              </LexiconField>}
               <LexiconField label="同义名称（必须指向同一对象）">
                 <textarea
                   value={form.aliases}
@@ -421,14 +457,54 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                 保存词库
               </button>
             </div>
+          ) : selectedEntry ? (
+            <div className="space-y-3 break-words text-sm leading-6 text-[var(--text-secondary)]">
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="text-lg font-semibold text-[var(--text-primary)]">{selectedEntry.canonical_name}</h2>
+                <button type="button" aria-label="关闭词条详情" onClick={() => setSelectedEntryId(null)} className="rounded-lg border border-[var(--border-subtle)] p-2"><X size={16} /></button>
+              </div>
+              <p>别名：{selectedEntry.aliases.join('、') || '无'}</p>
+              <p>{selectedEntry.description || '暂无定义说明'}</p>
+              {selectedEntry.semantic_definition ? <>
+                <p>对象类型：{semanticTypeLabels[selectedEntry.semantic_definition.semantic_type] || selectedEntry.semantic_definition.semantic_type}</p>
+                <p>主图角色：{{ topic: '分析主题', object: '独立对象下钻', anchor: '品牌锚点', context: '上下文' }[selectedEntry.semantic_definition.graph_role]}</p>
+                <p>身份范围：{selectedEntry.semantic_definition.identity_scope}</p>
+                <p>匹配方式：{selectedEntry.semantic_definition.match_policy === 'disabled' ? '停用全局匹配' : selectedEntry.semantic_definition.match_policy === 'contextual' ? '须近邻上下文' : '标准名与同义名称'}</p>
+                <div className="border-t border-[var(--border-subtle)] pt-3">
+                  <h3 className="font-semibold">主题归属与归组依据</h3>
+                  {selectedEntry.semantic_definition.topic_mappings.length ? selectedEntry.semantic_definition.topic_mappings.map((mapping, index) => <div key={index} className="mt-2">
+                    <p>{byId.get(mapping.target_entity_id)?.canonical_name || mapping.target_entity_id}（{REVIEW_STATUS_LABELS[mapping.review_status] || mapping.review_status}）</p>
+                    {mapping.source_refs.length ? mapping.source_refs.map((source, sourceIndex) => <p key={sourceIndex} className="text-xs">归组依据：{source.source_id} / {source.locator}：{source.quote}</p>) : <p className="text-xs">归组依据：未提供</p>}
+                  </div>) : <p>{selectedEntry.semantic_definition.graph_role === 'object' ? '未归组，独立身份仍保留在对象索引中。' : '无上级主题归属。'}</p>}
+                </div>
+                <div className="border-t border-[var(--border-subtle)] pt-3">
+                  <h3 className="font-semibold">对象关系</h3>
+                  {selectedEntry.semantic_definition.relations.length ? selectedEntry.semantic_definition.relations.map((relation, index) => <div key={index} className="mt-2">
+                    <p>{semanticRelationLabels[relation.relation_type] || relation.relation_type} → {byId.get(relation.target_entity_id)?.canonical_name || relation.target_entity_id}（{REVIEW_STATUS_LABELS[relation.review_status] || relation.review_status}）</p>
+                    {relation.source_refs.map((source, sourceIndex) => <p key={sourceIndex} className="text-xs">{source.source_id} / {source.locator}：{source.quote}</p>)}
+                  </div>) : <p>暂无已记录关系。</p>}
+                </div>
+                <details><summary>查看对象来源</summary>
+                  {selectedEntry.semantic_definition.source_refs.map((source, index) => <p key={index} className="mt-2 text-xs">{source.source_id} / {source.locator}：{source.quote}</p>)}
+                </details>
+              </> : <p>未分类（旧版）：尚未设置语义身份与主图角色。</p>}
+              <details className="border-t border-[var(--border-subtle)] pt-3"><summary>历史配置与记录标识（只读）</summary>
+                <p className="break-all">唯一身份：{selectedEntry.entity_id}</p>
+                <p>来源：{ORIGIN_LABELS[selectedEntry.origin] || selectedEntry.origin}</p>
+                <p>旧业务分类：{typeLabelById.get(selectedEntry.entity_type) || selectedEntry.entity_type}</p>
+                <p>旧主图策略：{graphPolicyLabel(selectedEntry.graph_policy?.main_orbit)}</p>
+                <p>旧风险图策略：{graphPolicyLabel(selectedEntry.graph_policy?.risk_view)}</p>
+              </details>
+              <button type="button" disabled={isSaving} onClick={() => beginEdit(selectedEntry)} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm"><Edit3 size={14} />名称与同义名称维护</button>
+            </div>
           ) : (
             <div className="rounded-xl bg-[var(--bg-secondary)] p-4 text-sm leading-6 text-[var(--text-secondary)]">
               <div className="text-base font-semibold text-[var(--text-primary)]">如何使用</div>
               <p className="mt-2">
-                先用搜索定位实体，再编辑名称、别名和定义。删除会在当前安利实体下隐藏该词，内置 JSON 不会被改写。
+                先查看分析主题，再展开关联对象。点击对象名称可查看其独立身份、主题归属与来源；对象索引支持按类型和主题筛选。
               </p>
               <p className="mt-3">
-                后续抓取会读取当前实体的合并词库，所以这里的变更会影响下一轮抽词和图谱。
+                名称与同义名称维护会影响下一轮分析。删除会在当前品牌下隐藏词条；旧业务分类仅保留在历史详情中。
               </p>
             </div>
           )}
