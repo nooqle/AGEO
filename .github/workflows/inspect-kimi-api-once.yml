@@ -2,9 +2,11 @@ name: Inspect Kimi API Once
 
 on:
   workflow_dispatch:
-  push:
-    branches: [codex/kimi-api-26-20260908]
-    paths: [.github/workflows/inspect-kimi-api-once.yml]
+    inputs:
+      migrate_retired_overrides:
+        description: Replace explicit Kimi 2.5 model overrides after a successful Kimi 2.6 probe.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
+      - uses: actions/checkout@v4
       - name: Inspect effective models and verify Kimi 2.6 search
         shell: bash
         env:
@@ -25,6 +28,7 @@ jobs:
           DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
           DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
           DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          MIGRATE_RETIRED_OVERRIDES: ${{ github.event.inputs.migrate_retired_overrides || 'false' }}
         run: |
           set -euo pipefail
           install -d -m 700 ~/.ssh
@@ -101,3 +105,16 @@ jobs:
           SCRIPT
           )
           ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" 'bash -s' <<< "$remote_script"
+          if [[ "$MIGRATE_RETIRED_OVERRIDES" == "true" ]]; then
+            ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+              'stat -c "before_env_mode=%a uid=%u gid=%g" /srv/ageo-deploy/shared/backend/.env.local'
+            ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+              'sudo -n /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python -' < ops/migrate-kimi26-env.py
+            ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+              'sudo -n flock -n /srv/ageo-deploy/deploy.lock /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python - --apply' < ops/migrate-kimi26-env.py
+            ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+              'stat -c "after_env_mode=%a uid=%u gid=%g" /srv/ageo-deploy/shared/backend/.env.local && sudo -n find /srv/ageo-deploy/shared/backend -maxdepth 1 -type f -name ".env.local.kimi26-*.bak" -printf "backup_mode=%m uid=%U gid=%G path=%p\n"'
+            ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+              'sudo -n systemctl restart ageo-backend.service && curl --retry 30 --retry-connrefused --retry-delay 2 --max-time 5 -fsS http://127.0.0.1:8000/health >/dev/null && systemctl is-active ageo-backend.service'
+            ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" 'bash -s' <<< "$remote_script"
+          fi
