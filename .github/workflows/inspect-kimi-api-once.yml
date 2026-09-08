@@ -1,0 +1,103 @@
+name: Inspect Kimi API Once
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/kimi-api-26-20260908]
+    paths: [.github/workflows/inspect-kimi-api-once.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-kimi-api-once
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Inspect effective models and verify Kimi 2.6 search
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_kimi_inspect_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(-i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          remote_script=$(cat <<'SCRIPT'
+          set -euo pipefail
+          current="$(readlink -f /srv/ageo-deploy/current)"
+          cd "$current/aeo-platform/backend"
+          sudo -n "$current/aeo-platform/backend/.venv/bin/python" - <<'PY'
+          import asyncio
+          import json
+          import logging
+          import os
+          import subprocess
+          from pathlib import Path
+          import httpx
+          logging.disable(logging.CRITICAL)
+          pid = subprocess.check_output(['systemctl', 'show', 'ageo-backend.service', '--property=MainPID', '--value'], text=True).strip()
+          assert pid.isdigit() and int(pid) > 0, 'backend_not_running'
+          assert Path('/proc/' + pid + '/cwd').resolve() == Path.cwd().resolve(), 'release_process_mismatch'
+          process_env = dict(x.split(b'=', 1) for x in Path('/proc/' + pid + '/environ').read_bytes().split(b'\0') if b'=' in x)
+          for key in ('MOONSHOT_API_KEY', 'MOONSHOT_MODEL', 'MOONSHOT_FAST_MODEL', 'MOONSHOT_BASE_URL'):
+              if key.encode() in process_env:
+                  os.environ[key] = process_env[key.encode()].decode()
+              else:
+                  os.environ.pop(key, None)
+          from app.core.config import settings
+          from app.core.fetchers.api.kimi_client import KimiClient
+          current_model = KimiClient(model=settings.MOONSHOT_FAST_MODEL or None).model
+          print(json.dumps({'release': Path('/srv/ageo-deploy/current/.release-sha').read_text().strip(), 'model': settings.MOONSHOT_MODEL, 'fast_model': settings.MOONSHOT_FAST_MODEL, 'effective_collection_model': current_model, 'key_present': bool(settings.MOONSHOT_API_KEY)}, ensure_ascii=True))
+          assert settings.MOONSHOT_BASE_URL == 'https://api.moonshot.cn/v1/chat/completions', 'unexpected_endpoint'
+          async def main():
+              async with httpx.AsyncClient(timeout=20) as client:
+                  response = await client.get('https://api.moonshot.cn/v1/models', headers={'Authorization': 'Bearer ' + settings.MOONSHOT_API_KEY})
+                  print(json.dumps({'models_http': response.status_code}))
+                  response.raise_for_status()
+                  ids = [x.get('id') for x in response.json().get('data', [])]
+                  print(json.dumps({'configured_model_available': current_model in ids, 'kimi26_available': 'kimi-k2.6' in ids}))
+                  assert 'kimi-k2.6' in ids, 'target_model_unavailable'
+              calls = []
+              original_post = httpx.AsyncClient.post
+              async def observed_post(client, *args, **kwargs):
+                  response = await original_post(client, *args, **kwargs)
+                  if response.status_code == 200:
+                      data = response.json()
+                      calls.append({'model': data.get('model'), 'finish_reason': data.get('choices', [{}])[0].get('finish_reason')})
+                  return response
+              httpx.AsyncClient.post = observed_post
+              result = await asyncio.wait_for(KimiClient(model='kimi-k2.6').ask_with_search('Search the official Kimi API documentation and give one brief sentence about Kimi K2.6, citing the official source URL.'), timeout=150)
+              answer = result.answer_text
+              references = result.search_references
+              print(json.dumps({'probe_model': 'kimi-k2.6', 'answer_chars': len(answer or ''), 'references': len(references or []), 'rounds': calls, 'usage_present': bool(result.raw_response.get('usage_aggregate'))}))
+              assert answer and references, 'empty_answer_or_references'
+              assert any(x['finish_reason'] == 'tool_calls' for x in calls), 'search_tool_not_exercised'
+          try:
+              asyncio.run(main())
+          except httpx.HTTPStatusError as exc:
+              try:
+                  error = exc.response.json().get('error', {})
+              except (ValueError, AttributeError):
+                  error = {}
+              safe = {k: str(error.get(k, '')).replace(settings.MOONSHOT_API_KEY, '[REDACTED]')[:400] for k in ('type', 'code', 'message')}
+              print(json.dumps({'http_status': exc.response.status_code, 'provider_error': safe}))
+              raise SystemExit(1)
+          except Exception as exc:
+              print(json.dumps({'failure_type': type(exc).__name__}))
+              raise SystemExit(1)
+          PY
+          SCRIPT
+          )
+          ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" 'bash -s' <<< "$remote_script"
