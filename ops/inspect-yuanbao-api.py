@@ -18,6 +18,16 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}")
 ERROR_KEYS = {"code", "type", "source", "upstream_status", "status", "status_code"}
 
 
+def retirement_indicator(response):
+    try:
+        body = response.json()
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        message = str(error.get("message") or "") + str(error.get("message_zh") or "")
+        return any(term in message.lower() for term in ("retired", "deprecated", "offline", "\u4e0b\u7ebf"))
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def emit(section, **values):
     print(json.dumps({"section": section, **values}, ensure_ascii=True), flush=True)
 
@@ -95,10 +105,17 @@ def structured_error(response, secret):
 
 async def inspect():
     import httpx
+    from dotenv import dotenv_values
     from app.core.config import settings
     from app.core.fetchers.api.hunyuan_client import HunyuanClient
 
     key = (settings.HUNYUAN_API_KEY or "").strip()
+    shared = dotenv_values(ROOT / "shared/backend/.env.local")
+    emit("existing_credential_slots", present={
+        name: bool(os.environ.get(name) or shared.get(name))
+        for name in ("TOKENHUB_API_KEY", "TENCENT_TOKENHUB_API_KEY", "HUNYUAN_API_KEY")
+    })
+    del shared
     configured_url = (settings.HUNYUAN_BASE_URL or "").strip()
     configured_model = settings.HUNYUAN_FAST_MODEL or settings.HUNYUAN_MODEL
     configured = endpoint_summary(configured_url, key)
@@ -147,6 +164,7 @@ async def inspect():
         emit("original_endpoint", endpoint=endpoint_summary(endpoint, key),
              model=safe_identifier(configured_model, key),
              http_status=response.status_code,
+             retirement_mentioned=retirement_indicator(response),
              error_fields=structured_error(response, key) if response.status_code >= 400 else [])
     except Exception as error:
         emit("original_endpoint", failure_type=type(error).__name__)
