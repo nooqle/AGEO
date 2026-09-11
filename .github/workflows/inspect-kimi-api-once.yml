@@ -7,6 +7,19 @@ on:
         description: Replace explicit Kimi 2.5 model overrides after a successful Kimi 2.6 probe.
         type: boolean
         default: false
+      deepseek_operation:
+        description: Bounded DeepSeek maintenance; never restarts services or switches releases.
+        type: choice
+        options: [none, inspect, apply, restore, verify]
+        default: none
+      expected_release:
+        description: Full current release SHA, required for DeepSeek mutations and verification.
+        type: string
+        default: ''
+      restore_backup:
+        description: Exact generated DeepSeek backup path; only used with restore.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -17,6 +30,7 @@ concurrency:
 
 jobs:
   inspect:
+    if: ${{ (inputs.deepseek_operation || 'none') == 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
@@ -118,3 +132,83 @@ jobs:
               'sudo -n systemctl restart ageo-backend.service && curl --retry 30 --retry-connrefused --retry-delay 2 --max-time 5 -fsS http://127.0.0.1:8000/health >/dev/null && systemctl is-active ageo-backend.service'
             ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" 'bash -s' <<< "$remote_script"
           fi
+
+  deepseek:
+    if: ${{ inputs.deepseek_operation && inputs.deepseek_operation != 'none' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Maintain or verify the DeepSeek runtime
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          OPERATION: ${{ inputs.deepseek_operation }}
+          EXPECTED_RELEASE: ${{ inputs.expected_release }}
+          RESTORE_BACKUP: ${{ inputs.restore_backup }}
+        run: |
+          set -euo pipefail
+          case "$OPERATION" in inspect|apply|restore|verify) ;; *) exit 2 ;; esac
+          if [[ "$OPERATION" != inspect || -n "$EXPECTED_RELEASE" ]]; then
+            [[ "$EXPECTED_RELEASE" =~ ^[a-f0-9]{40}$ ]] || exit 2
+          fi
+          if [[ "$OPERATION" == restore ]]; then
+            [[ "$RESTORE_BACKUP" =~ ^/srv/ageo-deploy/shared/backend/\.env\.local\.deepseek41-[0-9]{8}T[0-9]{6}\.[0-9]{6}Z-[0-9]+\.json$ ]] || exit 2
+          else
+            [[ -z "$RESTORE_BACKUP" ]] || exit 2
+          fi
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_deepseek_maintenance_key
+          remote_dir=''
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(-i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          scp_options=(-i "$key_path" -P "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          remote="${DEMO_SSH_USER}@${DEMO_SSH_HOST}"
+          cleanup() {
+            if [[ "$remote_dir" =~ ^/tmp/ageo-deepseek41\.[A-Za-z0-9]{12}$ ]]; then
+              ssh "${ssh_options[@]}" "$remote" "rm -f '$remote_dir/migrate-deepseek41-env.py' '$remote_dir/verify-deepseek41-runtime.py'; rmdir '$remote_dir'" || true
+            fi
+            rm -f "$key_path"
+          }
+          trap cleanup EXIT
+          remote_dir=$(ssh "${ssh_options[@]}" "$remote" 'umask 077; mktemp -d /tmp/ageo-deepseek41.XXXXXXXXXXXX')
+          [[ "$remote_dir" =~ ^/tmp/ageo-deepseek41\.[A-Za-z0-9]{12}$ ]] || exit 2
+          script_name=migrate-deepseek41-env.py
+          if [[ "$OPERATION" == verify ]]; then script_name=verify-deepseek41-runtime.py; fi
+          scp "${scp_options[@]}" "ops/$script_name" "$remote:$remote_dir/$script_name"
+          # All interpolated arguments have a fixed enum or strict path/SHA grammar above.
+          ssh "${ssh_options[@]}" "$remote" "bash -s -- '$OPERATION' '$EXPECTED_RELEASE' '$RESTORE_BACKUP' '$remote_dir'" <<'REMOTE'
+          set -euo pipefail
+          operation=$1
+          expected=$2
+          backup=$3
+          directory=$4
+          case "$operation" in inspect|apply|restore|verify) ;; *) exit 2 ;; esac
+          [[ "$directory" =~ ^/tmp/ageo-deepseek41\.[A-Za-z0-9]{12}$ ]] || exit 2
+          # Hold the release lock for resolution, inspection, mutation, and verification.
+          sudo -n flock -w 60 /srv/ageo-deploy/deploy.lock bash -s -- "$operation" "$expected" "$backup" "$directory" <<'LOCKED'
+          set -euo pipefail
+          operation=$1
+          expected=$2
+          backup=$3
+          directory=$4
+          current=$(readlink -f /srv/ageo-deploy/current)
+          [[ "$current" =~ ^/srv/ageo-deploy/releases/[a-f0-9]{40}$ ]] || exit 2
+          cd "$current/aeo-platform/backend"
+          if [[ "$operation" == verify ]]; then
+            exec .venv/bin/python "$directory/verify-deepseek41-runtime.py" --expected-release "$expected"
+          fi
+          args=()
+          if [[ -n "$expected" ]]; then args+=(--expected-release "$expected"); fi
+          case "$operation" in
+            apply) args+=(--apply) ;;
+            restore) args+=(--apply --restore "$backup") ;;
+          esac
+          exec .venv/bin/python "$directory/migrate-deepseek41-env.py" "${args[@]}"
+          LOCKED
+          REMOTE
