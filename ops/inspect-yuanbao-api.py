@@ -169,6 +169,30 @@ async def inspect():
     except Exception as error:
         emit("original_endpoint", failure_type=type(error).__name__)
 
+    # Test HY3 on the same verified original gateway without client URL/model rewriting.
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=False) as http:
+            response = await asyncio.wait_for(
+                http.post(
+                    endpoint, headers={"Authorization": "Bearer " + key},
+                    json={"model": "hy3", "stream": False, "max_tokens": 32,
+                          "messages": [{"role": "user", "content": "Reply OK."}]},
+                ),
+                timeout=25,
+            )
+        answer_present = False
+        if response.status_code == 200:
+            try:
+                answer_present = bool(client._extract_answer(response.json()).strip())
+            except (ValueError, TypeError):
+                pass
+        emit("original_endpoint_hy3", model="hy3", http_status=response.status_code,
+             answer_present=answer_present,
+             error_fields=structured_error(response, key) if response.status_code >= 400 else [])
+    except Exception as error:
+        emit("original_endpoint_hy3", model="hy3", answer_present=False,
+             failure_type=type(error).__name__)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
