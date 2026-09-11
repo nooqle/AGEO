@@ -10,7 +10,7 @@ on:
       deepseek_operation:
         description: Bounded DeepSeek maintenance; never restarts services or switches releases.
         type: choice
-        options: [none, inspect, apply, restore, verify]
+        options: [none, inspect, apply, restore, verify, inspect-yuanbao]
         default: none
       expected_release:
         description: Full current release SHA, required for DeepSeek mutations and verification.
@@ -151,7 +151,7 @@ jobs:
           RESTORE_BACKUP: ${{ inputs.restore_backup }}
         run: |
           set -euo pipefail
-          case "$OPERATION" in inspect|apply|restore|verify) ;; *) exit 2 ;; esac
+          case "$OPERATION" in inspect|apply|restore|verify|inspect-yuanbao) ;; *) exit 2 ;; esac
           if [[ "$OPERATION" != inspect || -n "$EXPECTED_RELEASE" ]]; then
             [[ "$EXPECTED_RELEASE" =~ ^[a-f0-9]{40}$ ]] || exit 2
           fi
@@ -171,7 +171,7 @@ jobs:
           remote="${DEMO_SSH_USER}@${DEMO_SSH_HOST}"
           cleanup() {
             if [[ "$remote_dir" =~ ^/tmp/ageo-deepseek41\.[A-Za-z0-9]{12}$ ]]; then
-              ssh "${ssh_options[@]}" "$remote" "rm -f '$remote_dir/migrate-deepseek41-env.py' '$remote_dir/verify-deepseek41-runtime.py'; rmdir '$remote_dir'" || true
+              ssh "${ssh_options[@]}" "$remote" "rm -f '$remote_dir/migrate-deepseek41-env.py' '$remote_dir/verify-deepseek41-runtime.py' '$remote_dir/inspect-yuanbao-api.py'; rmdir '$remote_dir'" || true
             fi
             rm -f "$key_path"
           }
@@ -180,6 +180,7 @@ jobs:
           [[ "$remote_dir" =~ ^/tmp/ageo-deepseek41\.[A-Za-z0-9]{12}$ ]] || exit 2
           script_name=migrate-deepseek41-env.py
           if [[ "$OPERATION" == verify ]]; then script_name=verify-deepseek41-runtime.py; fi
+          if [[ "$OPERATION" == inspect-yuanbao ]]; then script_name=inspect-yuanbao-api.py; fi
           scp "${scp_options[@]}" "ops/$script_name" "$remote:$remote_dir/$script_name"
           # All interpolated arguments have a fixed enum or strict path/SHA grammar above.
           ssh "${ssh_options[@]}" "$remote" "bash -s -- '$OPERATION' '$EXPECTED_RELEASE' '$RESTORE_BACKUP' '$remote_dir'" <<'REMOTE'
@@ -188,7 +189,7 @@ jobs:
           expected=$2
           backup=$3
           directory=$4
-          case "$operation" in inspect|apply|restore|verify) ;; *) exit 2 ;; esac
+          case "$operation" in inspect|apply|restore|verify|inspect-yuanbao) ;; *) exit 2 ;; esac
           [[ "$directory" =~ ^/tmp/ageo-deepseek41\.[A-Za-z0-9]{12}$ ]] || exit 2
           # Hold the release lock for resolution, inspection, mutation, and verification.
           sudo -n flock -w 60 /srv/ageo-deploy/deploy.lock bash -s -- "$operation" "$expected" "$backup" "$directory" <<'LOCKED'
@@ -202,6 +203,9 @@ jobs:
           cd "$current/aeo-platform/backend"
           if [[ "$operation" == verify ]]; then
             exec .venv/bin/python "$directory/verify-deepseek41-runtime.py" --expected-release "$expected"
+          fi
+          if [[ "$operation" == inspect-yuanbao ]]; then
+            exec .venv/bin/python "$directory/inspect-yuanbao-api.py" --expected-release "$expected"
           fi
           args=()
           if [[ -n "$expected" ]]; then args+=(--expected-release "$expected"); fi
