@@ -4,18 +4,22 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 from urllib.parse import urlsplit
+from types import SimpleNamespace
 
 
 ROOT = Path("/srv/ageo-deploy")
 LEGACY_HOST = "api.hunyuan.cloud.tencent.com"
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}")
 ERROR_KEYS = {"code", "type", "source", "upstream_status", "status", "status_code"}
+HY3_BASE = "https://tokenhub.tencentmaas.com/v1"
+HY3_ENDPOINT = HY3_BASE + "/chat/completions"
 
 
 def retirement_indicator(response):
@@ -103,6 +107,165 @@ def structured_error(response, secret):
     return found
 
 
+def require_check(name, passed):
+    emit("hy3_check", check=name, passed=bool(passed))
+    if not passed:
+        raise ValueError("hy3_acceptance_failed")
+
+
+async def check_existing_control_record():
+    """Production reads only: record_usage commits internally, so never call it."""
+    from sqlalchemy import select, text
+    from app.core.database import AsyncSessionLocal, engine
+    from app.models.llm_usage import LLMUsageRecord
+    from app.services.usage_billing_summary import billing_details
+
+    require_check("database_postgresql", engine.dialect.name == "postgresql")
+    engine.echo = False
+    async with AsyncSessionLocal() as db:
+        try:
+            await db.execute(text("SET TRANSACTION READ ONLY"))
+            await db.execute(text("SET LOCAL statement_timeout = '10000ms'"))
+            record = (await db.execute(select(LLMUsageRecord).order_by(
+                LLMUsageRecord.created_at.desc()).limit(1))).scalar_one_or_none()
+            require_check("existing_control_record", record is not None)
+            details = billing_details(record)
+            require_check("existing_control_dto", isinstance(details, dict)
+                          and "pricing_status" in details and "cache_status" in details)
+        finally:
+            await db.rollback()
+    emit("hy3_database", read_only=True, database_writes=False, persistence_verified=False)
+
+
+async def capture_a4_recording(result):
+    """Exercise A4's recorder contract without letting it schedule a DB write."""
+    from app.workflow import nodes_a4
+
+    captured = []
+
+    async def capture(**kwargs):
+        captured.append(kwargs)
+
+    original = nodes_a4.record_provider_usage_async
+    try:
+        nodes_a4.record_provider_usage_async = capture
+        await nodes_a4._record_a4_api_usage(
+            session_id=None, task_id=None, question_id="hy3-acceptance-read-only",
+            platform="hunyuan", result=result,
+        )
+    finally:
+        nodes_a4.record_provider_usage_async = original
+    require_check("a4_recorder_called_once", len(captured) == 1)
+    call = captured[0]
+    metadata = call.get("extra_metadata") or {}
+    require_check("a4_recorder_identity", call.get("provider") == "hunyuan"
+                  and call.get("model_name") == "hy3" and call.get("step") == "A4"
+                  and call.get("session_id") is None and call.get("task_id") is None
+                  and metadata.get("requested_method") == "api"
+                  and metadata.get("actual_provider") == "hunyuan"
+                  and metadata.get("provider_endpoint") == HY3_ENDPOINT
+                  and metadata.get("protocol") == "hunyuan_chat_search"
+                  and metadata.get("search_source") == "lite")
+    require_check("a4_recorder_usage", call["usage"].raw == result["provider_usage"])
+    return call["usage"]
+
+
+def check_live_billing(result, usage):
+    from app.models.llm_usage import LLMUsageRecord
+    from app.services.llm_usage_service import estimate_usage_costs, hy3_search_pricing_snapshot
+    from app.services.usage_billing_summary import billing_details
+
+    route = {name: result[name] for name in ("provider_endpoint", "protocol", "search_source")}
+    costs = estimate_usage_costs(
+        "hunyuan", "hy3", usage.prompt_tokens, usage.completion_tokens,
+        usage.cached_prompt_tokens, usage.cache_miss_prompt_tokens, provider_metadata=route,
+    )
+    require_check("token_cache_priced", costs.pricing_status == "priced"
+                  and costs.cache_status == "known" and costs.currency == "CNY")
+    hit, miss = costs.cached_prompt_tokens, costs.billable_prompt_tokens
+    expected = (hit * .25 + miss + costs.completion_tokens * 4) / 1_000_000
+    require_check("token_price_formula", math.isclose(
+        costs.estimated_cost_cache_aware, expected, rel_tol=1e-9, abs_tol=1e-12))
+    search = hy3_search_pricing_snapshot("hunyuan", "hy3", route, usage.raw)
+    calls = usage.raw["tool_usage"]["web_search_call"]
+    require_check("search_price_formula", search["status"] == "estimated"
+                  and math.isclose(search["estimated_cost"], calls * .007, rel_tol=1e-9))
+    # This object is never added to a session: DTO verification is explicitly in-memory.
+    record = LLMUsageRecord(
+        provider="hunyuan", model_name="hy3", prompt_tokens=costs.prompt_tokens,
+        cached_prompt_tokens=hit, billable_prompt_tokens=miss, currency=costs.currency,
+        estimated_cost=costs.estimated_cost,
+        estimated_cost_cache_aware=costs.estimated_cost_cache_aware,
+        extra_metadata={**route, "pricing_status": costs.pricing_status,
+                        "billing_snapshot_version": 1, "provider_usage": usage.raw,
+                        "normalized_usage": usage.to_dict(), "search_pricing": search,
+                        "pricing": costs.pricing_snapshot.to_metadata()},
+    )
+    details = billing_details(record)
+    require_check("live_control_dto", details["pricing_status"] == "priced"
+                  and details["cache_status"] == "known"
+                  and details["provider_web_search_requests"] == calls
+                  and details["search_tool_cost_status"] == "estimated"
+                  and details["estimated_search_tool_cost"] == search["estimated_cost"]
+                  and details["estimated_cost_cache_aware"] == costs.estimated_cost_cache_aware)
+    emit("hy3_billing", in_memory=True, prompt_tokens=costs.prompt_tokens,
+         completion_tokens=costs.completion_tokens, cached_tokens=hit,
+         cache_miss_tokens=miss, search_calls=calls,
+         token_estimate_cny=costs.estimated_cost_cache_aware,
+         search_estimate_cny=search["estimated_cost"])
+
+
+async def accept_hy3(client):
+    from app.workflow.nodes_a4 import (
+        _fetch_from_hunyuan, _llm_usage_from_provider_payload, _retry_fetch,
+    )
+
+    observed_models = []
+
+    async def observed_ask(question):
+        response = await client.ask_with_search(question)
+        raw = response.raw_response
+        observed_models.append(isinstance(raw, dict) and raw.get("model") == "hy3")
+        return response
+
+    observed_client = SimpleNamespace(
+        model=client.model, endpoint=client.endpoint, search_source=client.search_source,
+        ask_with_search=observed_ask,
+    )
+    result = await _retry_fetch(
+        _fetch_from_hunyuan, observed_client,
+        "Search the web for Tencent's official HY3 documentation. Explain its API "
+        "and native web search support briefly, citing official Tencent source URLs.",
+        platform="hunyuan", method="api",
+    )
+    require_check("a4_answer", result.get("success") is True
+                  and bool((result.get("answer") or {}).get("content", "").strip()))
+    citations = result.get("citations") or []
+    require_check("a4_citations", bool(citations))
+    require_check("actual_model_protocol", bool(observed_models) and all(observed_models)
+                  and result.get("provider_model") == "hy3"
+                  and result.get("protocol") == "hunyuan_chat_search"
+                  and result.get("actual_provider") == "hunyuan"
+                  and result.get("provider_endpoint") == HY3_ENDPOINT
+                  and result.get("search_source") == "lite")
+    raw = result.get("provider_usage") or {}
+    calls = (raw.get("tool_usage") or {}).get("web_search_call")
+    require_check("search_executed", type(calls) is int and calls > 0)
+    usage = _llm_usage_from_provider_payload(raw)
+    require_check("token_counters", all(type(value) is int and value > 0 for value in (
+        usage.prompt_tokens, usage.completion_tokens, usage.total_tokens))
+        and usage.total_tokens == usage.prompt_tokens + usage.completion_tokens)
+    require_check("cache_counters", any(value is not None for value in (
+        usage.cached_prompt_tokens, usage.cache_miss_prompt_tokens))
+        and all(value is None or type(value) is int and 0 <= value <= usage.prompt_tokens
+                for value in (usage.cached_prompt_tokens, usage.cache_miss_prompt_tokens)))
+    recorded_usage = await capture_a4_recording(result)
+    check_live_billing(result, recorded_usage)
+    await check_existing_control_record()
+    emit("hy3_acceptance", passed=True, citation_count=len(citations),
+         api_responses=len(observed_models), database_writes=False, persistence_verified=False)
+
+
 async def inspect():
     import httpx
     from dotenv import dotenv_values
@@ -118,6 +281,17 @@ async def inspect():
     del shared
     configured_url = (settings.HUNYUAN_BASE_URL or "").strip()
     configured_model = settings.HUNYUAN_FAST_MODEL or settings.HUNYUAN_MODEL
+    if configured_model == "hy3" or urlsplit(configured_url).hostname == "tokenhub.tencentmaas.com":
+        require_check("official_hy3_configuration", bool(key)
+                      and configured_url in {HY3_BASE, HY3_ENDPOINT}
+                      and settings.HUNYUAN_MODEL == "hy3"
+                      and settings.HUNYUAN_FAST_MODEL == "hy3"
+                      and settings.HUNYUAN_SEARCH_SOURCE == "lite")
+        client = HunyuanClient(model=settings.HUNYUAN_FAST_MODEL)
+        require_check("effective_hy3_configuration", client.endpoint == HY3_ENDPOINT
+                      and client.model == "hy3" and client.search_source == "lite")
+        await asyncio.wait_for(accept_hy3(client), timeout=150)
+        return
     configured = endpoint_summary(configured_url, key)
     configured["model"] = safe_identifier(configured_model, key)
     client = HunyuanClient(model=settings.HUNYUAN_FAST_MODEL or None) if key else None
