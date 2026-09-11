@@ -195,6 +195,7 @@ class Settings(BaseSettings):
     HUNYUAN_MODEL: str = "hy3"
     HUNYUAN_FAST_MODEL: str | None = None
     HUNYUAN_BASE_URL: str = "https://tokenhub.tencentmaas.com/v1"
+    HUNYUAN_SEARCH_SOURCE: str = "lite"  # lite or standard; checked by HunyuanClient
     HUNYUAN_2_INSTRUCT_PRICE_INPUT_PER_MTOKENS: float = 4.505
     HUNYUAN_2_INSTRUCT_PRICE_OUTPUT_PER_MTOKENS: float = 11.13
 

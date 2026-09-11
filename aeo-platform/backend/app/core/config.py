@@ -144,6 +144,7 @@ class Settings(BaseSettings):
     HUNYUAN_MODEL: str = "hy3"
     HUNYUAN_FAST_MODEL: str | None = None
     HUNYUAN_BASE_URL: str = "https://tokenhub.tencentmaas.com/v1"
+    HUNYUAN_SEARCH_SOURCE: str = "lite"  # lite or standard; checked by HunyuanClient
     MOONSHOT_API_KEY: str | None = None
     MOONSHOT_MODEL: str = "kimi-k2.6"
     MOONSHOT_FAST_MODEL: str | None = "kimi-k2.6"

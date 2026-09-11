@@ -1,5 +1,6 @@
 """Read immutable billing snapshots without repricing historical records."""
 
+import math
 from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
@@ -47,7 +48,28 @@ def billing_details(record: LLMUsageRecord) -> dict[str, Any]:
     native_usage = native_usage if isinstance(native_usage, dict) else {}
     server_use = native_usage.get("server_tool_use") or {}
     requests = server_use.get("web_search_requests") if isinstance(server_use, dict) else None
+    is_hy3 = getattr(record, "provider", None) == "hunyuan" and getattr(record, "model_name", None) == "hy3"
+    if is_hy3:
+        provider_usage = metadata.get("provider_usage")
+        tool_usage = provider_usage.get("tool_usage") if isinstance(provider_usage, dict) else None
+        requests = tool_usage.get("web_search_call") if isinstance(tool_usage, dict) else None
     requests = requests if type(requests) is int and requests >= 0 else None
+    search_status = "not_estimated" if metadata.get("protocol") == "anthropic_native_search" else "not_reported"
+    search_cost = None
+    if is_hy3:
+        # Only read the saved estimate, never apply today's rates to old calls.
+        snapshot = metadata.get("search_pricing")
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        search_status = snapshot.get("status") or "legacy_unknown"
+        candidate = snapshot.get("estimated_cost")
+        if (search_status == "estimated" and requests is not None
+                and type(snapshot.get("provider_web_search_requests")) is int
+                and snapshot["provider_web_search_requests"] == requests
+                and snapshot.get("currency") == record.currency
+                and type(candidate) in (int, float) and math.isfinite(candidate) and candidate >= 0):
+            search_cost = float(candidate)
+        elif search_status == "estimated":
+            search_status = "invalid_usage"
     pricing = metadata.get("pricing")
     status = metadata.get("pricing_status")
     if not status:
@@ -73,8 +95,8 @@ def billing_details(record: LLMUsageRecord) -> dict[str, Any]:
         "cost_is_estimate": True,
         "cost_scope": metadata.get("cost_scope") or "token_estimate",
         "provider_web_search_requests": requests,
-        "search_tool_cost_status": "not_estimated" if metadata.get("protocol") == "anthropic_native_search" else "not_reported",
-        "estimated_search_tool_cost": None,
+        "search_tool_cost_status": search_status,
+        "estimated_search_tool_cost": search_cost,
         "currency": record.currency,
         "estimated_cost": baseline,
         "estimated_cost_cache_aware": actual,

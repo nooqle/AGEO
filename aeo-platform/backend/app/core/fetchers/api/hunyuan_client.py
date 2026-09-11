@@ -1,4 +1,4 @@
-"""Tencent Hunyuan/TokenHub API client."""
+"""Tencent HY3 API client with explicit endpoint and credential configuration."""
 
 import logging
 import re
@@ -16,13 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class HunyuanClient(BaseAPIClient):
-    """Tencent Hunyuan API client using the current TokenHub gateway.
-
-    The former Hunyuan gateway started returning HTTP 400/code 2030 for the
-    model configured by this project after that model was retired.  TokenHub
-    keeps the same OpenAI-compatible protocol, but uses a new gateway, model
-    id, and web-search request field.
-    """
+    """HY3 Chat Completions client; never migrate credentials across gateways."""
 
     TOKENHUB_BASE_URL = "https://tokenhub.tencentmaas.com/v1"
     DEFAULT_ENDPOINT = f"{TOKENHUB_BASE_URL}/chat/completions"
@@ -120,22 +114,19 @@ class HunyuanClient(BaseAPIClient):
         if not api_key:
             raise ValueError(
                 "Hunyuan API key is required. "
-                "Set HUNYUAN_API_KEY to a TokenHub API key or pass api_key parameter."
+                "Configure HUNYUAN_API_KEY with a key issued for the configured HY3 endpoint."
             )
 
+        search_source = getattr(settings, "HUNYUAN_SEARCH_SOURCE", "lite")
+        if search_source not in {"lite", "standard"}:
+            raise ValueError("HUNYUAN_SEARCH_SOURCE must be lite or standard")
         super().__init__(api_key, endpoint)
         self.model = model
+        self.search_source = search_source
 
     @classmethod
     def _resolve_endpoint(cls, configured_url: str | None) -> str:
-        """Return a full TokenHub-compatible chat-completions endpoint.
-
-        ``HUNYUAN_BASE_URL`` in existing installations points at the retired
-        gateway.  Treat that value as stale so an env-file-only upgrade does
-        not keep sending requests to the endpoint that produced code 2030.
-        Explicit non-legacy endpoints remain supported for tests and private
-        gateways.
-        """
+        """Normalize the path without silently changing the configured gateway."""
 
         base_url = (configured_url or "").strip().rstrip("/")
         if not base_url:
@@ -146,10 +137,11 @@ class HunyuanClient(BaseAPIClient):
         except ValueError:
             host = ""
         if host in cls._LEGACY_HOSTS:
-            logger.warning(
-                "[HunyuanClient] Retired Hunyuan endpoint configured; using TokenHub"
+            raise ValueError(
+                "Legacy HUNYUAN_BASE_URL cannot serve HY3. Explicitly configure the "
+                "HY3 endpoint, HUNYUAN_MODEL=hy3 and a matching HUNYUAN_API_KEY; "
+                "no request was sent and no credential was migrated."
             )
-            base_url = cls.TOKENHUB_BASE_URL
 
         if base_url.endswith("/chat/completions"):
             return base_url
@@ -163,10 +155,8 @@ class HunyuanClient(BaseAPIClient):
     ) -> bool:
         """Report whether settings still point at the retired Hunyuan API.
 
-        The A4 orchestrator can use this signal to choose the already-tested
-        Yuanbao browser path when no TokenHub credential has been provisioned.
-        The client itself still migrates the request so callers that do have a
-        replacement key can continue using the API path.
+        A4 retains this signal for legacy default browser routing. Explicit API
+        requests must configure a current endpoint/model and matching credential.
         """
 
         base_url = (
@@ -205,10 +195,16 @@ class HunyuanClient(BaseAPIClient):
 
     @classmethod
     def _resolve_model(cls, configured_model: str | None) -> str:
-        """Map retired Hunyuan model ids to the current TokenHub model."""
+        """Reject retired models instead of silently selecting a replacement."""
 
         model = (configured_model or cls.DEFAULT_MODEL).strip()
-        return cls._migration_for_model(model) or model
+        if cls._is_retired_model(model):
+            raise ValueError(
+                "Retired HUNYUAN_MODEL or HUNYUAN_FAST_MODEL configured. Explicitly "
+                "set the collection model to hy3 with its endpoint and authorized "
+                "HUNYUAN_API_KEY; no request was sent."
+            )
+        return model
 
     async def ask_with_search(self, question: str) -> LLMResponse:
         """Send question and get answer with search references.
@@ -238,7 +234,7 @@ class HunyuanClient(BaseAPIClient):
             "stream": False,
             "web_search_options": {
                 "enable": True,
-                "search_source": "lite",
+                "search_source": self.search_source,
             },
         }
 
@@ -248,7 +244,7 @@ class HunyuanClient(BaseAPIClient):
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=False) as client:
             response = await client.post(
                 self.endpoint,
                 headers=headers,
@@ -278,6 +274,7 @@ class HunyuanClient(BaseAPIClient):
 
         # Parse response
         answer_text = self._extract_answer(data)
+        # Preserve provider usage on empty responses; A4 rejects them before success.
         search_refs = self._extract_search_references(data)
 
         duration = time.time() - start_time
@@ -285,7 +282,7 @@ class HunyuanClient(BaseAPIClient):
         return LLMResponse(
             answer_text=answer_text,
             search_references=search_refs,
-            raw_response=data,
+            raw_response={**data, "protocol": "hunyuan_chat_search"},
             duration=duration,
         )
 
@@ -309,10 +306,11 @@ class HunyuanClient(BaseAPIClient):
             ).strip()
             detail = f"code={code or 'unknown'} message={message}"
             if code == "2030":
-                detail += "; action=replace HUNYUAN_API_KEY with a TokenHub API key"
+                detail += "; action=verify model availability at the configured endpoint"
             elif code == "401002" or response.status_code == 401:
                 detail += (
-                    "; action=check that HUNYUAN_API_KEY is a valid TokenHub API key"
+                    "; action=verify HUNYUAN_API_KEY belongs to the configured "
+                    "endpoint and is authorized for the requested model"
                 )
             return HunyuanClient._redact_error_text(detail)
 
@@ -349,11 +347,11 @@ class HunyuanClient(BaseAPIClient):
                 return content
             if isinstance(content, list):
                 return "".join(
-                    str(part.get("text") or "")
+                    part["text"]
                     for part in content
-                    if isinstance(part, dict)
+                    if isinstance(part, dict) and isinstance(part.get("text"), str)
                 )
-            return str(content or "")
+            return ""
         except Exception:
             return ""
 
@@ -375,7 +373,11 @@ class HunyuanClient(BaseAPIClient):
             message = choices[0].get("message", {}) if choices else {}
             search_results = message.get("search_results", [])
             if not search_results:
-                search_results = data.get("search_info", {}).get("search_results", [])
+                search_info = data.get("search_info")
+                search_results = (
+                    search_info.get("search_results") or []
+                    if isinstance(search_info, dict) else []
+                )
             for idx, result in enumerate(search_results, 1):
                 if not isinstance(result, dict):
                     continue

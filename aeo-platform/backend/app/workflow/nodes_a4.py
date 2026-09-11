@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine, Iterator, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -274,6 +275,8 @@ async def _record_a4_api_usage(
             "usage_scope": "a4_platform_fetch",
             "protocol": result.get("protocol"),
             "native_provider_usage": result.get("native_provider_usage"),
+            "provider_endpoint": result.get("provider_endpoint"),
+            "search_source": result.get("search_source"),
             "web_search_executed": result.get("web_search_executed"),
             "cost_scope": "token_estimate",
         },
@@ -2145,6 +2148,12 @@ async def _retry_fetch(
         if not usage_observed:
             return result
         attached = {**retry_identity, **result, "provider_usage": {**retry_usage_totals, "attempts": usage_attempts}}
+        if platform == "hunyuan" and method == "api":
+            counts = [item.get("tool_usage", {}).get("web_search_call")
+                      if isinstance(item.get("tool_usage"), dict) else None for item in usage_attempts]
+            attached["provider_usage"]["tool_usage"] = {
+                "web_search_call": sum(counts) if all(type(n) is int and n >= 0 for n in counts) else None,
+            }
         if native_attempts:
             counts = [item.get("server_tool_use", {}).get("web_search_requests")
                       if isinstance(item.get("server_tool_use"), dict) else None for item in native_attempts]
@@ -2174,7 +2183,9 @@ async def _retry_fetch(
                         value = getattr(parsed_usage, field)
                     previous = retry_usage_totals[field]
                     retry_usage_totals[field] = previous + value if previous is not None and value is not None else None
-                retry_identity.update({key: result[key] for key in ("protocol", "provider_model", "actual_provider") if result.get(key)})
+                retry_identity.update({key: result[key] for key in (
+                    "protocol", "provider_model", "actual_provider", "provider_endpoint", "search_source"
+                ) if result.get(key)})
                 if result.get("protocol") == "anthropic_native_search":
                     native = result.get("native_provider_usage")
                     native_attempts.append(native if isinstance(native, dict) else {})
@@ -2185,6 +2196,11 @@ async def _retry_fetch(
                 return attach_retry_usage(result)
             last_result = result
         except Exception as e:
+            if platform == "hunyuan" and method == "api":
+                # A transport/provider failure gives no reliable billable usage.
+                usage_attempts.append({})
+                retry_usage_totals = dict.fromkeys(retry_usage_totals)
+                usage_observed = True
             last_result = {
                 "platform": platform,
                 "fetch_method": method,
@@ -4656,6 +4672,19 @@ async def _fetch_from_doubao(client, question: str) -> dict[str, Any]:
 async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
     """Fetch answer from Yuanbao."""
     start_time = datetime.now(timezone.utc)
+    endpoint = str(getattr(client, "endpoint", "") or "")
+    try:
+        parsed_endpoint = urlsplit(endpoint)
+        if parsed_endpoint.username or parsed_endpoint.password or parsed_endpoint.query or parsed_endpoint.fragment:
+            endpoint = ""
+    except ValueError:
+        endpoint = ""
+    provider_identity = {
+        "actual_provider": "hunyuan",
+        "provider_model": str(getattr(client, "model", "") or "hunyuan"),
+        "provider_endpoint": endpoint,
+        "search_source": getattr(client, "search_source", None),
+    }
 
     try:
         response = await client.ask_with_search(question)
@@ -4665,6 +4694,12 @@ async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
             response,
             fallback_model=str(getattr(client, "model", "") or "hunyuan"),
         )
+        raw_response = getattr(response, "raw_response", None)
+        usage_fields = {
+            **provider_identity,
+            **usage_fields,
+            "protocol": raw_response.get("protocol") if isinstance(raw_response, dict) else None,
+        }
 
         if not answer_text or not answer_text.strip():
             logger.warning(
@@ -4698,6 +4733,7 @@ async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
             raise
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         return {
+            **provider_identity,
             "platform": "hunyuan",
             "platform_name": "元宝",
             "fetch_method": "api",
@@ -4708,6 +4744,7 @@ async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
     except Exception as e:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         return {
+            **provider_identity,
             "platform": "hunyuan",
             "platform_name": "元宝",
             "fetch_method": "api",

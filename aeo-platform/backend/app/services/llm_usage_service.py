@@ -22,6 +22,47 @@ from app.services.deepseek_pricing import resolve_deepseek_tariff
 
 logger = logging.getLogger(__name__)
 
+HY3_GUANGZHOU_ENDPOINT = "https://tokenhub.tencentmaas.com/v1/chat/completions"
+HY3_PRICING_SOURCE = "https://cloud.tencent.com/document/product/1823/130055"
+HY3_SEARCH_PRICES_PER_THOUSAND = {"lite": 7.0, "standard": 12.0}
+
+
+def _is_official_hy3_route(provider: str, model_name: str, metadata: Any) -> bool:
+    return (
+        provider == "hunyuan"
+        and model_name == "hy3"
+        and isinstance(metadata, dict)
+        and metadata.get("provider_endpoint") == HY3_GUANGZHOU_ENDPOINT
+    )
+
+
+def hy3_search_pricing_snapshot(
+    provider: str, model_name: str, metadata: dict[str, Any], raw_usage: Any
+) -> dict[str, Any] | None:
+    """Snapshot search estimates separately; never infer usage from citations."""
+    if provider != "hunyuan" or model_name != "hy3":
+        return None
+    tool_usage = raw_usage.get("tool_usage") if isinstance(raw_usage, dict) else None
+    count = tool_usage.get("web_search_call") if isinstance(tool_usage, dict) else None
+    count = count if type(count) is int and count >= 0 else None
+    source = metadata.get("search_source")
+    price = HY3_SEARCH_PRICES_PER_THOUSAND.get(source) if isinstance(source, str) else None
+    route_known = _is_official_hy3_route(provider, model_name, metadata)
+    if not route_known or metadata.get("protocol") != "hunyuan_chat_search":
+        price = None
+    status = "unknown_usage" if count is None else "unknown_price" if price is None else "estimated"
+    return {
+        "status": status,
+        "provider_web_search_requests": count,
+        "search_source": source,
+        "price_per_thousand_requests": price,
+        "estimated_cost": count * price / 1000 if count is not None and price is not None else None,
+        "currency": "CNY" if price is not None else "UNKNOWN",
+        "rate_version": "tencent_hy3_guangzhou_2026_09_11" if price is not None else None,
+        "source_url": HY3_PRICING_SOURCE if price is not None else None,
+        "cost_scope": "search_tool_estimate",
+    }
+
 
 @dataclass(frozen=True)
 class UsagePricingSnapshot:
@@ -107,6 +148,7 @@ def _resolve_pricing(
     model_name: str,
     prompt_tokens: int,
     occurred_at: datetime | None = None,
+    provider_metadata: dict[str, Any] | None = None,
 ) -> UsagePricingSnapshot | None:
     """Resolve standard and cache-hit pricing for a provider/model pair."""
     settings = get_settings()
@@ -175,6 +217,11 @@ def _resolve_pricing(
             input_price = settings.DOUBAO_LITE_PRICE_INPUT_CACHE_MISS_PER_MTOKENS
             cached_input_price = settings.DOUBAO_LITE_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
             output_price = settings.DOUBAO_LITE_PRICE_OUTPUT_PER_MTOKENS
+    elif _is_official_hy3_route(provider, model_name, provider_metadata):
+        pricing_currency = "CNY"
+        source = "tencent_hy3_guangzhou_2026_09_11"
+        source_url = HY3_PRICING_SOURCE
+        input_price, cached_input_price, output_price = 1.0, 0.25, 4.0
     elif provider == "hunyuan" and "hunyuan-2.0-instruct" in model_key:
         pricing_currency = "CNY"
         pricing_model = "hunyuan-2.0-instruct"
@@ -238,6 +285,7 @@ def estimate_usage_costs(
     cached_prompt_tokens: int | None = None,
     cache_miss_prompt_tokens: int | None = None,
     occurred_at: datetime | None = None,
+    provider_metadata: dict[str, Any] | None = None,
 ) -> UsageCostBreakdown:
     """Price reported counters only; missing/contradictory usage is not free."""
     prompt = _token_count(prompt_tokens)
@@ -258,7 +306,7 @@ def estimate_usage_costs(
             invalid = True
     if invalid:
         cache_status = "invalid"
-    pricing = _resolve_pricing(provider, model_name, prompt or 0, occurred_at)
+    pricing = _resolve_pricing(provider, model_name, prompt or 0, occurred_at, provider_metadata)
     status = "priced"
     if invalid:
         status = "invalid_usage"
@@ -381,6 +429,7 @@ class LLMUsageService:
             cached_prompt_tokens=usage.cached_prompt_tokens,
             cache_miss_prompt_tokens=usage.cache_miss_prompt_tokens,
             occurred_at=occurred_at,
+            provider_metadata=extra_metadata,
         )
         prompt_tokens = cost_breakdown.prompt_tokens
         completion_tokens = cost_breakdown.completion_tokens
@@ -422,6 +471,11 @@ class LLMUsageService:
         normalized_extra_metadata["normalized_usage"] = usage.to_dict()
         if usage.raw:
             normalized_extra_metadata.setdefault("provider_usage", usage.raw)
+        search_pricing = hy3_search_pricing_snapshot(
+            resolved_provider, resolved_model_name, normalized_extra_metadata, usage.raw
+        )
+        if search_pricing is not None:
+            normalized_extra_metadata["search_pricing"] = search_pricing
 
         async with self.db.begin_nested():
             record = LLMUsageRecord(
