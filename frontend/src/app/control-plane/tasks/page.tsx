@@ -16,7 +16,7 @@ import {
   ControlPlaneStatCard,
   controlPlanePalette,
 } from '@/components/control-plane/ControlPlaneShell';
-import { formatControlPlaneCost } from '@/components/control-plane/ControlPlaneDataPanels';
+import { formatCustomerCostSubtotal, formatTaskCost } from '@/components/control-plane/ControlPlaneDataPanels';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { api } from '@/services/api';
@@ -37,10 +37,6 @@ const STATUS_OPTIONS = [
   { label: '失败', value: 'failed' },
   { label: '已取消', value: 'cancelled' },
 ] as const;
-
-function formatCost(value: number, currency = 'CNY') {
-  return formatControlPlaneCost(value, currency);
-}
 
 export default function ControlPlaneTasksPage() {
   return (
@@ -117,7 +113,6 @@ function ControlPlaneTasksContent() {
     return filteredTasks.reduce(
       (acc, task) => {
         acc.tokens += task.llm_total_tokens;
-        acc.cost += task.llm_estimated_cost_cache_aware;
         acc.latency += task.llm_total_latency_ms;
         if (task.status === 'running' || task.status === 'pending') acc.active += 1;
         return acc;
@@ -182,8 +177,8 @@ function ControlPlaneTasksContent() {
               hint="含 pending 与 running"
             />
             <ControlPlaneStatCard
-              label="窗口内费用"
-              value={formatCost(summary.cost)}
+              label="窗口内已计价小计"
+              value={formatCustomerCostSubtotal(filteredTasks)}
               hint={`Token ${summary.tokens.toLocaleString()}`}
             />
           </div>
@@ -341,12 +336,9 @@ function ControlPlaneTasksContent() {
                           {task.llm_total_tokens.toLocaleString()}
                         </td>
                         <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                          {formatCost(
-                            task.llm_estimated_cost_cache_aware,
-                            task.currency
-                          )}
+                          {formatTaskCost(task)}
                           <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                            缓存 {task.llm_cached_prompt_tokens.toLocaleString()} / 计费输入 {task.llm_billable_prompt_tokens.toLocaleString()}
+                            已计价小计 · 未计价 {task.unknown_pricing_call_count ?? '未知'} 次
                           </div>
                         </td>
                         <td className="py-4 pr-4" style={{ color: palette.muted }}>

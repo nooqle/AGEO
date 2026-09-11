@@ -22,6 +22,7 @@ def get_llm_model(
     provider: str | None = None,
     model_name: str | None = None,
     thinking_enabled: bool | None = None,
+    api_key: str | None = None,
 ) -> BaseLLMModel:
     """Factory: create LLM model instance.
 
@@ -32,17 +33,19 @@ def get_llm_model(
     from app.config import get_settings
 
     settings = get_settings()
-    selected_provider = (provider or getattr(settings, "LLM_PROVIDER", "minimax")).lower()
+    selected_provider = (provider or getattr(settings, "LLM_PROVIDER", "deepseek")).lower()
 
     if selected_provider == "minimax":
         from app.core.llm.minimax import MiniMaxConfig, MiniMaxModel
 
-        return MiniMaxModel(MiniMaxConfig(model_name=model_name or "MiniMax-M2.1"))
+        return MiniMaxModel(MiniMaxConfig(model_name=model_name or "MiniMax-M2.1", api_key=api_key))
 
     if selected_provider == "glm5":
         from app.core.llm.glm5 import GLM5Config, GLM5Model
 
         config_kwargs = {}
+        if api_key:
+            config_kwargs["api_key"] = api_key
         if model_name:
             config_kwargs["model_name"] = model_name
         if thinking_enabled is not None:
@@ -53,6 +56,8 @@ def get_llm_model(
         from app.core.llm.deepseek import DeepSeekConfig, DeepSeekModel
 
         config_kwargs = {}
+        if api_key:
+            config_kwargs["api_key"] = api_key
         if model_name:
             config_kwargs["model_name"] = model_name
         if thinking_enabled is not None:

@@ -807,6 +807,8 @@ class FetchRunPlatformStateService:
             "blocking_url",
             "blocking_fingerprint",
             "fetch_method",
+            "requested_platform", "requested_method", "actual_provider", "provider_model", "web_search_supported",
+            "web_search_executed", "reference_scope", "protocol",
             "error",
             "duration",
             "failure_layer",
@@ -816,6 +818,8 @@ class FetchRunPlatformStateService:
             "needs_handoff",
         ):
             value = packet.get(key)
+            if value is None and isinstance(packet.get("provenance"), dict):
+                value = packet["provenance"].get(key)
             if value is not None:
                 normalized[key] = value
         evidence_ref = cls._sanitize_evidence_ref(packet.get("evidence_ref"))
@@ -857,6 +861,8 @@ class FetchRunPlatformStateService:
         }
         for key in (
             "fetch_method",
+            "requested_platform", "requested_method", "actual_provider", "provider_model", "web_search_supported",
+            "web_search_executed", "reference_scope", "protocol",
             "error",
             "duration",
             "failure_layer",
@@ -931,6 +937,8 @@ class FetchRunPlatformStateService:
             else (legacy_result or {}).get("duration")
         )
         for key in (
+            "requested_platform", "requested_method", "actual_provider", "provider_model", "web_search_supported",
+            "web_search_executed", "reference_scope", "protocol",
             "failure_layer",
             "failure_reason",
             "execution_stage",

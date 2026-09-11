@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.platform_fetch_methods import resolve_platform_fetch_methods
 
 
 BrandIntelligenceRunStatusLiteral = Literal[
@@ -30,6 +32,17 @@ class BrandIntelligenceRunCreate(BaseModel):
     origin_session_id: str | None = Field(default=None, max_length=80)
     origin_event_id: str | None = Field(default=None, max_length=160)
     auto_dispatch: bool = Field(default=True)
+
+
+    @field_validator("input_scope")
+    @classmethod
+    def validate_platform_methods(cls, value):
+        if isinstance(value, dict) and "platform_fetch_methods" in value:
+            resolve_platform_fetch_methods(
+                value["platform_fetch_methods"], platforms=value.get("platforms"),
+                fetch_mode=value.get("fetch_mode", "fast"), explicit=True,
+            )
+        return value
 
 
 class BrandIntelligenceRunConfirm(BaseModel):

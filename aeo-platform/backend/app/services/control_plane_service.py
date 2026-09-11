@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -16,6 +16,7 @@ from app.models.session import Session as ChatSession
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.user import User
 from app.services.account_admin_service import AccountAdminService
+from app.services.usage_billing_summary import billing_details, cache_status_for_record, summarize_billing, summarize_usage, grouped_usage
 
 
 class ControlPlaneService:
@@ -64,7 +65,7 @@ class ControlPlaneService:
             record.cached_prompt_tokens,
         )
         runtime_context_size = cls._metadata_int(metadata, "runtime_context_size")
-        if record.prompt_tokens > 0 and cache_hit_ratio < cls.LOW_CACHE_HIT_RATIO_THRESHOLD:
+        if cache_status_for_record(record) == "known" and record.prompt_tokens > 0 and cache_hit_ratio < cls.LOW_CACHE_HIT_RATIO_THRESHOLD:
             return "复用率低"
         if runtime_context_size is not None and (
             runtime_context_size > cls.RUNTIME_CONTEXT_SIZE_BUDGET
@@ -125,7 +126,7 @@ class ControlPlaneService:
                     oversized_runtime_context_count += 1
             if not static_prompt_hash or not tool_surface_hash:
                 missing_fingerprint_count += 1
-            if record.prompt_tokens > 0 and (
+            if cache_status_for_record(record) == "known" and record.prompt_tokens > 0 and (
                 cls._cache_hit_ratio(record.prompt_tokens, record.cached_prompt_tokens)
                 < cls.LOW_CACHE_HIT_RATIO_THRESHOLD
             ):
@@ -261,7 +262,8 @@ class ControlPlaneService:
                     "organization_brand_count": organization_brand_count,
                     "personal_brand_count": personal_brand_count,
                     "tokens_7d": int(usage.get("tokens_7d", 0)),
-                    "cost_7d": float(usage.get("cost_7d", 0.0)),
+                    "cost_7d": usage.get("cost_7d"),
+                    **{key: usage.get(key) for key in ("currency", "costs_by_currency", "priced_call_count", "unknown_pricing_call_count", "pricing_coverage")},
                     "active_task_count": int(usage.get("active_task_count", 0)),
                     "last_active_at": usage.get("last_active_at"),
                 }
@@ -269,7 +271,7 @@ class ControlPlaneService:
         rows.sort(
             key=lambda item: (
                 item["last_active_at"] or datetime.fromtimestamp(0, tz=timezone.utc),
-                item["cost_7d"],
+                item["cost_7d"] or 0.0,
             ),
             reverse=True,
         )
@@ -301,7 +303,7 @@ class ControlPlaneService:
                 "organization_brand_count": len(organization.entities),
                 "personal_brand_count": 0,
                 "tokens_7d": 0,
-                "cost_7d": 0.0,
+                "cost_7d": None,
                 "active_task_count": 0,
                 "last_active_at": None,
             }
@@ -375,509 +377,117 @@ class ControlPlaneService:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_observability_snapshot(
-        self,
-        *,
-        days: int = 30,
-        organization_id: UUID | None = None,
-        limit: int = 12,
-    ) -> dict[str, object]:
-        since = self._since(days)
-        item_limit = min(max(limit, 1), 50)
+    async def get_task_billing(self, task_ids: Sequence[UUID]) -> dict[UUID, dict]:
+        if not task_ids:
+            return {}
+        result = await self.db.execute(
+            select(LLMUsageRecord).where(LLMUsageRecord.task_id.in_(task_ids))
+        )
+        records = list(result.scalars().all())
+        return {
+            task_id: summarize_billing([r for r in records if r.task_id == task_id])
+            for task_id in task_ids
+        }
 
+    def _usage_rows_statement(self, since: datetime):
         task_user = aliased(User)
         session_user = aliased(User)
-        task_org = aliased(Organization)
-        session_org = aliased(Organization)
-
-        org_id_expr = func.coalesce(task_org.id, session_org.id)
-        customer_name_expr = func.coalesce(task_org.legal_name, session_org.legal_name)
-        brand_name_expr = func.coalesce(
-            AnalysisTask.brand_name,
-            ChatSession.title,
-            "未关联品牌",
-        )
-
-        summary_stmt = (
-            select(
-                func.count(LLMUsageRecord.id),
-                func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.completion_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.cached_prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.billable_prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
-                func.coalesce(func.sum(LLMUsageRecord.estimated_cost_cache_aware), 0.0),
-                func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
-                func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
-                func.count(func.distinct(LLMUsageRecord.model_name)),
-                func.min(LLMUsageRecord.created_at),
-                func.max(LLMUsageRecord.created_at),
-            )
+        organization = aliased(Organization)
+        # One task and one session per ledger row. Task attribution wins consistently.
+        org_id = func.coalesce(task_user.organization_id, session_user.organization_id)
+        stmt = (
+            select(LLMUsageRecord, org_id, organization.legal_name,
+                   func.coalesce(AnalysisTask.brand_name, ChatSession.title, "Unlinked"))
             .select_from(LLMUsageRecord)
             .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
             .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
             .outerjoin(task_user, AnalysisTask.user_id == task_user.id)
             .outerjoin(session_user, ChatSession.user_id == session_user.id)
+            .outerjoin(organization, org_id == organization.id)
             .where(LLMUsageRecord.created_at >= since)
+            .order_by(LLMUsageRecord.created_at.desc(), LLMUsageRecord.id.desc())
         )
+        return stmt, org_id
+
+    async def get_observability_snapshot(
+        self, *, days: int = 30, organization_id: UUID | None = None,
+        limit: int = 12,
+    ) -> dict[str, object]:
+        stmt, org_id = self._usage_rows_statement(self._since(days))
         if organization_id is not None:
-            summary_stmt = summary_stmt.where(
-                or_(
-                    task_user.organization_id == organization_id,
-                    session_user.organization_id == organization_id,
-                )
-            )
-        summary_row = (await self.db.execute(summary_stmt)).one()
-        (
-            total_calls,
-            total_tokens,
-            prompt_tokens,
-            completion_tokens,
-            cached_prompt_tokens,
-            billable_prompt_tokens,
-            total_cost,
-            total_cost_cache_aware,
-            total_latency_ms,
-            avg_latency_ms,
-            unique_models,
-            first_call_at,
-            last_call_at,
-        ) = summary_row
-
-        by_customer_brand_stmt = (
-            select(
-                org_id_expr,
-                customer_name_expr,
-                brand_name_expr,
-                func.count(LLMUsageRecord.id),
-                func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.completion_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.cached_prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.billable_prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
-                func.coalesce(func.sum(LLMUsageRecord.estimated_cost_cache_aware), 0.0),
-                func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
-                func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
-            )
-            .select_from(LLMUsageRecord)
-            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
-            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
-            .outerjoin(task_user, AnalysisTask.user_id == task_user.id)
-            .outerjoin(session_user, ChatSession.user_id == session_user.id)
-            .outerjoin(task_org, task_user.organization_id == task_org.id)
-            .outerjoin(session_org, session_user.organization_id == session_org.id)
-            .where(LLMUsageRecord.created_at >= since)
-            .group_by(org_id_expr, customer_name_expr, brand_name_expr)
-            .order_by(desc(func.sum(LLMUsageRecord.estimated_cost_cache_aware)))
-            .limit(item_limit)
+            stmt = stmt.where(org_id == organization_id)
+        rows = list((await self.db.execute(stmt)).all())
+        records = [row[0] for row in rows]
+        reuse_summary, diagnostics = self._build_reuse_diagnostics(
+            records[:self.DIAGNOSTIC_SAMPLE_LIMIT]
         )
-        if organization_id is not None:
-            by_customer_brand_stmt = by_customer_brand_stmt.where(
-                or_(
-                    task_user.organization_id == organization_id,
-                    session_user.organization_id == organization_id,
-                )
-            )
-        by_customer_brand_rows = (await self.db.execute(by_customer_brand_stmt)).all()
-
-        by_model_stmt = (
-            select(
-                LLMUsageRecord.provider,
-                LLMUsageRecord.model_name,
-                func.count(LLMUsageRecord.id),
-                func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.completion_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.cached_prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.billable_prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
-                func.coalesce(func.sum(LLMUsageRecord.estimated_cost_cache_aware), 0.0),
-                func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
-                func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
-            )
-            .select_from(LLMUsageRecord)
-            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
-            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
-            .outerjoin(task_user, AnalysisTask.user_id == task_user.id)
-            .outerjoin(session_user, ChatSession.user_id == session_user.id)
-            .where(LLMUsageRecord.created_at >= since)
-            .group_by(LLMUsageRecord.provider, LLMUsageRecord.model_name)
-            .order_by(desc(func.sum(LLMUsageRecord.estimated_cost_cache_aware)))
-            .limit(item_limit)
-        )
-        if organization_id is not None:
-            by_model_stmt = by_model_stmt.where(
-                or_(
-                    task_user.organization_id == organization_id,
-                    session_user.organization_id == organization_id,
-                )
-            )
-        by_model_rows = (await self.db.execute(by_model_stmt)).all()
-
-        by_step_stmt = (
-            select(
-                LLMUsageRecord.step,
-                LLMUsageRecord.step_name,
-                func.count(LLMUsageRecord.id),
-                func.coalesce(func.sum(LLMUsageRecord.total_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.completion_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.cached_prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.billable_prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageRecord.estimated_cost), 0.0),
-                func.coalesce(func.sum(LLMUsageRecord.estimated_cost_cache_aware), 0.0),
-                func.coalesce(func.sum(LLMUsageRecord.latency_ms), 0),
-                func.coalesce(func.avg(LLMUsageRecord.latency_ms), 0.0),
-            )
-            .select_from(LLMUsageRecord)
-            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
-            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
-            .outerjoin(task_user, AnalysisTask.user_id == task_user.id)
-            .outerjoin(session_user, ChatSession.user_id == session_user.id)
-            .where(LLMUsageRecord.created_at >= since)
-            .group_by(LLMUsageRecord.step, LLMUsageRecord.step_name)
-            .order_by(desc(func.sum(LLMUsageRecord.estimated_cost_cache_aware)))
-            .limit(item_limit)
-        )
-        if organization_id is not None:
-            by_step_stmt = by_step_stmt.where(
-                or_(
-                    task_user.organization_id == organization_id,
-                    session_user.organization_id == organization_id,
-                )
-            )
-        by_step_rows = (await self.db.execute(by_step_stmt)).all()
-
-        recent_calls_stmt = (
-            select(
-                LLMUsageRecord,
-                org_id_expr,
-                customer_name_expr,
-                brand_name_expr,
-            )
-            .select_from(LLMUsageRecord)
-            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
-            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
-            .outerjoin(task_user, AnalysisTask.user_id == task_user.id)
-            .outerjoin(session_user, ChatSession.user_id == session_user.id)
-            .outerjoin(task_org, task_user.organization_id == task_org.id)
-            .outerjoin(session_org, session_user.organization_id == session_org.id)
-            .where(LLMUsageRecord.created_at >= since)
-            .order_by(desc(LLMUsageRecord.created_at))
-            .limit(item_limit)
-        )
-        if organization_id is not None:
-            recent_calls_stmt = recent_calls_stmt.where(
-                or_(
-                    task_user.organization_id == organization_id,
-                    session_user.organization_id == organization_id,
-                )
-            )
-        recent_call_rows = (await self.db.execute(recent_calls_stmt)).all()
-        reporting_currency = self._reporting_currency()
-
-        diagnostic_stmt = (
-            select(LLMUsageRecord)
-            .select_from(LLMUsageRecord)
-            .outerjoin(AnalysisTask, LLMUsageRecord.task_id == AnalysisTask.id)
-            .outerjoin(ChatSession, LLMUsageRecord.session_id == ChatSession.id)
-            .outerjoin(task_user, AnalysisTask.user_id == task_user.id)
-            .outerjoin(session_user, ChatSession.user_id == session_user.id)
-            .where(LLMUsageRecord.created_at >= since)
-            .order_by(desc(LLMUsageRecord.created_at))
-            .limit(self.DIAGNOSTIC_SAMPLE_LIMIT)
-        )
-        if organization_id is not None:
-            diagnostic_stmt = diagnostic_stmt.where(
-                or_(
-                    task_user.organization_id == organization_id,
-                    session_user.organization_id == organization_id,
-                )
-            )
-        diagnostic_records = list(
-            (await self.db.execute(diagnostic_stmt)).scalars().all()
-        )
-        reuse_summary, reuse_diagnostics = self._build_reuse_diagnostics(
-            diagnostic_records
-        )
-
-        def build_breakdown(
-            *,
-            call_count: int,
-            total_tokens: int,
-            prompt_tokens: int,
-            completion_tokens: int,
-            cached_prompt_tokens: int,
-            billable_prompt_tokens: int,
-            total_cost: float,
-            total_cost_cache_aware: float,
-            total_latency_ms: int,
-            avg_latency_ms: float,
-            **extra: object,
-        ) -> dict[str, object]:
-            estimated_savings = round(
-                max(
-                    float(total_cost or 0.0) - float(total_cost_cache_aware or 0.0), 0.0
-                ),
-                6,
-            )
-            return {
-                **extra,
-                "call_count": int(call_count or 0),
-                "total_tokens": int(total_tokens or 0),
-                "prompt_tokens": int(prompt_tokens or 0),
-                "completion_tokens": int(completion_tokens or 0),
-                "cached_prompt_tokens": int(cached_prompt_tokens or 0),
-                "billable_prompt_tokens": int(billable_prompt_tokens or 0),
-                "cache_hit_ratio": self._cache_hit_ratio(
-                    int(prompt_tokens or 0), int(cached_prompt_tokens or 0)
-                ),
-                "total_cost": round(float(total_cost or 0.0), 6),
-                "total_cost_cache_aware": round(
-                    float(total_cost_cache_aware or 0.0), 6
-                ),
-                "estimated_savings": estimated_savings,
-                "currency": reporting_currency,
-                "total_latency_ms": int(total_latency_ms or 0),
-                "avg_latency_ms": round(float(avg_latency_ms or 0.0), 2),
-            }
-
+        item_limit = min(max(limit, 1), 50)
+        recent = []
+        for record, organization_uuid, customer_name, brand_name in rows[:item_limit]:
+            metadata = self._metadata(record)
+            recent.append({
+                **{field: getattr(record, field) for field in (
+                    "id", "task_id", "session_id", "provider", "model_name",
+                    "step", "step_name", "prompt_tokens", "completion_tokens",
+                    "total_tokens", "cached_prompt_tokens", "billable_prompt_tokens",
+                    "latency_ms", "created_at",
+                )},
+                "organization_id": organization_uuid,
+                "customer_name": customer_name,
+                "brand_name": brand_name,
+                **{field: metadata.get(field) for field in (
+                    "static_prompt_hash", "tool_surface_hash", "model_identity",
+                    "runtime_context_size", "runtime_reminder_enabled",
+                    "stable_tool_surface_enabled", "stable_skill_tool_description_enabled",
+                )},
+                "reuse_diagnosis": self._reuse_diagnosis_for_record(record),
+                **billing_details(record),
+            })
+        model_rows = [(r, r.provider, r.model_name) for r in records]
+        step_rows = [(r, r.step, r.step_name) for r in records]
         return {
             "summary": {
-                "days": days,
-                "call_count": int(total_calls or 0),
-                "total_tokens": int(total_tokens or 0),
-                "prompt_tokens": int(prompt_tokens or 0),
-                "completion_tokens": int(completion_tokens or 0),
-                "cached_prompt_tokens": int(cached_prompt_tokens or 0),
-                "billable_prompt_tokens": int(billable_prompt_tokens or 0),
-                "cache_hit_ratio": self._cache_hit_ratio(
-                    int(prompt_tokens or 0), int(cached_prompt_tokens or 0)
-                ),
-                "total_cost": round(float(total_cost or 0.0), 6),
-                "total_cost_cache_aware": round(
-                    float(total_cost_cache_aware or 0.0), 6
-                ),
-                "estimated_savings": round(
-                    max(
-                        float(total_cost or 0.0) - float(total_cost_cache_aware or 0.0),
-                        0.0,
-                    ),
-                    6,
-                ),
-                "currency": reporting_currency,
-                "total_latency_ms": int(total_latency_ms or 0),
-                "avg_latency_ms": round(float(avg_latency_ms or 0.0), 2),
-                "unique_models": int(unique_models or 0),
-                **reuse_summary,
-                "first_call_at": first_call_at,
-                "last_call_at": last_call_at,
+                "days": days, **summarize_usage(records), **reuse_summary,
+                "unique_models": len({(r.provider, r.model_name) for r in records}),
+                "first_call_at": records[-1].created_at if records else None,
+                "last_call_at": records[0].created_at if records else None,
             },
-            "reuse_diagnostics": reuse_diagnostics,
-            "by_customer_brand": [
-                build_breakdown(
-                    organization_id=organization_uuid,
-                    customer_name=customer_name,
-                    brand_name=brand_name,
-                    call_count=call_count,
-                    total_tokens=total_tokens,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    cached_prompt_tokens=cached_prompt_tokens,
-                    billable_prompt_tokens=billable_prompt_tokens,
-                    total_cost=total_cost,
-                    total_cost_cache_aware=total_cost_cache_aware,
-                    total_latency_ms=total_latency_ms,
-                    avg_latency_ms=avg_latency_ms,
-                )
-                for (
-                    organization_uuid,
-                    customer_name,
-                    brand_name,
-                    call_count,
-                    total_tokens,
-                    prompt_tokens,
-                    completion_tokens,
-                    cached_prompt_tokens,
-                    billable_prompt_tokens,
-                    total_cost,
-                    total_cost_cache_aware,
-                    total_latency_ms,
-                    avg_latency_ms,
-                ) in by_customer_brand_rows
-            ],
-            "by_model": [
-                build_breakdown(
-                    provider=provider,
-                    model_name=model_name,
-                    call_count=call_count,
-                    total_tokens=total_tokens,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    cached_prompt_tokens=cached_prompt_tokens,
-                    billable_prompt_tokens=billable_prompt_tokens,
-                    total_cost=total_cost,
-                    total_cost_cache_aware=total_cost_cache_aware,
-                    total_latency_ms=total_latency_ms,
-                    avg_latency_ms=avg_latency_ms,
-                )
-                for (
-                    provider,
-                    model_name,
-                    call_count,
-                    total_tokens,
-                    prompt_tokens,
-                    completion_tokens,
-                    cached_prompt_tokens,
-                    billable_prompt_tokens,
-                    total_cost,
-                    total_cost_cache_aware,
-                    total_latency_ms,
-                    avg_latency_ms,
-                ) in by_model_rows
-            ],
-            "by_step": [
-                build_breakdown(
-                    step=step,
-                    step_name=step_name,
-                    call_count=call_count,
-                    total_tokens=total_tokens,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    cached_prompt_tokens=cached_prompt_tokens,
-                    billable_prompt_tokens=billable_prompt_tokens,
-                    total_cost=total_cost,
-                    total_cost_cache_aware=total_cost_cache_aware,
-                    total_latency_ms=total_latency_ms,
-                    avg_latency_ms=avg_latency_ms,
-                )
-                for (
-                    step,
-                    step_name,
-                    call_count,
-                    total_tokens,
-                    prompt_tokens,
-                    completion_tokens,
-                    cached_prompt_tokens,
-                    billable_prompt_tokens,
-                    total_cost,
-                    total_cost_cache_aware,
-                    total_latency_ms,
-                    avg_latency_ms,
-                ) in by_step_rows
-            ],
-            "recent_calls": [
-                {
-                    "id": record.id,
-                    "task_id": record.task_id,
-                    "session_id": record.session_id,
-                    "organization_id": organization_uuid,
-                    "customer_name": customer_name,
-                    "brand_name": brand_name,
-                    "provider": record.provider,
-                    "model_name": record.model_name,
-                    "step": record.step,
-                    "step_name": record.step_name,
-                    "prompt_tokens": record.prompt_tokens,
-                    "completion_tokens": record.completion_tokens,
-                    "total_tokens": record.total_tokens,
-                    "cached_prompt_tokens": record.cached_prompt_tokens,
-                    "billable_prompt_tokens": record.billable_prompt_tokens,
-                    "cache_hit_ratio": self._cache_hit_ratio(
-                        record.prompt_tokens, record.cached_prompt_tokens
-                    ),
-                    "latency_ms": record.latency_ms,
-                    "estimated_cost": round(float(record.estimated_cost or 0.0), 6),
-                    "estimated_cost_cache_aware": round(
-                        float(record.estimated_cost_cache_aware or 0.0), 6
-                    ),
-                    "estimated_savings": round(
-                        max(
-                            float(record.estimated_cost or 0.0)
-                            - float(record.estimated_cost_cache_aware or 0.0),
-                            0.0,
-                        ),
-                        6,
-                    ),
-                    "currency": record.currency,
-                    "static_prompt_hash": self._metadata(record).get(
-                        "static_prompt_hash"
-                    ),
-                    "tool_surface_hash": self._metadata(record).get(
-                        "tool_surface_hash"
-                    ),
-                    "model_identity": self._metadata(record).get("model_identity"),
-                    "runtime_context_size": self._metadata_int(
-                        self._metadata(record),
-                        "runtime_context_size",
-                    ),
-                    "runtime_reminder_enabled": self._metadata(record).get(
-                        "runtime_reminder_enabled"
-                    ),
-                    "stable_tool_surface_enabled": self._metadata(record).get(
-                        "stable_tool_surface_enabled"
-                    ),
-                    "stable_skill_tool_description_enabled": self._metadata(
-                        record
-                    ).get("stable_skill_tool_description_enabled"),
-                    "reuse_diagnosis": self._reuse_diagnosis_for_record(record),
-                    "created_at": record.created_at,
-                }
-                for record, organization_uuid, customer_name, brand_name in recent_call_rows
-            ],
+            "reuse_diagnostics": diagnostics,
+            "by_customer_brand": grouped_usage(rows, (1, 2, 3), ("organization_id", "customer_name", "brand_name")),
+            "by_model": grouped_usage(model_rows, (1, 2), ("provider", "model_name")),
+            "by_step": grouped_usage(step_rows, (1, 2), ("step", "step_name")),
+            "recent_calls": recent,
         }
 
     async def _build_usage_stats(
-        self,
-        *,
-        org_ids: Sequence[UUID],
-        days: int,
+        self, *, org_ids: Sequence[UUID], days: int,
     ) -> dict[UUID, dict[str, object]]:
         if not org_ids:
             return {}
         since = self._since(days)
-        result = await self.db.execute(
-            select(
-                User.organization_id,
-                func.coalesce(func.sum(AnalysisTask.llm_total_tokens), 0),
-                func.coalesce(
-                    func.sum(AnalysisTask.llm_estimated_cost_cache_aware), 0.0
-                ),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                AnalysisTask.status.in_(
-                                    [TaskStatus.PENDING, TaskStatus.RUNNING]
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ),
-                func.max(AnalysisTask.updated_at),
-            )
-            .join(User, AnalysisTask.user_id == User.id)
-            .where(
-                User.organization_id.in_(org_ids),
-                AnalysisTask.updated_at >= since,
-            )
+        stmt, org_id = self._usage_rows_statement(since)
+        rows = list((await self.db.execute(stmt.where(org_id.in_(org_ids)))).all())
+        stats = {}
+        for organization_id in org_ids:
+            records = [row[0] for row in rows if row[1] == organization_id]
+            billing = summarize_billing(records)
+            stats[organization_id] = {
+                "tokens_7d": sum(r.total_tokens for r in records),
+                "cost_7d": billing["total_cost_cache_aware"],
+                **billing,
+                "active_task_count": 0,
+                "last_active_at": records[0].created_at if records else None,
+            }
+        # Task status is separate from usage accounting and cannot multiply ledger rows.
+        active = await self.db.execute(
+            select(User.organization_id, func.count(AnalysisTask.id))
+            .select_from(AnalysisTask).join(User, AnalysisTask.user_id == User.id)
+            .where(User.organization_id.in_(org_ids),
+                   AnalysisTask.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
             .group_by(User.organization_id)
         )
-        stats: dict[UUID, dict[str, object]] = {}
-        for organization_id, tokens, cost, active_count, last_active_at in result.all():
-            if organization_id is None:
-                continue
-            stats[organization_id] = {
-                "tokens_7d": int(tokens or 0),
-                "cost_7d": float(cost or 0.0),
-                "active_task_count": int(active_count or 0),
-                "last_active_at": last_active_at,
-            }
+        for organization_id, count in active.all():
+            stats[organization_id]["active_task_count"] = int(count)
         return stats
 
     async def _build_personal_brand_counts(

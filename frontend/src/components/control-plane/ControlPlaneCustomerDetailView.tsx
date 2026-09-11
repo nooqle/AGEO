@@ -18,7 +18,7 @@ import {
   ControlPlaneStatCard,
   controlPlanePalette,
 } from '@/components/control-plane/ControlPlaneShell';
-import { formatControlPlaneCost } from '@/components/control-plane/ControlPlaneDataPanels';
+import { formatCustomerCost, formatTaskCost } from '@/components/control-plane/ControlPlaneDataPanels';
 import { Button } from '@/components/ui/button';
 import { modalScrimClassName } from '@/components/ui/modal-scrim';
 import { toast } from '@/components/ui/toast';
@@ -33,10 +33,6 @@ import type {
 import { formatDateTime, formatRelativeTime } from '@/lib/utils';
 
 const palette = controlPlanePalette();
-
-function formatCost(value: number, currency = 'CNY') {
-  return formatControlPlaneCost(value, currency);
-}
 
 type DetailTab = 'overview' | 'accounts' | 'brands' | 'access' | 'tasks';
 
@@ -355,8 +351,8 @@ function ControlPlaneCustomerDetailContent({ customerId }: { customerId: string 
         <div className="space-y-6">
           <div className="grid gap-4 xl:grid-cols-4">
             <ControlPlaneStatCard
-              label="近 7 天费用"
-              value={formatCost(summary.cost_7d)}
+              label="近 7 天已计价小计"
+              value={formatCustomerCost(summary)}
               hint={
                 summary.last_active_at
                   ? `最近活跃 ${formatRelativeTime(summary.last_active_at)}`
@@ -1002,9 +998,9 @@ function TaskTable({
                   {task.llm_total_tokens.toLocaleString()}
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {formatCost(task.llm_estimated_cost_cache_aware, task.currency)}
+                  {formatTaskCost(task)}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    缓存 {task.llm_cached_prompt_tokens.toLocaleString()} / 计费输入 {task.llm_billable_prompt_tokens.toLocaleString()}
+                    已计价小计 · 未计价 {task.unknown_pricing_call_count ?? '未知'} 次
                   </div>
                 </td>
                 {!compact ? (

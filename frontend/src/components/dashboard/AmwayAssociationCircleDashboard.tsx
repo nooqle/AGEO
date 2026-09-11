@@ -15,6 +15,7 @@ import type {
   AmwayQuestionHistorySet,
 } from '@/types/amwayChina';
 import { api } from '@/services/api';
+import { COLLECTION_PLATFORMS, defaultPlatformFetchMethods, describePlatformFetchMethods, platformFetchMethodsFromScope, type PlatformFetchMethods } from '@/lib/platformFetchMethods';
 import { semanticTypeLabels } from './amwaySemanticLabels';
 import type {
   OntologyAssociationCircleEvidence,
@@ -114,6 +115,7 @@ export interface AssociationCircleStartPayload {
   questionSetVersion?: number | null;
   persistQuestionSet?: boolean;
   fetchMode?: 'fast' | 'full';
+  platformFetchMethods?: PlatformFetchMethods;
 }
 
 interface AmwayAssociationCircleDashboardProps {
@@ -152,7 +154,7 @@ interface AmwayAssociationCircleDashboardProps {
   onChangePeriodCustomStart?: (value: string) => void;
   onChangePeriodCustomEnd?: (value: string) => void;
   onGeneratePeriodReport: () => Promise<boolean>;
-  onStart: (payload?: AssociationCircleStartPayload) => void | Promise<void>;
+  onStart: (payload?: AssociationCircleStartPayload) => boolean | void | Promise<boolean | void>;
   onCancelRun?: () => void;
   onOpenLatestReport: () => void;
 }
@@ -204,7 +206,10 @@ export function AmwayAssociationCircleDashboard({
   const [questionHistory, setQuestionHistory] = useState<AmwayQuestionHistoryResponse | null>(null);
   const [questionHistoryRefreshKey, setQuestionHistoryRefreshKey] = useState(0);
   const [selectedQuestionSetId, setSelectedQuestionSetId] = useState<string | null>(null);
-  const [fetchMode, setFetchMode] = useState<'fast' | 'full'>('full');
+  const [platformFetchMethods, setPlatformFetchMethods] = useState(defaultPlatformFetchMethods);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
+  const startingRef = useRef(false);
   const [runSettingsOpen, setRunSettingsOpen] = useState(false);
   const [prevRunSettingsSignal, setPrevRunSettingsSignal] = useState(0);
   if (openRunSettingsSignal > 0 && openRunSettingsSignal !== prevRunSettingsSignal) {
@@ -319,36 +324,53 @@ export function AmwayAssociationCircleDashboard({
     }
   }, [activeRun?.id, activeRun?.input_scope, isRunActive, questionHistory]);
   useEffect(() => {
-    setFetchMode('full');
+    setPlatformFetchMethods(defaultPlatformFetchMethods());
+    setStartError(null);
   }, [selectedEntityId]);
   const handleStart = async () => {
-    setIsReportOpen(false);
-    const selectedQuestions = uploadedQuestions.length
-      ? uploadedQuestions
-      : selectedQuestionSet
-        ? uploadedQuestionsFromHistorySet(selectedQuestionSet)
-        : [];
-    await onStart({
-      uploadedQuestions: selectedQuestions.map((question) => ({
-        ...question,
-        center_terms: [activeCenterTerm],
-      })),
-      uploadedQuestionSource: uploadedQuestionSource || selectedQuestionSet?.title || null,
-      questionSetId: uploadedQuestions.length || selectedQuestionSet?.source_type !== 'question_set'
-        ? null
-        : selectedQuestionSet.id,
-      questionSetVersion: uploadedQuestions.length || selectedQuestionSet?.source_type !== 'question_set'
-        ? null
-        : selectedQuestionSet.version || 1,
-      persistQuestionSet: Boolean(uploadedQuestions.length || selectedQuestionSet?.source_type === 'run_input'),
-      fetchMode,
-    });
-    setQuestionHistoryRefreshKey((current) => current + 1);
+    if (startingRef.current || isRunSubmitting || isRunActive || isCancellingRun || isReadingUpload || !enabledPlatforms.length) return false;
+    startingRef.current = true;
+    setIsStarting(true);
+    setStartError(null);
+    try {
+      setIsReportOpen(false);
+      const selectedQuestions = uploadedQuestions.length
+        ? uploadedQuestions
+        : selectedQuestionSet
+          ? uploadedQuestionsFromHistorySet(selectedQuestionSet)
+          : [];
+      const started = await onStart({
+        uploadedQuestions: selectedQuestions.map((question) => ({
+          ...question,
+          center_terms: [activeCenterTerm],
+        })),
+        uploadedQuestionSource: uploadedQuestionSource || selectedQuestionSet?.title || null,
+        questionSetId: uploadedQuestions.length || selectedQuestionSet?.source_type !== 'question_set'
+          ? null
+          : selectedQuestionSet.id,
+        questionSetVersion: uploadedQuestions.length || selectedQuestionSet?.source_type !== 'question_set'
+          ? null
+          : selectedQuestionSet.version || 1,
+        persistQuestionSet: Boolean(uploadedQuestions.length || selectedQuestionSet?.source_type === 'run_input'),
+        platformFetchMethods: { ...platformFetchMethods },
+      });
+      if (started !== true) {
+        setStartError('运行未启动，请检查错误后重试。当前设置与上传问题已保留。');
+        return false;
+      }
+      setQuestionHistoryRefreshKey((current) => current + 1);
+      return true;
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : '运行启动失败，请重试。');
+      return false;
+    } finally {
+      startingRef.current = false;
+      setIsStarting(false);
+    }
   };
   const handleRunFromSettings = async () => {
     if (isModeling || isCancellingRun) return;
-    await handleStart();
-    setRunSettingsOpen(false);
+    if (await handleStart()) setRunSettingsOpen(false);
   };
   const openReport = () => {
     setIsReportOpen(true);
@@ -398,9 +420,12 @@ export function AmwayAssociationCircleDashboard({
     }
   };
 
-  const isModeling = Boolean(isRunSubmitting || isRunActive);
+  const isModeling = Boolean(isStarting || isRunSubmitting || isRunActive);
   const canCancelRun = Boolean(isRunActive && activeRun?.id && onCancelRun);
   const runningScope = activeRun?.input_scope;
+  const displayedMethods = isRunActive ? platformFetchMethodsFromScope(runningScope) : platformFetchMethods;
+  const displayedPlatforms = (isRunActive ? targetPlatforms : enabledPlatforms)
+    .map((id) => id === 'hunyuan' ? 'yuanbao' : id);
   const runningQuestionCount = Number(runningScope?.uploaded_question_count || 0);
   const configuredQuestionSetLabel = isRunActive
     ? runningQuestionCount > 0
@@ -411,12 +436,12 @@ export function AmwayAssociationCircleDashboard({
       : selectedQuestionSet
         ? `${selectedQuestionSet.title}（${selectedQuestionSet.question_count} 题）`
         : '系统默认问题集';
-  const configuredFetchMode = isRunActive
-    ? (runningScope?.fetch_mode === 'fast' ? 'fast' : 'full')
-    : fetchMode;
-  const configuredFetchModeLabel = configuredFetchMode === 'full' ? '浏览器采集' : 'API 采集';
+  const configuredFetchModeLabel = describePlatformFetchMethods(
+    isRunActive ? runningScope : { platform_fetch_methods: platformFetchMethods },
+    isRunActive ? targetPlatforms : enabledPlatforms,
+  );
   const runConfigurationSummary = `${configuredQuestionSetLabel} · ${configuredFetchModeLabel} · ${configuredPlatformCount} 个平台`;
-  const runButtonLabel = isRunSubmitting
+  const runButtonLabel = isStarting || isRunSubmitting
     ? '正在启动…'
     : isRunActive
       ? '运行中'
@@ -660,13 +685,14 @@ export function AmwayAssociationCircleDashboard({
                             type="file"
                             accept=".csv,.xlsx,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             className="sr-only"
-                            disabled={isReadingUpload}
+                            disabled={isReadingUpload || isModeling}
                             onChange={handleQuestionFileChange}
                           />
                         </label>
                       </div>
                       <select
                         id="amway-run-question-set"
+                        disabled={isModeling || isReadingUpload}
                         value={uploadedQuestions.length ? '__upload__' : selectedQuestionSetId || ''}
                         onChange={(event) => {
                           const nextId = event.target.value || null;
@@ -697,42 +723,33 @@ export function AmwayAssociationCircleDashboard({
                       {uploadError ? <InlineActionError message={uploadError} compact /> : null}
                     </section>
 
-                    <fieldset>
+                    <fieldset disabled={isModeling}>
                       <legend className="text-sm font-semibold text-[var(--text-primary)]">采集方式</legend>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        {([
-                          { value: 'full', label: '浏览器采集', hint: '默认方式，复现真实用户看到的回答。' },
-                          { value: 'fast', label: 'API 采集', hint: '速度更快，适合快速复测。' },
-                        ] as const).map((option) => {
-                          const selected = fetchMode === option.value;
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onClick={() => setFetchMode(option.value)}
-                              aria-pressed={selected}
-                              className="flex items-start gap-3 rounded-xl border p-4 text-left transition hover:bg-[var(--bg-secondary)]"
-                              style={{ borderColor: selected ? 'var(--brand-primary)' : 'var(--border-subtle)' }}
-                            >
-                              <span
-                                className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border"
-                                style={{ borderColor: selected ? 'var(--brand-primary)' : 'var(--border-strong)' }}
-                              >
-                                {selected ? <span className="h-2 w-2 rounded-full bg-[var(--brand-primary)]" /> : null}
-                              </span>
-                              <span>
-                                <span className="block text-sm font-semibold text-[var(--text-primary)]">{option.label}</span>
-                                <span className="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">{option.hint}</span>
-                              </span>
-                            </button>
-                          );
-                        })}
+                      <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">逐个平台选择采集方式；本次启动成功后设置固定。平台启停沿用生产线配置。</p>
+                      <div className="mt-3 divide-y divide-[var(--border-subtle)]">
+                        {COLLECTION_PLATFORMS.map(({ id, label }) => (
+                          <fieldset key={id} disabled={!displayedPlatforms.includes(id)} className="flex flex-wrap items-center gap-4 py-3 disabled:opacity-60">
+                            <legend className="sr-only">{label} 采集方式</legend>
+                            <span className="min-w-24 flex-1 text-sm font-semibold">{label}{!displayedPlatforms.includes(id) ? '（已停用）' : ''}</span>
+                            {(['browser', 'api'] as const).map((method) => (
+                              <label key={method} className="inline-flex items-center gap-2 text-sm">
+                                <input type="radio" name={`fetch-method-${id}`} value={method}
+                                  checked={displayedMethods[id] === method}
+                                  onChange={() => setPlatformFetchMethods((current) => ({ ...current, [id]: method }))}
+                                  className="h-4 w-4 accent-[var(--brand-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand-primary)]" />
+                                {method === 'browser' ? '浏览器' : 'API'}
+                              </label>
+                            ))}
+                          </fieldset>
+                        ))}
                       </div>
                     </fieldset>
 
                     <div className="border-t border-[var(--border-subtle)] pt-4">
                       <div className="text-xs font-medium text-[var(--text-tertiary)]">本轮配置</div>
                       <div className="mt-1 text-sm font-semibold text-[var(--text-primary)]">{runConfigurationSummary}</div>
+                      {!enabledPlatforms.length ? <p role="status" className="mt-2 text-sm text-[var(--error)]">所有平台已停用，请先在生产线启用至少一个平台。</p> : null}
+                      {startError || runError ? <InlineActionError message={runError || startError || ''} compact /> : null}
                     </div>
                   </div>
 
@@ -748,7 +765,7 @@ export function AmwayAssociationCircleDashboard({
                     <button
                       type="button"
                       onClick={() => void handleRunFromSettings()}
-                      disabled={isModeling || isCancellingRun || status === 'loading'}
+                      disabled={isModeling || isCancellingRun || isReadingUpload || !enabledPlatforms.length || status === 'loading'}
                       className="inline-flex h-10 items-center gap-2 rounded-lg bg-[var(--brand-primary)] px-4 text-sm font-semibold text-[var(--brand-contrast)] hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <RefreshCw size={15} />

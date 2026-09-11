@@ -12,17 +12,43 @@ import { Button } from '@/components/ui/button';
 import { controlPlanePalette, ControlPlanePanel } from '@/components/control-plane/ControlPlaneShell';
 import type { OrganizationRecord } from '@/types/accountAdmin';
 import type { RegistrationApplication } from '@/types/auth';
-import type { ControlPlaneCustomerSummary } from '@/types/controlPlane';
+import type { ControlPlaneCustomerSummary, ControlPlanePricingCoverage, ControlPlaneTaskSummary } from '@/types/controlPlane';
 import { formatRelativeTime } from '@/lib/utils';
 
 const palette = controlPlanePalette();
 
-export function formatControlPlaneCost(value: number, currency = 'CNY') {
+export function formatControlPlaneCost(value: number | null | undefined, currency: string | null | undefined = 'CNY') {
+  if (value == null || !Number.isFinite(value) || !currency) return currency ? `${currency} 费用未知` : '费用未知';
   const normalizedCurrency = currency.toUpperCase();
   const symbol =
     normalizedCurrency === 'USD' ? '$' : normalizedCurrency === 'CNY' ? '¥' : '';
   const suffix = symbol ? '' : ` ${normalizedCurrency}`;
   return `${symbol}${value.toFixed(value >= 1 ? 2 : 4)}${suffix}`;
+}
+
+export function formatCustomerCost(customer: ControlPlaneCustomerSummary): string {
+  if (customer.costs_by_currency?.length) {
+    return customer.costs_by_currency.map((cost) => formatControlPlaneCost(cost.total_cost_cache_aware, cost.currency)).join(' / ');
+  }
+  return formatControlPlaneCost(customer.cost_7d, customer.currency ?? null);
+}
+
+export function formatCustomerCostSubtotal(customers: ControlPlanePricingCoverage[]): string {
+  const totals = new Map<string, number | null>();
+  for (const customer of customers) {
+    for (const cost of customer.costs_by_currency || []) {
+      const prior = totals.get(cost.currency);
+      totals.set(cost.currency, prior === null || cost.total_cost_cache_aware === null
+        ? null : (prior ?? 0) + cost.total_cost_cache_aware);
+    }
+  }
+  return totals.size ? Array.from(totals, ([currency, value]) => formatControlPlaneCost(value, currency)).join(' / ') : '未计价';
+}
+
+export function formatTaskCost(task: ControlPlaneTaskSummary): string {
+  return task.costs_by_currency?.length
+    ? formatCustomerCostSubtotal([task])
+    : formatControlPlaneCost(task.llm_estimated_cost_cache_aware, task.currency);
 }
 
 export function SummaryPill({
@@ -302,7 +328,10 @@ export function CustomerTablePanel({
                     {customer.tokens_7d.toLocaleString()}
                   </td>
                   <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                    {formatControlPlaneCost(customer.cost_7d)}
+                    {formatCustomerCost(customer)}
+                    <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                      已计价小计 · 未计价 {customer.unknown_pricing_call_count ?? '未知'} 次
+                    </div>
                   </td>
                   <td className="py-4 pr-4" style={{ color: palette.muted }}>
                     {customer.active_task_count}

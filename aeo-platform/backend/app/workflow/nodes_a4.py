@@ -39,6 +39,7 @@ from app.core.fetchers.browser.browser_executor import (
 )
 from app.core.llm import LLMUsage
 from app.services.llm_usage_service import record_provider_usage_async
+from app.schemas.platform_fetch_methods import resolve_platform_fetch_methods
 from app.tools.a4_fetch_agent import (
     AioAnswerFetchTool,
     build_legacy_platform_configs,
@@ -170,6 +171,9 @@ def _api_usage_fields(response: Any, *, fallback_model: str) -> dict[str, Any]:
     if not isinstance(raw_response, dict):
         return {}
     raw_usage = raw_response.get("usage_aggregate") or raw_response.get("usage")
+    if raw_response.get("protocol") == "anthropic_native_search":
+        from app.core.fetchers.api.deepseek_client import native_search_usage
+        raw_usage = native_search_usage(raw_response.get("usage")).raw
     if not isinstance(raw_usage, dict):
         return {}
     model_name = str(raw_response.get("model") or fallback_model or "unknown").strip()
@@ -180,6 +184,9 @@ def _api_usage_fields(response: Any, *, fallback_model: str) -> dict[str, Any]:
 
 
 def _llm_usage_from_provider_payload(raw_usage: dict[str, Any]) -> LLMUsage:
+    if "cache_read_input_tokens" in raw_usage or "cache_creation_input_tokens" in raw_usage:
+        from app.core.fetchers.api.deepseek_client import native_search_usage
+        return native_search_usage(raw_usage)
     prompt_details = raw_usage.get("prompt_tokens_details")
     if not isinstance(prompt_details, dict):
         prompt_details = raw_usage.get("input_tokens_details")
@@ -259,9 +266,16 @@ async def _record_a4_api_usage(
         latency_ms=max(int(float(result.get("duration") or 0) * 1000), 0),
         extra_metadata={
             "platform": platform,
+            "requested_platform": normalize_public_platform_id(platform),
+            "requested_method": "api",
+            "actual_provider": provider_by_platform.get(platform, platform),
             "question_id": question_id,
             "fetch_method": "api",
             "usage_scope": "a4_platform_fetch",
+            "protocol": result.get("protocol"),
+            "native_provider_usage": result.get("native_provider_usage"),
+            "web_search_executed": result.get("web_search_executed"),
+            "cost_scope": "token_estimate",
         },
     )
 
@@ -591,35 +605,29 @@ def _resolve_hunyuan_fetch_method(
 def _resolve_fetch_paths(
     fetch_mode: str,
     platforms: list[str],
+    platform_fetch_methods: dict[str, str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Return the API/browser execution paths for the requested platforms."""
 
-    if fetch_mode == "full":
-        return [], list(platforms)
-
-    hunyuan_browser_fallback = _hunyuan_legacy_configuration_detected()
-    api_platforms = [
-        p
-        for p in platforms
-        if p in PlatformConstants.API_PLATFORMS
-        and not (p == "hunyuan" and hunyuan_browser_fallback)
-    ]
-    browser_platforms = [
-        p
-        for p in platforms
-        if p in PlatformConstants.BROWSER_PLATFORMS
-        or (p == "hunyuan" and hunyuan_browser_fallback)
-    ]
+    methods = resolve_platform_fetch_methods(
+        platform_fetch_methods,
+        platforms=["yuanbao" if p == "hunyuan" else p for p in platforms],
+        fetch_mode=fetch_mode, explicit=platform_fetch_methods is not None,
+        legacy_yuanbao_browser=_hunyuan_legacy_configuration_detected(),
+    )
+    api_platforms = [p for p in platforms if methods["yuanbao" if p == "hunyuan" else p] == "api"]
+    browser_platforms = [p for p in platforms if p not in api_platforms]
     return api_platforms, browser_platforms
 
 
 def _build_filtered_fetch_summary(
     fetch_mode: str,
     platforms: list[str],
+    platform_fetch_methods: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Build precise selective-refetch copy from actual execution paths."""
 
-    api_platforms, browser_platforms = _resolve_fetch_paths(fetch_mode, platforms)
+    api_platforms, browser_platforms = _resolve_fetch_paths(fetch_mode, platforms, platform_fetch_methods)
     platform_names = _display_platform_names(platforms)
 
     if api_platforms and browser_platforms:
@@ -665,8 +673,11 @@ def _build_a4_followup_options(
     *,
     retry_failed_only: bool,
     fetch_mode: str,
+    platform_fetch_methods: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
     mode_label = "快速/API" if fetch_mode == "fast" else "完整/浏览器"
+    if platform_fetch_methods is not None:
+        mode_label = "沿用各平台方式"
     supplemental_label = (
         f"继续补采剩余失败项（{mode_label}）"
         if retry_failed_only
@@ -706,10 +717,13 @@ def _build_a4_completion_observation(
     platform_statuses: dict[str, Any],
     fetch_mode: str,
     merge_metadata: dict[str, Any] | None = None,
+    platform_fetch_methods: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     recovery_plan = build_fetch_recovery_plan(projected_fetch_results)
     if recovery_plan is not None:
         recovery_plan = {**recovery_plan, "fetch_mode": fetch_mode}
+        if platform_fetch_methods is not None:
+            recovery_plan["platform_fetch_methods"] = dict(platform_fetch_methods)
     requires_user_decision = bool(
         artifact_validation.passed
         and completion_decision.decision_type == "degraded_continue"
@@ -732,6 +746,7 @@ def _build_a4_completion_observation(
             _build_a4_followup_options(
                 retry_failed_only=retry_failed_only,
                 fetch_mode=fetch_mode,
+                platform_fetch_methods=platform_fetch_methods,
             )
             if requires_user_decision
             else []
@@ -1091,19 +1106,20 @@ async def _enrich_fetch_result_citation_domains(
 def _build_browser_phase_start_message(
     fetch_mode: str,
     platforms: list[str],
+    platform_fetch_methods: dict[str, str] | None = None,
     *,
     api_success_total: int | None = None,
     api_task_count: int | None = None,
 ) -> str:
     """Build the browser-phase progress copy from actual requested platforms."""
 
-    api_platforms, browser_platforms = _resolve_fetch_paths(fetch_mode, platforms)
+    api_platforms, browser_platforms = _resolve_fetch_paths(fetch_mode, platforms, platform_fetch_methods)
     browser_names = (
         _display_platform_names(browser_platforms) if browser_platforms else ""
     )
 
     if (
-        fetch_mode != "full"
+        bool(api_platforms)
         and api_success_total is not None
         and api_task_count is not None
     ):
@@ -1127,10 +1143,11 @@ def _build_browser_phase_start_message(
 def _build_fast_phase_start_message(
     question_count: int,
     platforms: list[str],
+    platform_fetch_methods: dict[str, str] | None = None,
 ) -> str:
     """Describe fast-mode work from its resolved API/browser paths."""
 
-    api_platforms, browser_platforms = _resolve_fetch_paths("fast", platforms)
+    api_platforms, browser_platforms = _resolve_fetch_paths("fast", platforms, platform_fetch_methods)
     api_names = _display_platform_names(api_platforms)
     browser_names = _display_platform_names(browser_platforms)
     if api_names:
@@ -1370,6 +1387,15 @@ def _attach_aio_platform_packet(
 ) -> dict[str, Any]:
     """Attach the new AIO result packet while preserving legacy A4 shape."""
 
+    result = dict(result)
+    public_platform = normalize_public_platform_id(result.get("platform"))
+    methods = getattr(request, "platform_fetch_methods", None) or {}
+    result["requested_platform"] = public_platform
+    result["requested_method"] = methods.get(public_platform) or result.get("fetch_method")
+    result.setdefault("actual_provider", {"yuanbao": "hunyuan", "kimi": "moonshot"}.get(public_platform, public_platform) if result.get("fetch_method") == "api" else public_platform)
+    if public_platform == "deepseek" and result.get("fetch_method") == "api":
+        result.setdefault("provider_model", "deepseek-flash")
+        result.setdefault("web_search_supported", True)
     return _AIO_ANSWER_FETCH_TOOL.attach_result_packet_to_legacy(
         result=result,
         question=question,
@@ -1440,6 +1466,7 @@ def _legacy_platform_result_to_packet(
         "answer",
         "citations",
         "fetch_method",
+        "requested_platform", "requested_method", "actual_provider", "provider_model", "web_search_supported",
         "error",
         "duration",
         "failure_layer",
@@ -2110,11 +2137,22 @@ async def _retry_fetch(
         "cache_miss_prompt_tokens": 0,
     }
     usage_observed = False
+    usage_attempts: list[dict[str, Any]] = []
+    native_attempts: list[dict[str, Any]] = []
+    retry_identity: dict[str, Any] = {}
 
     def attach_retry_usage(result: dict[str, Any]) -> dict[str, Any]:
         if not usage_observed:
             return result
-        return {**result, "provider_usage": dict(retry_usage_totals)}
+        attached = {**retry_identity, **result, "provider_usage": {**retry_usage_totals, "attempts": usage_attempts}}
+        if native_attempts:
+            counts = [item.get("server_tool_use", {}).get("web_search_requests")
+                      if isinstance(item.get("server_tool_use"), dict) else None for item in native_attempts]
+            attached["native_provider_usage"] = {
+                "attempts": native_attempts,
+                "server_tool_use": {"web_search_requests": sum(counts) if all(type(n) is int and n >= 0 for n in counts) else None},
+            }
+        return attached
 
     attempt = 0
     overload_retries = 0
@@ -2125,19 +2163,21 @@ async def _retry_fetch(
         try:
             result = await fetch_fn(*args, **kwargs)
             raw_usage = result.get("provider_usage")
-            if isinstance(raw_usage, dict):
-                parsed_usage = _llm_usage_from_provider_payload(raw_usage)
-                prompt_tokens = max(int(parsed_usage.prompt_tokens or 0), 0)
-                completion_tokens = max(int(parsed_usage.completion_tokens or 0), 0)
-                retry_usage_totals["prompt_tokens"] += prompt_tokens
-                retry_usage_totals["completion_tokens"] += completion_tokens
-                retry_usage_totals["total_tokens"] += prompt_tokens + completion_tokens
-                retry_usage_totals["cached_prompt_tokens"] += max(
-                    int(parsed_usage.cached_prompt_tokens or 0), 0
-                )
-                retry_usage_totals["cache_miss_prompt_tokens"] += max(
-                    int(parsed_usage.cache_miss_prompt_tokens or 0), 0
-                )
+            if isinstance(raw_usage, dict) or method == "api":
+                parsed_usage = _llm_usage_from_provider_payload(raw_usage) if isinstance(raw_usage, dict) else LLMUsage()
+                usage_attempts.append(raw_usage if isinstance(raw_usage, dict) else {})
+                for field in retry_usage_totals:
+                    if field == "total_tokens":
+                        value = (parsed_usage.prompt_tokens + parsed_usage.completion_tokens
+                                 if parsed_usage.prompt_tokens is not None and parsed_usage.completion_tokens is not None else None)
+                    else:
+                        value = getattr(parsed_usage, field)
+                    previous = retry_usage_totals[field]
+                    retry_usage_totals[field] = previous + value if previous is not None and value is not None else None
+                retry_identity.update({key: result[key] for key in ("protocol", "provider_model", "actual_provider") if result.get(key)})
+                if result.get("protocol") == "anthropic_native_search":
+                    native = result.get("native_provider_usage")
+                    native_attempts.append(native if isinstance(native, dict) else {})
                 usage_observed = True
             if result.get("success"):
                 if attempt > 0:
@@ -2507,6 +2547,11 @@ async def _activate_plan_after_question_confirmation(
                 question_set_id=UUID(question_set_id),
                 monitor_mode=_monitor_mode_from_fetch_state(state),
                 fetch_mode=fetch_mode,
+                endpoint_ids=(
+                    [f"{platform}_{method}" for platform, method in state["platform_fetch_methods"].items()
+                     if not state.get("platform_filter") or to_executor_platform_id(platform) in state["platform_filter"]]
+                    if state.get("platform_fetch_methods") is not None else None
+                ),
             )
             plan_payload = await service.plan_to_dict(plan)
             logger.info(
@@ -2639,6 +2684,20 @@ async def a4_fetch_node(state: AgentState) -> Command:
         gated_platform_filter if topology_disabled_platforms else base_platform_filter
     )
     platform_filter = _normalize_platform_filter(raw_platform_filter)
+    recovery_methods = (state.get("fetch_recovery_plan") or {}).get("platform_fetch_methods")
+    requested_methods = state.get("platform_fetch_methods")
+    if requested_methods is None:
+        requested_methods = recovery_methods
+    resolved_methods = resolve_platform_fetch_methods(
+        requested_methods,
+        platforms=["yuanbao" if p == "hunyuan" else p for p in (platform_filter or PlatformConstants.SUPPORTED_PLATFORMS)],
+        fetch_mode=fetch_mode, explicit=requested_methods is not None,
+        legacy_yuanbao_browser=_hunyuan_legacy_configuration_detected(),
+    )
+    state = {**state, "platform_fetch_methods": resolved_methods}
+    api_platforms, browser_platforms = _resolve_fetch_paths(
+        fetch_mode, platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS), resolved_methods,
+    )
     question_platform_targets = _question_platform_targets_from_questions(questions)
     aio_fetch_request = _AIO_ANSWER_FETCH_TOOL.build_request(
         state=state,
@@ -2685,7 +2744,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
     # Send user-visible reply with expected duration based on actual execution path.
     if platform_filter:
-        selective_summary = _build_filtered_fetch_summary(fetch_mode, platform_filter)
+        selective_summary = _build_filtered_fetch_summary(fetch_mode, platform_filter, resolved_methods)
         duration_msg = selective_summary["duration_msg"].format(
             question_count=len(questions)
         )
@@ -2697,6 +2756,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
             if fetch_mode == "full"
             else _build_fast_mode_label(list(PlatformConstants.SUPPORTED_PLATFORMS))
         )
+    mode_label = _format_fetch_path_summary(api_platforms, browser_platforms)
+    duration_msg = f"{len(questions)} questions. {mode_label}"
     await send_reply_event(session_id, duration_msg, is_delta=True, is_new_round=True)
     await send_reply_event(session_id, "", is_complete=True)
 
@@ -2752,17 +2813,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
         doubao_client = None
         hunyuan_client = None
         kimi_client = None
-        hunyuan_requested = _pf is None or "hunyuan" in _pf
-        hunyuan_browser_fallback = (
-            fetch_mode == "fast" and _hunyuan_legacy_configuration_detected()
-        )
-        hunyuan_fetch_method = _resolve_hunyuan_fetch_method(
-            fetch_mode,
-            requested=hunyuan_requested,
-            legacy_configured=hunyuan_browser_fallback,
-        )
-
-        if fetch_mode == "fast":
+        deepseek_client = None
+        api_init_errors: dict[str, str] = {}
+        hunyuan_fetch_method = resolved_methods["yuanbao"] if (_pf is None or "hunyuan" in _pf) else None
+        if api_platforms:
             from app.core.fetchers.api.doubao_client import DoubaoClient
 
             if hunyuan_fetch_method == "browser":
@@ -2772,12 +2826,13 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 )
 
             try:
-                if _pf is None or "doubao" in _pf:
+                if "doubao" in api_platforms:
                     doubao_client = DoubaoClient(
                         model=settings.DOUBAO_FAST_MODEL or None,
                         use_doubao_app=settings.DOUBAO_FAST_USE_APP_API,
                     )
             except Exception as e:
+                api_init_errors["doubao"] = str(e)
                 logger.warning("[A4] DoubaoClient init failed: %s", e)
 
             try:
@@ -2792,22 +2847,30 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         "[A4] Yuanbao API client skipped; browser fallback active"
                     )
             except Exception as e:
+                api_init_errors["hunyuan"] = str(e)
                 logger.warning("[A4] Yuanbao client init failed: %s", e)
 
             try:
-                if _pf is None or "kimi" in _pf:
+                if "kimi" in api_platforms:
                     from app.core.fetchers.api.kimi_client import KimiClient
 
                     kimi_client = KimiClient(model=settings.MOONSHOT_FAST_MODEL or None)
             except Exception as e:
+                api_init_errors["kimi"] = str(e)
                 logger.warning("[A4] KimiClient init failed: %s", e)
+            try:
+                if "deepseek" in api_platforms:
+                    from app.core.fetchers.api.deepseek_client import DeepSeekClient
+                    deepseek_client = DeepSeekClient()
+            except Exception as e:
+                api_init_errors["deepseek"] = str(e)
 
         # ── Browser handlers ──
         # fast mode: DeepSeek, plus Yuanbao when the legacy API is configured
         # full mode: all 4 platforms
         from app.core.playwright_installer import ensure_playwright_ready
 
-        playwright_ok = await ensure_playwright_ready()
+        playwright_ok = await ensure_playwright_ready() if browser_platforms else False
 
         # Reset circuit breakers at start of each A4 run so stale OPEN
         # state from a previous execution doesn't block new requests.
@@ -2831,7 +2894,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         if playwright_ok:
             # DeepSeek browser: always initialized (both modes)
             try:
-                if _pf is None or "deepseek" in _pf:
+                if "deepseek" in browser_platforms:
                     deepseek_browser_client = _create_browser_client("deepseek", state)
                     deepseek_handler = _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
                         platform="deepseek",
@@ -2847,9 +2910,9 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
             # Additional browsers run in full mode; legacy Yuanbao also falls
             # back here in fast mode before it can issue retired API requests.
-            if fetch_mode == "full" or hunyuan_browser_fallback:
+            if browser_platforms:
                 try:
-                    if fetch_mode == "full" and (_pf is None or "kimi" in _pf):
+                    if "kimi" in browser_platforms:
                         kimi_browser_client = _create_browser_client("kimi", state)
                         kimi_browser_handler = (
                             _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
@@ -2883,7 +2946,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     logger.warning("[A4] Yuanbao browser init failed: %s", e)
 
                 try:
-                    if fetch_mode == "full" and (_pf is None or "doubao" in _pf):
+                    if "doubao" in browser_platforms:
                         doubao_browser_client = _create_browser_client("doubao", state)
                         doubao_browser_handler = (
                             _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
@@ -3131,7 +3194,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             # Each platform processes questions one at a time with delay;
             # different platforms run in parallel with each other.
             # =============================================================
-            if fetch_mode == "fast":
+            if api_platforms:
                 await send_progress_event(
                     session_id=session_id,
                     step="A4",
@@ -3140,6 +3203,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     message=_build_fast_phase_start_message(
                         total,
                         platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
+                        platform_fetch_methods=resolved_methods,
                     ),
                 )
 
@@ -3149,6 +3213,21 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     question_id = _question_id_from_state_question(question)
                     allowed_platforms = question_platform_targets.get(question_id)
                     q_text = question.get("text", "")
+                    for failed_platform, init_error in api_init_errors.items():
+                        if allowed_platforms and failed_platform not in allowed_platforms:
+                            continue
+                        failed_result = _attach_aio_platform_packet(
+                            {"platform": failed_platform, "fetch_method": "api", "success": False,
+                             "error": init_error, "error_type": "api_initialization_failed"},
+                            question=question, request=aio_fetch_request,
+                        )
+                        question_results[idx].append(failed_result)
+                        await _persist_incremental_fetch_result(idx, failed_result, event_source="api")
+                    if deepseek_client is not None and (not allowed_platforms or "deepseek" in allowed_platforms):
+                        api_tasks.append(_throttled_retry_fetch(
+                            _fetch_from_deepseek, deepseek_client, q_text, platform="deepseek", method="api",
+                        ))
+                        api_task_map.append((idx, "deepseek"))
                     if doubao_client is not None and (
                         not allowed_platforms or "doubao" in allowed_platforms
                     ):
@@ -3190,7 +3269,11 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         api_task_map.append((idx, "kimi"))
 
                 # Build active API platforms list and create progress tracker
-                active_api_platforms = []
+                api_clients = {
+                    "doubao": doubao_client, "hunyuan": hunyuan_client,
+                    "kimi": kimi_client, "deepseek": deepseek_client,
+                }
+                active_api_platforms = ["deepseek"] if deepseek_client is not None else []
                 if doubao_client is not None:
                     active_api_platforms.append("doubao")
                 if hunyuan_client is not None:
@@ -3228,6 +3311,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             {
                                 "platform": platform,
                                 "fetch_method": "api",
+                                "provider_model": getattr(api_clients.get(platform), "model", None),
                                 "success": False,
                                 "error": str(result_err),
                             },
@@ -3244,6 +3328,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                     if result is None:
                         continue
+                    result.setdefault("provider_model", getattr(api_clients.get(platform), "model", None))
                     await _record_a4_api_usage(
                         session_id=session_id,
                         task_id=str(task_id) if task_id else None,
@@ -3279,6 +3364,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     message=_build_browser_phase_start_message(
                         fetch_mode,
                         platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
+                        platform_fetch_methods=resolved_methods,
                         api_success_total=api_success_total,
                         api_task_count=len(api_tasks),
                     ),
@@ -3290,6 +3376,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     message=_build_browser_phase_start_message(
                         fetch_mode,
                         platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
+                        platform_fetch_methods=resolved_methods,
                         api_success_total=api_success_total,
                         api_task_count=len(api_tasks),
                     ),
@@ -3306,6 +3393,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     message=_build_browser_phase_start_message(
                         fetch_mode,
                         platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
+                        platform_fetch_methods=resolved_methods,
                     ),
                 )
                 await _persist_task_progress(
@@ -3315,6 +3403,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     message=_build_browser_phase_start_message(
                         fetch_mode,
                         platform_filter or list(PlatformConstants.SUPPORTED_PLATFORMS),
+                        platform_fetch_methods=resolved_methods,
                     ),
                     context="browser_phase_start_full_mode",
                 )
@@ -3329,7 +3418,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             # - Full mode: browser phase = 0.57..0.95 (no API phase)
             # A shared counter prevents parallel pipelines from overwriting each other.
             # =============================================================
-            _browser_progress_base = 0.57 if fetch_mode == "full" else 0.72
+            _browser_progress_base = 0.72 if api_platforms else 0.57
             _browser_progress_range = 0.95 - _browser_progress_base
             _browser_shared_done: dict[str, int] = {}  # platform -> questions done
             # Shared partial results so global timeout can preserve completed work
@@ -3624,7 +3713,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             requested_browser_platforms: list[str] = []
 
             # DeepSeek browser: always (both modes)
-            deepseek_requested = _pf is None or "deepseek" in _pf
+            deepseek_requested = "deepseek" in browser_platforms
             if deepseek_requested:
                 requested_browser_platforms.append("deepseek")
 
@@ -3647,12 +3736,10 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 )
 
             # Additional browsers (full mode, plus legacy Yuanbao fallback).
-            if fetch_mode == "full" or hunyuan_browser_fallback:
-                kimi_requested = fetch_mode == "full" and (_pf is None or "kimi" in _pf)
+            if browser_platforms:
+                kimi_requested = "kimi" in browser_platforms
                 yuanbao_requested = hunyuan_fetch_method == "browser"
-                doubao_requested = fetch_mode == "full" and (
-                    _pf is None or "doubao" in _pf
-                )
+                doubao_requested = "doubao" in browser_platforms
 
                 if kimi_requested:
                     requested_browser_platforms.append("kimi")
@@ -4102,6 +4189,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     else {}
                 ),
                 "mergeMetadata": merge_metadata,
+                "platformFetchMethods": resolved_methods,
             },
         )
         artifact_validation = validate_artifact_writeback(
@@ -4129,6 +4217,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             total_fetches=total_fetches,
             fail_count=fail_count,
             platform_statuses=platform_statuses,
+            platform_fetch_methods=resolved_methods,
             fetch_mode=fetch_mode,
             merge_metadata=merge_metadata,
         )
@@ -4292,6 +4381,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
             )
         )
         update_dict: dict[str, Any] = {
+            "platform_fetch_methods": resolved_methods,
             "a4_canonical_result": canonical_result,
             "a4_completion_observation": observation,
             "fetch_recovery_plan": dict(observation.get("recovery_plan") or {}),
@@ -4466,6 +4556,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         return Command(
             update={
                 "a4_completion_observation": None,
+                "platform_fetch_methods": resolved_methods,
                 "error_info": {
                     "step": "A4",
                     "error": str(e),
@@ -4624,6 +4715,34 @@ async def _fetch_from_hunyuan(client, question: str) -> dict[str, Any]:
             "error": str(e),
             "duration": duration,
         }
+
+
+async def _fetch_from_deepseek(client, question: str) -> dict[str, Any]:
+    started = datetime.now(timezone.utc)
+    result = {"platform": "deepseek", "platform_name": "DeepSeek", "fetch_method": "api",
+              "provider_model": "deepseek-flash", "actual_provider": "deepseek",
+              "web_search_supported": True}
+    try:
+        response = await client.ask_with_search(question)
+        content = response.answer_text or ""
+        result.update(_api_usage_fields(response, fallback_model=client.model))
+        raw = response.raw_response or {}
+        result.update(protocol=raw.get("protocol"), native_provider_usage=raw.get("usage"),
+                      web_search_executed=bool(raw.get("web_search_executed")),
+                      reference_scope=raw.get("reference_scope"))
+        result.update(success=bool(content.strip()) and result["web_search_executed"],
+                      answer={"content": content, "word_count": len(content.split())},
+                      citations=[ref.model_dump() for ref in response.search_references])
+        if not content.strip():
+            result["error"] = raw.get("search_error") or "empty answer from API"
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise
+        result.update(success=False, error=f"HTTP {exc.response.status_code}")
+    except Exception as exc:
+        result.update(success=False, error=f"{type(exc).__name__}: {exc}")
+    result["duration"] = (datetime.now(timezone.utc) - started).total_seconds()
+    return result
 
 
 async def _fetch_from_kimi(client, question: str) -> dict[str, Any]:

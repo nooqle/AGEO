@@ -12,7 +12,7 @@ import {
 } from '@/components/control-plane/ControlPlaneShell';
 import {
   CustomerTablePanel,
-  formatControlPlaneCost,
+  formatCustomerCostSubtotal,
 } from '@/components/control-plane/ControlPlaneDataPanels';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
@@ -79,7 +79,6 @@ function ControlPlaneCustomersContent() {
     return customers.reduce(
       (acc, customer) => {
         acc.tokens += customer.tokens_7d;
-        acc.cost += customer.cost_7d;
         acc.activeTasks += customer.active_task_count;
         return acc;
       },
@@ -154,8 +153,8 @@ function ControlPlaneCustomersContent() {
               hint={`最近 ${days} 天`}
             />
             <ControlPlaneStatCard
-              label="窗口内费用"
-              value={formatControlPlaneCost(summary.cost)}
+              label="窗口内已计价小计"
+              value={formatCustomerCostSubtotal(customers)}
               hint={`运行中任务 ${summary.activeTasks} 个`}
             />
             <ControlPlaneStatCard

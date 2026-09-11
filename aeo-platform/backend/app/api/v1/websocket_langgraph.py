@@ -2983,8 +2983,9 @@ async def handle_confirmation_langgraph(
                     plan_payload = await service.plan_to_dict(plan)
                 user_decisions["question_set_confirmation"] = "confirmed"
                 user_decisions["fetch_mode_confirmed"] = True
-                user_decisions["fetch_mode"] = "fast"
-                state_values["fetch_mode"] = "fast"
+                if state_values.get("platform_fetch_methods") is None:
+                    user_decisions["fetch_mode"] = "fast"
+                    state_values["fetch_mode"] = "fast"
                 state_values["monitoring_plan_id"] = str(plan.id)
                 state_values["question_set_ids"] = [question_set_id]
                 state_values["endpoint_ids"] = list(plan.endpoint_ids or [])
@@ -3082,6 +3083,8 @@ async def handle_confirmation_langgraph(
             if plan and plan.get("question_targets"):
                 user_content = "用户选择补采上一轮失败项"
                 fetch_mode = resolve_supplemental_fetch_mode(state_values, plan)
+                if plan.get("platform_fetch_methods") is not None:
+                    state_values["platform_fetch_methods"] = dict(plan["platform_fetch_methods"])
                 base_fetch_results = extract_base_fetch_results_from_state(state_values)
                 state_values["next_required_action"] = build_next_required_action(
                     tool_name="answer_fetch",
@@ -3191,6 +3194,8 @@ async def handle_confirmation_langgraph(
         }
         if state_values.get("fetch_mode"):
             update_state["fetch_mode"] = state_values["fetch_mode"]
+        if state_values.get("platform_fetch_methods") is not None:
+            update_state["platform_fetch_methods"] = dict(state_values["platform_fetch_methods"])
         for key in (
             "monitoring_plan_id",
             "monitoring_plan",

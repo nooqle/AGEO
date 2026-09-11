@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -17,6 +18,7 @@ from app.core.llm import BaseLLMModel, LLMUsage
 from app.models.llm_usage import LLMUsageRecord
 from app.models.session import Session as ChatSession
 from app.models.task import AnalysisTask
+from app.services.deepseek_pricing import resolve_deepseek_tariff
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,10 @@ class UsagePricingSnapshot:
     reporting_currency: str
     source: str
     source_url: str | None = None
+    rate_version: str | None = None
+    tariff_period: str | None = None
+    priced_at: str | None = None
+    pricing_timezone: str | None = None
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -50,6 +56,10 @@ class UsagePricingSnapshot:
             "reporting_currency": self.reporting_currency,
             "source": self.source,
             "source_url": self.source_url,
+            "rate_version": self.rate_version or self.source,
+            "tariff_period": self.tariff_period,
+            "priced_at": self.priced_at,
+            "pricing_timezone": self.pricing_timezone,
         }
 
 
@@ -62,11 +72,13 @@ class UsageCostBreakdown:
     total_tokens: int
     cached_prompt_tokens: int
     billable_prompt_tokens: int
-    estimated_cost: float
-    estimated_cost_cache_aware: float
-    estimated_cost_savings: float
+    estimated_cost: float | None
+    estimated_cost_cache_aware: float | None
+    estimated_cost_savings: float | None
     currency: str
     pricing_snapshot: UsagePricingSnapshot | None
+    pricing_status: str = "priced"
+    cache_status: str = "known"
 
 
 def _safe_uuid(value: str | None) -> UUID | None:
@@ -94,6 +106,7 @@ def _resolve_pricing(
     provider: str,
     model_name: str,
     prompt_tokens: int,
+    occurred_at: datetime | None = None,
 ) -> UsagePricingSnapshot | None:
     """Resolve standard and cache-hit pricing for a provider/model pair."""
     settings = get_settings()
@@ -143,35 +156,11 @@ def _resolve_pricing(
         cache_hit_factor = float(
             getattr(settings, "MINIMAX_CACHE_HIT_PRICE_FACTOR", 1.0) or 1.0
         )
-    elif provider == "deepseekmodel" or provider == "deepseek":
-        pricing_currency = str(
-            getattr(settings, "DEEPSEEK_PRICE_CURRENCY", "USD") or "USD"
-        ).upper()
-        source = "deepseek_zh_cn_official_pricing_2026_05_04"
-        source_url = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
-
-        pro_names = {
-            str(getattr(settings, "DEEPSEEK_PRO_MODEL_NAME", "") or "").lower(),
-            "deepseek-v4-pro",
-        }
-        flash_names = {
-            str(getattr(settings, "DEEPSEEK_FLASH_MODEL_NAME", "") or "").lower(),
-            "deepseek-v4-flash",
-            "deepseek-chat",
-            "deepseek-reasoner",
-        }
-        if model_key in pro_names:
-            pricing_model = "deepseek-v4-pro"
-            input_price = settings.DEEPSEEK_PRO_PRICE_INPUT_CACHE_MISS_PER_MTOKENS
-            cached_input_price = settings.DEEPSEEK_PRO_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
-            output_price = settings.DEEPSEEK_PRO_PRICE_OUTPUT_PER_MTOKENS
-        elif model_key in flash_names or model_key.startswith("deepseek"):
-            pricing_model = "deepseek-v4-flash"
-            input_price = settings.DEEPSEEK_FLASH_PRICE_INPUT_CACHE_MISS_PER_MTOKENS
-            cached_input_price = (
-                settings.DEEPSEEK_FLASH_PRICE_INPUT_CACHE_HIT_PER_MTOKENS
-            )
-            output_price = settings.DEEPSEEK_FLASH_PRICE_OUTPUT_PER_MTOKENS
+    elif provider in {"deepseekmodel", "deepseek"}:
+        tariff = resolve_deepseek_tariff(
+            model_name, occurred_at or datetime.now(timezone.utc)
+        )
+        return UsagePricingSnapshot(provider=provider, model_name=model_name, **tariff) if tariff else None
     elif provider == "doubao":
         pricing_currency = "CNY"
         source = "volcengine_doubao_official_pricing_2026_07_16"
@@ -208,8 +197,13 @@ def _resolve_pricing(
     if cached_input_price is None:
         cached_input_price = input_price * max(cache_hit_factor, 0.0)
 
-    if pricing_currency != reporting_currency:
+    if any(not math.isfinite(float(price)) or float(price) < 0 for price in (
+        input_price, cached_input_price, output_price
+    )):
         return None
+
+    # No implicit FX conversion: retain each provider tariff currency.
+    reporting_currency = pricing_currency
 
     return UsagePricingSnapshot(
         provider=provider,
@@ -222,90 +216,85 @@ def _resolve_pricing(
         reporting_currency=reporting_currency,
         source=source,
         source_url=source_url,
+        priced_at=(occurred_at or datetime.now(timezone.utc)).isoformat(),
     )
+
+
+def _token_count(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        count = int(value)
+        return count if count >= 0 and str(value).strip() == str(count) else None
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def estimate_usage_costs(
     provider: str,
     model_name: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    cached_prompt_tokens: int = 0,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    cached_prompt_tokens: int | None = None,
     cache_miss_prompt_tokens: int | None = None,
+    occurred_at: datetime | None = None,
 ) -> UsageCostBreakdown:
-    """Estimate both legacy and cache-aware costs for one usage event."""
-    settings = get_settings()
-    reporting_currency = str(
-        getattr(settings, "LLM_COST_REPORTING_CURRENCY", "CNY") or "CNY"
-    ).upper()
-    normalized_prompt_tokens = max(int(prompt_tokens or 0), 0)
-    normalized_completion_tokens = max(int(completion_tokens or 0), 0)
-    normalized_total_tokens = normalized_prompt_tokens + normalized_completion_tokens
-    normalized_cached_prompt_tokens = min(
-        max(int(cached_prompt_tokens or 0), 0),
-        normalized_prompt_tokens,
-    )
-    if cache_miss_prompt_tokens is None:
-        billable_prompt_tokens = (
-            normalized_prompt_tokens - normalized_cached_prompt_tokens
-        )
-    else:
-        billable_prompt_tokens = min(
-            max(int(cache_miss_prompt_tokens or 0), 0),
-            normalized_prompt_tokens,
-        )
-
-    pricing_snapshot = _resolve_pricing(
-        provider=provider,
-        model_name=model_name,
-        prompt_tokens=normalized_prompt_tokens,
-    )
-    if pricing_snapshot is None:
-        return UsageCostBreakdown(
-            prompt_tokens=normalized_prompt_tokens,
-            completion_tokens=normalized_completion_tokens,
-            total_tokens=normalized_total_tokens,
-            cached_prompt_tokens=normalized_cached_prompt_tokens,
-            billable_prompt_tokens=billable_prompt_tokens,
-            estimated_cost=0.0,
-            estimated_cost_cache_aware=0.0,
-            estimated_cost_savings=0.0,
-            currency=reporting_currency,
-            pricing_snapshot=None,
-        )
-
-    estimated_cost = round(
-        (normalized_prompt_tokens / 1_000_000.0)
-        * pricing_snapshot.input_cache_miss_price_per_mtokens
-        + (normalized_completion_tokens / 1_000_000.0)
-        * pricing_snapshot.output_price_per_mtokens,
-        6,
-    )
-    estimated_cost_cache_aware = round(
-        (billable_prompt_tokens / 1_000_000.0)
-        * pricing_snapshot.input_cache_miss_price_per_mtokens
-        + (normalized_cached_prompt_tokens / 1_000_000.0)
-        * pricing_snapshot.input_cache_hit_price_per_mtokens
-        + (normalized_completion_tokens / 1_000_000.0)
-        * pricing_snapshot.output_price_per_mtokens,
-        6,
-    )
-    estimated_cost_savings = round(
-        max(estimated_cost - estimated_cost_cache_aware, 0.0),
-        6,
-    )
-
+    """Price reported counters only; missing/contradictory usage is not free."""
+    prompt = _token_count(prompt_tokens)
+    completion = _token_count(completion_tokens)
+    hit = _token_count(cached_prompt_tokens)
+    miss = _token_count(cache_miss_prompt_tokens)
+    invalid = any(value is not None and _token_count(value) is None for value in (
+        prompt_tokens, completion_tokens, cached_prompt_tokens, cache_miss_prompt_tokens
+    ))
+    if prompt is None and hit is not None and miss is not None:
+        prompt = hit + miss
+    cache_status = "unknown"
+    if prompt is not None and (hit is not None or miss is not None):
+        hit = prompt - miss if hit is None else hit
+        miss = prompt - hit if miss is None else miss
+        cache_status = "known"
+        if min(hit, miss) < 0 or hit + miss != prompt:
+            invalid = True
+    if invalid:
+        cache_status = "invalid"
+    pricing = _resolve_pricing(provider, model_name, prompt or 0, occurred_at)
+    status = "priced"
+    if invalid:
+        status = "invalid_usage"
+    elif prompt is None or completion is None:
+        status = "unknown_usage"
+    elif pricing is None:
+        status = "unknown_price"
+    elif cache_status != "known" and prompt > 0 and (
+        pricing.input_cache_hit_price_per_mtokens != pricing.input_cache_miss_price_per_mtokens
+    ):
+        status = "unknown_cache"
+    baseline = actual = savings = None
+    if pricing is not None and prompt is not None and completion is not None and not invalid:
+        baseline = (prompt * pricing.input_cache_miss_price_per_mtokens
+                    + completion * pricing.output_price_per_mtokens) / 1_000_000
+        if cache_status == "known":
+            actual = (hit * pricing.input_cache_hit_price_per_mtokens
+                      + miss * pricing.input_cache_miss_price_per_mtokens
+                      + completion * pricing.output_price_per_mtokens) / 1_000_000
+            savings = max(baseline - actual, 0.0)
+        elif status == "priced":
+            actual = baseline
+            savings = 0.0
     return UsageCostBreakdown(
-        prompt_tokens=normalized_prompt_tokens,
-        completion_tokens=normalized_completion_tokens,
-        total_tokens=normalized_total_tokens,
-        cached_prompt_tokens=normalized_cached_prompt_tokens,
-        billable_prompt_tokens=billable_prompt_tokens,
-        estimated_cost=estimated_cost,
-        estimated_cost_cache_aware=estimated_cost_cache_aware,
-        estimated_cost_savings=estimated_cost_savings,
-        currency=pricing_snapshot.reporting_currency,
-        pricing_snapshot=pricing_snapshot,
+        prompt_tokens=prompt or 0,
+        completion_tokens=completion or 0,
+        total_tokens=(prompt or 0) + (completion or 0),
+        cached_prompt_tokens=hit if cache_status == "known" else 0,
+        billable_prompt_tokens=miss if cache_status == "known" else (prompt or 0),
+        estimated_cost=baseline,
+        estimated_cost_cache_aware=actual,
+        estimated_cost_savings=savings,
+        currency=pricing.pricing_currency if pricing else "UNKNOWN",
+        pricing_snapshot=pricing,
+        pricing_status=status,
+        cache_status=cache_status,
     )
 
 
@@ -314,7 +303,7 @@ def estimate_usage_cost(
     model_name: str,
     prompt_tokens: int,
     completion_tokens: int,
-) -> float:
+) -> float | None:
     """Backward-compatible legacy cost estimate without cache discount."""
     return estimate_usage_costs(
         provider=provider,
@@ -372,31 +361,39 @@ class LLMUsageService:
         model_name: str | None = None,
         latency_ms: int | None = None,
         extra_metadata: dict[str, Any] | None = None,
+        occurred_at: datetime | None = None,
+        usage_time_basis: str | None = None,
     ) -> LLMUsageRecord:
         if model is not None:
             resolved_provider, resolved_model_name = _resolve_model_metadata(model)
         else:
             resolved_provider = str(provider or "unknown").strip().lower() or "unknown"
             resolved_model_name = str(model_name or "unknown").strip() or "unknown"
+        usage_time_basis = usage_time_basis or ("caller_supplied_estimate" if occurred_at is not None else "recorded_at_estimate")
+        occurred_at = occurred_at or datetime.now(timezone.utc)
+        if occurred_at.tzinfo is None:
+            raise ValueError("Usage timestamp must be timezone aware")
         cost_breakdown = estimate_usage_costs(
             provider=resolved_provider,
             model_name=resolved_model_name,
-            prompt_tokens=int(usage.prompt_tokens or 0),
-            completion_tokens=int(usage.completion_tokens or 0),
-            cached_prompt_tokens=int(usage.cached_prompt_tokens or 0),
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cached_prompt_tokens=usage.cached_prompt_tokens,
             cache_miss_prompt_tokens=usage.cache_miss_prompt_tokens,
+            occurred_at=occurred_at,
         )
         prompt_tokens = cost_breakdown.prompt_tokens
         completion_tokens = cost_breakdown.completion_tokens
-        total_tokens = int(usage.total_tokens or cost_breakdown.total_tokens)
+        total_tokens = cost_breakdown.total_tokens
         cached_prompt_tokens = min(cost_breakdown.cached_prompt_tokens, prompt_tokens)
         billable_prompt_tokens = min(
             cost_breakdown.billable_prompt_tokens,
             prompt_tokens,
         )
         normalized_latency_ms = max(int(latency_ms or 0), 0)
-        estimated_cost = cost_breakdown.estimated_cost
-        estimated_cost_cache_aware = cost_breakdown.estimated_cost_cache_aware
+        # Legacy NOT NULL columns require zero placeholders; metadata is authoritative.
+        estimated_cost = cost_breakdown.estimated_cost or 0.0
+        estimated_cost_cache_aware = cost_breakdown.estimated_cost_cache_aware or 0.0
 
         session_uuid = _safe_uuid(session_id)
         task_uuid = _safe_uuid(task_id)
@@ -412,18 +409,23 @@ class LLMUsageService:
                 "prompt_cache_miss_tokens",
                 usage.cache_miss_prompt_tokens,
             )
-        if cost_breakdown.pricing_snapshot is not None:
-            normalized_extra_metadata.setdefault(
-                "pricing",
-                cost_breakdown.pricing_snapshot.to_metadata(),
-            )
-        else:
-            normalized_extra_metadata.setdefault("pricing_status", "unknown")
+        normalized_extra_metadata["pricing_status"] = cost_breakdown.pricing_status
+        normalized_extra_metadata["cache_status"] = cost_breakdown.cache_status
+        normalized_extra_metadata["usage_occurred_at"] = occurred_at.isoformat()
+        normalized_extra_metadata["usage_time_basis"] = usage_time_basis
+        normalized_extra_metadata["cost_is_estimate"] = True
+        normalized_extra_metadata["billing_snapshot_version"] = 1
+        normalized_extra_metadata["pricing"] = (
+            cost_breakdown.pricing_snapshot.to_metadata()
+            if cost_breakdown.pricing_snapshot else None
+        )
+        normalized_extra_metadata["normalized_usage"] = usage.to_dict()
         if usage.raw:
             normalized_extra_metadata.setdefault("provider_usage", usage.raw)
 
         async with self.db.begin_nested():
             record = LLMUsageRecord(
+                created_at=occurred_at,
                 session_id=session_uuid,
                 task_id=task_uuid,
                 provider=resolved_provider,
@@ -461,6 +463,8 @@ class LLMUsageService:
                     task.llm_cached_prompt_tokens += cached_prompt_tokens
                     task.llm_billable_prompt_tokens += billable_prompt_tokens
                     task.llm_total_latency_ms += normalized_latency_ms
+                    if cost_breakdown.currency != str(getattr(get_settings(), "LLM_COST_REPORTING_CURRENCY", "CNY")).upper():
+                        estimated_cost = estimated_cost_cache_aware = 0.0
                     task.llm_estimated_cost = round(
                         float(task.llm_estimated_cost or 0.0) + estimated_cost,
                         6,
@@ -825,16 +829,7 @@ async def record_llm_usage_async(
 ) -> None:
     """Persist token/cost/latency metrics when the provider produced them."""
     normalized_usage = usage or LLMUsage()
-    has_any_counter = any(
-        value is not None
-        for value in (
-            normalized_usage.prompt_tokens,
-            normalized_usage.completion_tokens,
-            normalized_usage.total_tokens,
-        )
-    )
-    if not has_any_counter and latency_ms is None:
-        return
+    occurred_at = datetime.now(timezone.utc)
 
     try:
         async with AsyncSessionLocal() as db:
@@ -847,6 +842,8 @@ async def record_llm_usage_async(
                 step_name=step_name,
                 model=model,
                 usage=normalized_usage,
+                occurred_at=occurred_at,
+                usage_time_basis="recorded_at_estimate",
                 latency_ms=latency_ms,
                 extra_metadata=extra_metadata,
             )
@@ -870,16 +867,7 @@ async def record_provider_usage_async(
     """Persist usage from provider APIs that do not use ``BaseLLMModel``."""
 
     normalized_usage = usage or LLMUsage()
-    has_any_counter = any(
-        value is not None
-        for value in (
-            normalized_usage.prompt_tokens,
-            normalized_usage.completion_tokens,
-            normalized_usage.total_tokens,
-        )
-    )
-    if not has_any_counter and latency_ms is None:
-        return
+    occurred_at = datetime.now(timezone.utc)
 
     try:
         async with AsyncSessionLocal() as db:
@@ -894,6 +882,8 @@ async def record_provider_usage_async(
                 provider=provider,
                 model_name=model_name,
                 usage=normalized_usage,
+                occurred_at=occurred_at,
+                usage_time_basis="recorded_at_estimate",
                 latency_ms=latency_ms,
                 extra_metadata=extra_metadata,
             )

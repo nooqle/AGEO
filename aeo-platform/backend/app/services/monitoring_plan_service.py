@@ -68,6 +68,10 @@ MONITOR_MODE_ALIASES = {
 }
 
 ENDPOINT_REGISTRY: dict[str, dict[str, str]] = {
+    "deepseek_api": {
+        "id": "deepseek_api", "platform": "deepseek", "fetch_method": "api",
+        "display_name": "DeepSeek API",
+    },
     "doubao_api": {
         "id": "doubao_api",
         "platform": "doubao",
@@ -189,6 +193,8 @@ class MonitoringPlanService:
             )
         if not normalized:
             raise ValueError("至少需要选择一个平台来源。")
+        from app.schemas.platform_fetch_methods import methods_from_endpoints
+        methods_from_endpoints(normalized)
         return normalized
 
     @classmethod
@@ -609,6 +615,7 @@ class MonitoringPlanService:
         question_set_id: UUID,
         monitor_mode: str,
         fetch_mode: str = "fast",
+        endpoint_ids: list[str] | None = None,
     ) -> MonitoringPlan:
         mode = self.normalize_monitor_mode(monitor_mode)
         run_policy = (
@@ -647,13 +654,17 @@ class MonitoringPlanService:
                 entity_id=entity_id,
                 monitor_mode=mode,
                 question_set_ids=[question_set.id],
+                endpoint_ids=endpoint_ids,
                 run_policy=run_policy,
                 status=MonitoringPlanStatus.ACTIVE.value,
             )
 
         existing.status = MonitoringPlanStatus.ACTIVE.value
         existing.question_set_ids = [str(question_set.id)]
-        existing.endpoint_ids = self.normalize_endpoint_ids(None, run_policy=run_policy)
+        existing.endpoint_ids = self.normalize_endpoint_ids(
+            endpoint_ids if endpoint_ids is not None else existing.endpoint_ids,
+            run_policy=run_policy,
+        )
         existing.run_policy = run_policy
         existing.updated_at = datetime.now(timezone.utc)
         await self._replace_monitoring_plan_links(existing, [question_set])

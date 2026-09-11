@@ -84,7 +84,7 @@ export const useIntelligenceRunStore = create<IntelligenceRunState>((set, get) =
         }
         try {
           const recoveredRun = await api.getActiveBrandIntelligenceRun(entityId);
-          if (recoveredRun) {
+          if (recoveredRun && payload?.origin_event_id && recoveredRun.origin_event_id === payload.origin_event_id) {
             set((state) => ({
               runsByEntity: { ...state.runsByEntity, [entityId]: recoveredRun },
               submittingByEntity: { ...state.submittingByEntity, [entityId]: false },

@@ -34,7 +34,7 @@ class DeepSeekConfig(BaseLLMConfig):
 
     api_key: str | None = None
     base_url: str = "https://api.deepseek.com"
-    model_name: str = "deepseek-v4-pro"
+    model_name: str | None = None
     thinking_enabled: bool | None = None
     reasoning_effort: str = "high"
     temperature: float = 0.0
@@ -47,8 +47,8 @@ class DeepSeekConfig(BaseLLMConfig):
             self.api_key = getattr(settings, "DEEPSEEK_API_KEY", None)
         if self.base_url == "https://api.deepseek.com":
             self.base_url = getattr(settings, "DEEPSEEK_BASE_URL", self.base_url)
-        if self.model_name == "deepseek-v4-pro":
-            self.model_name = getattr(settings, "DEEPSEEK_MODEL_NAME", self.model_name)
+        if self.model_name is None:
+            self.model_name = getattr(settings, "DEEPSEEK_MODEL_NAME", None) or "deepseek-flash"
         if self.thinking_enabled is None:
             self.thinking_enabled = bool(
                 getattr(settings, "DEEPSEEK_THINKING_ENABLED", False)
@@ -108,8 +108,8 @@ class DeepSeekConfig(BaseLLMConfig):
             raise ValueError("Temperature must be in range [0.0, 2.0]")
         if self.max_tokens < 1:
             raise ValueError("Max tokens must be positive")
-        if self.reasoning_effort not in {"high", "max"}:
-            raise ValueError("DeepSeek reasoning_effort must be high or max")
+        if self.reasoning_effort not in {"low", "high", "max"}:
+            raise ValueError("DeepSeek reasoning_effort must be low, high or max")
 
 
 class DeepSeekModel(BaseLLMModel):
@@ -138,11 +138,13 @@ class DeepSeekModel(BaseLLMModel):
 
         ids: list[str] = []
         normalized_calls: list[dict[str, Any]] = []
-        for index, call in enumerate(tool_calls, start=1):
+        for call in tool_calls:
             if not isinstance(call, dict):
                 continue
             normalized = dict(call)
-            call_id = str(normalized.get("id") or f"call_{index}")
+            call_id = str(normalized.get("id") or "")
+            if not call_id or call_id in ids:
+                raise ValueError("Tool history contains a missing or duplicate call ID")
             normalized["id"] = call_id
             normalized.setdefault("type", "function")
             function = normalized.get("function")
@@ -188,12 +190,15 @@ class DeepSeekModel(BaseLLMModel):
     ) -> list[dict[str, Any]]:
         repaired: list[dict[str, Any]] = []
         pending_tool_call_ids: list[str] = []
+        orphan_notes: list[dict[str, Any]] = []
 
         def close_pending_tool_calls() -> None:
             nonlocal pending_tool_call_ids
             for pending_id in pending_tool_call_ids:
                 repaired.append(self._missing_tool_result_message(pending_id))
             pending_tool_call_ids = []
+            repaired.extend(orphan_notes)
+            orphan_notes.clear()
 
         for message in messages:
             role = message.get("role")
@@ -202,10 +207,13 @@ class DeepSeekModel(BaseLLMModel):
                     fixed = dict(message)
                     tool_call_id = str(fixed.get("tool_call_id") or "")
                     if tool_call_id not in pending_tool_call_ids:
-                        tool_call_id = pending_tool_call_ids[0]
+                        orphan_notes.append(self._as_historical_assistant_note(message))
+                        continue
                     fixed["tool_call_id"] = tool_call_id
                     repaired.append(fixed)
                     pending_tool_call_ids.remove(tool_call_id)
+                    if not pending_tool_call_ids:
+                        close_pending_tool_calls()
                 else:
                     repaired.append(self._as_historical_assistant_note(message))
                 continue
@@ -216,21 +224,16 @@ class DeepSeekModel(BaseLLMModel):
             if role == "assistant" and message.get("tool_calls"):
                 fixed = dict(message)
                 tool_call_ids = self._normalize_tool_calls(fixed)
-                if thinking_enabled and not fixed.get("reasoning_content"):
-                    fixed.pop("tool_calls", None)
-                    fixed.pop("reasoning_content", None)
-                    if not str(fixed.get("content") or "").strip():
-                        fixed["content"] = (
-                            "Historical tool call omitted because the original "
-                            "DeepSeek reasoning_content is unavailable."
-                        )
-                    repaired.append(fixed)
-                    continue
+                if thinking_enabled:
+                    fixed.setdefault("reasoning_content", "")
                 repaired.append(fixed)
                 pending_tool_call_ids = tool_call_ids
                 continue
 
-            repaired.append(message)
+            fixed = dict(message)
+            if role == "assistant" and thinking_enabled:
+                fixed.setdefault("reasoning_content", "")
+            repaired.append(fixed)
 
         if pending_tool_call_ids:
             close_pending_tool_calls()
@@ -245,7 +248,7 @@ class DeepSeekModel(BaseLLMModel):
     ) -> list[dict[str, Any]]:
         formatted = super()._build_messages(messages)
         for source, target in zip(messages, formatted, strict=False):
-            if source.get("reasoning_content"):
+            if "reasoning_content" in source:
                 target["reasoning_content"] = source["reasoning_content"]
         return self._repair_tool_history(
             formatted,
@@ -362,6 +365,7 @@ class DeepSeekModel(BaseLLMModel):
             thinking_enabled=bool(effective_thinking_enabled),
         )
         request_kwargs["stream"] = True
+        request_kwargs["stream_options"] = {"include_usage": True}
         if tools:
             fn_tools = [t for t in tools if t.get("type") == "function"]
             if fn_tools:
@@ -379,14 +383,16 @@ class DeepSeekModel(BaseLLMModel):
         final_usage = None
 
         for chunk in stream_response:
+            if getattr(chunk, "usage", None):
+                final_usage = self._parse_usage(chunk.usage)
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
             if (
                 hasattr(chunk.choices[0], "finish_reason")
                 and chunk.choices[0].finish_reason
             ):
                 last_finish_reason = chunk.choices[0].finish_reason
-            if getattr(chunk, "usage", None):
-                final_usage = self._parse_usage(chunk.usage)
 
             reasoning_piece = getattr(delta, "reasoning_content", None)
             if reasoning_piece:
@@ -434,9 +440,6 @@ class DeepSeekModel(BaseLLMModel):
                 )
             yield LLMResponse(
                 content="",
-                thinking_blocks=(
-                    [ThinkingBlock(text=reasoning_buffer)] if reasoning_buffer else []
-                ),
                 tool_calls=tool_blocks,
                 usage=final_usage,
                 finish_reason=last_finish_reason,

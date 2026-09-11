@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 
 from app.config import get_settings
 from app.core.llm import get_llm_model
-from app.core.llm.glm5 import GLM5Config, GLM5Model
 from app.services.llm_usage_service import record_llm_usage_async
 from app.core.fetchers.browser.browser_agent_contract import (
     BrowserAgentAction,
@@ -108,6 +107,24 @@ def _build_llm_browser_agent_prompt(loop_context: BrowserAgentLoopContext) -> st
 
 def _payload_char_length(payload: dict[str, Any]) -> int:
     return len(json.dumps(payload, ensure_ascii=False))
+
+
+def _browser_observation_content(
+    payload: dict[str, Any], screenshot: dict[str, Any] | None
+) -> str | list[dict[str, Any]]:
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if not screenshot:
+        return text
+    encoded = screenshot.get("image_base64")
+    mime = screenshot.get("content_type", "image/png")
+    if not isinstance(encoded, str) or not encoded or mime not in {
+        "image/png", "image/jpeg", "image/webp"
+    }:
+        raise ValueError("Browser screenshot has no supported image payload")
+    return [
+        {"type": "text", "text": text},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
+    ]
 
 
 def _trim_browser_agent_payload(
@@ -283,54 +300,12 @@ def _get_browser_agent_llm_semaphore() -> asyncio.Semaphore:
 
 def _get_browser_agent_llm_model() -> Any:
     settings = get_settings()
-    multimodal_provider = str(
-        getattr(settings, "MULTIMODAL_LLM_PROVIDER", "glm5") or "glm5"
-    ).lower()
-    if multimodal_provider != "glm5":
-        logger.warning(
-            "[BrowserAgentLoop] multimodal provider %s is configured, but browser "
-            "agent currently requires GLM5-compatible multimodal input.",
-            multimodal_provider,
-        )
-    browser_api_key = str(
-        getattr(settings, "BROWSER_AGENT_LLM_API_KEY", "") or ""
-    ).strip()
-    glm5_api_key = str(getattr(settings, "GLM5_API_KEY", "") or "").strip()
-    if not browser_api_key and get_llm_model is not _DEFAULT_GET_LLM_MODEL:
-        return get_llm_model()
-    if not browser_api_key and (
-        not glm5_api_key
-        or str(getattr(settings, "LLM_PROVIDER", "glm5") or "glm5").lower() == "glm5"
-    ):
-        return get_llm_model()
-    return GLM5Model(
-        GLM5Config(
-            api_key=browser_api_key or glm5_api_key or None,
-            base_url=str(
-                getattr(
-                    settings,
-                    "GLM5_BASE_URL",
-                    "https://open.bigmodel.cn/api/paas/v4",
-                )
-                or "https://open.bigmodel.cn/api/paas/v4"
-            ),
-            model_name=str(
-                getattr(settings, "BROWSER_AGENT_LLM_MODEL_NAME", None)
-                or (
-                    getattr(settings, "MULTIMODAL_MODEL_NAME", None)
-                    if multimodal_provider == "glm5"
-                    else None
-                )
-                or getattr(settings, "GLM5_MODEL_NAME", "glm-5")
-                or "glm-5"
-            ),
-            thinking_enabled=bool(
-                getattr(settings, "BROWSER_AGENT_LLM_THINKING_ENABLED", False)
-            ),
-            max_tokens=int(
-                getattr(settings, "BROWSER_AGENT_LLM_MAX_TOKENS", 384) or 384
-            ),
-        )
+    return get_llm_model(
+        provider=str(getattr(settings, "MULTIMODAL_LLM_PROVIDER", "deepseek") or "deepseek"),
+        model_name=(getattr(settings, "BROWSER_AGENT_LLM_MODEL_NAME", None)
+                    or getattr(settings, "MULTIMODAL_MODEL_NAME", "deepseek-flash")),
+        thinking_enabled=bool(getattr(settings, "BROWSER_AGENT_LLM_THINKING_ENABLED", False)),
+        api_key=getattr(settings, "BROWSER_AGENT_LLM_API_KEY", None),
     )
 
 
@@ -445,6 +420,8 @@ class LLMBrowserAgentPolicy:
                 stage_profile=get_observation_slice_profile(loop_context.stage),
             ),
         }
+        screenshot = compact_payload["observation"].get("screenshot")
+        compact_payload["observation"]["screenshot"] = None
         compact_payload, over_limit = _trim_browser_agent_payload(
             compact_payload,
             max_chars=_BROWSER_AGENT_LLM_PAYLOAD_LIMIT,
@@ -492,11 +469,7 @@ class LLMBrowserAgentPolicy:
                         },
                         {
                             "role": "user",
-                            "content": json.dumps(
-                                compact_payload,
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
+                            "content": _browser_observation_content(compact_payload, screenshot),
                         },
                     ],
                     **call_kwargs,

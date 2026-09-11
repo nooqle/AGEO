@@ -167,6 +167,11 @@ class BaseLLMModel(ABC):
                     "reasoning_tokens",
                     "image_tokens",
                     "video_tokens",
+                    "input_tokens",
+                    "output_tokens",
+                    "input_tokens_details",
+                    "output_tokens_details",
+                    "completion_tokens_details",
                 )
                 if hasattr(usage, key)
             }
@@ -175,6 +180,8 @@ class BaseLLMModel(ABC):
             return None
 
         prompt_tokens_details = data.get("prompt_tokens_details")
+        if prompt_tokens_details is None:
+            prompt_tokens_details = data.get("input_tokens_details")
         if prompt_tokens_details is not None and not isinstance(
             prompt_tokens_details, dict
         ):
@@ -200,23 +207,50 @@ class BaseLLMModel(ABC):
             cache_miss_prompt_tokens = data.get("prompt_cache_miss_tokens")
 
         prompt_tokens = data.get("prompt_tokens")
+        if prompt_tokens is None:
+            prompt_tokens = data.get("input_tokens")
         if prompt_tokens is None and (
-            cached_prompt_tokens is not None or cache_miss_prompt_tokens is not None
+            cached_prompt_tokens is not None and cache_miss_prompt_tokens is not None
         ):
-            prompt_tokens = int(cached_prompt_tokens or 0) + int(
-                cache_miss_prompt_tokens or 0
-            )
+            try:
+                prompt_tokens = int(cached_prompt_tokens) + int(cache_miss_prompt_tokens)
+            except (ValueError, TypeError):
+                pass
+
+        completion_details = data.get("completion_tokens_details")
+        if completion_details is None:
+            completion_details = data.get("output_tokens_details")
+        if hasattr(completion_details, "model_dump"):
+            completion_details = completion_details.model_dump()
+        elif hasattr(completion_details, "dict"):
+            completion_details = completion_details.dict()
+        elif completion_details is not None and not isinstance(completion_details, dict):
+            completion_details = {
+                "reasoning_tokens": getattr(completion_details, "reasoning_tokens", None)
+            }
+        reasoning_tokens = data.get("reasoning_tokens")
+        if reasoning_tokens is None and isinstance(completion_details, dict):
+            reasoning_tokens = completion_details.get("reasoning_tokens")
 
         normalized_raw = dict(data)
         normalized_raw["prompt_tokens_details"] = prompt_tokens_details
+        if "input_tokens_details" in data:
+            normalized_raw["input_tokens_details"] = prompt_tokens_details
+        if "completion_tokens_details" in data:
+            normalized_raw["completion_tokens_details"] = completion_details
+        if "output_tokens_details" in data:
+            normalized_raw["output_tokens_details"] = completion_details
+        completion_tokens = data.get("completion_tokens")
+        if completion_tokens is None:
+            completion_tokens = data.get("output_tokens")
 
         return LLMUsage(
             prompt_tokens=prompt_tokens,
-            completion_tokens=data.get("completion_tokens"),
+            completion_tokens=completion_tokens,
             total_tokens=data.get("total_tokens"),
             cached_prompt_tokens=cached_prompt_tokens,
             cache_miss_prompt_tokens=cache_miss_prompt_tokens,
-            reasoning_tokens=data.get("reasoning_tokens"),
+            reasoning_tokens=reasoning_tokens,
             image_tokens=data.get("image_tokens"),
             video_tokens=data.get("video_tokens"),
             prompt_tokens_details=prompt_tokens_details,

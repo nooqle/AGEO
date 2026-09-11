@@ -91,7 +91,7 @@ async def list_control_plane_tasks(
         organization_id=organization_id,
         limit=limit,
     )
-    currency = service._reporting_currency()
+    billing = await service.get_task_billing([task.id for task in tasks])
     return [
         ControlPlaneTaskSummary(
             task_id=task.id,
@@ -116,9 +116,9 @@ async def list_control_plane_tasks(
             ),
             status=task.status.value,
             llm_total_tokens=task.llm_total_tokens,
-            llm_estimated_cost=task.llm_estimated_cost,
-            llm_estimated_cost_cache_aware=task.llm_estimated_cost_cache_aware,
-            currency=currency,
+            llm_estimated_cost=billing[task.id]["total_cost"],
+            llm_estimated_cost_cache_aware=billing[task.id]["total_cost_cache_aware"],
+            **billing[task.id],
             llm_cached_prompt_tokens=task.llm_cached_prompt_tokens,
             llm_billable_prompt_tokens=task.llm_billable_prompt_tokens,
             llm_total_latency_ms=task.llm_total_latency_ms,
@@ -193,7 +193,7 @@ async def get_customer_detail(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
-    currency = service._reporting_currency()
+    billing = await service.get_task_billing([task.id for task in payload["recent_tasks"]])
 
     return ControlPlaneCustomerDetail(
         organization=_serialize_org(payload["organization"]),
@@ -243,9 +243,9 @@ async def get_customer_detail(
                 ),
                 status=task.status.value,
                 llm_total_tokens=task.llm_total_tokens,
-                llm_estimated_cost=task.llm_estimated_cost,
-                llm_estimated_cost_cache_aware=task.llm_estimated_cost_cache_aware,
-                currency=currency,
+                llm_estimated_cost=billing[task.id]["total_cost"],
+                llm_estimated_cost_cache_aware=billing[task.id]["total_cost_cache_aware"],
+                **billing[task.id],
                 llm_cached_prompt_tokens=task.llm_cached_prompt_tokens,
                 llm_billable_prompt_tokens=task.llm_billable_prompt_tokens,
                 llm_total_latency_ms=task.llm_total_latency_ms,

@@ -552,6 +552,15 @@ async def _run_pipeline_headless(
             effective_fetch_mode = (
                 "full" if effective_run_policy == "full_browser" else "fast"
             )
+            from app.schemas.platform_fetch_methods import methods_from_endpoints, resolve_platform_fetch_methods
+            endpoint_methods = methods_from_endpoints(endpoint_ids or [])
+            resolved_methods = None
+            if endpoint_methods:
+                effective_platforms = list(endpoint_methods)
+                resolved_methods = resolve_platform_fetch_methods(
+                    endpoint_methods, platforms=effective_platforms,
+                    fetch_mode=effective_fetch_mode, explicit=True,
+                )
             effective_monitor_mode = str(monitor_mode or "panorama").strip().lower()
             effective_analysis_mode = (
                 "persona" if effective_monitor_mode == "scenario" else "baseline"
@@ -594,6 +603,7 @@ async def _run_pipeline_headless(
                 "endpoint_ids": endpoint_ids or [],
                 "run_policy": effective_run_policy,
                 "platform_filter": effective_platforms,
+                **({"platform_fetch_methods": resolved_methods} if resolved_methods is not None else {}),
                 "fetch_mode": effective_fetch_mode,
                 "preserved_fetch_results": None,
                 "next_required_action": build_next_required_action(

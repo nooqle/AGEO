@@ -1,3 +1,10 @@
+import type { PlatformFetchMethods } from '@/lib/platformFetchMethods';
+
+export interface BrandIntelligenceInputScope extends Record<string, unknown> {
+  platform_fetch_methods?: PlatformFetchMethods;
+  fetch_mode?: 'fast' | 'full';
+}
+
 export type BrandIntelligenceRunStatus =
   | 'not_started'
   | 'planning_questions'
@@ -29,7 +36,7 @@ export interface BrandIntelligenceRun {
   dashboard_variant?: string | null;
   center_terms?: string[] | null;
   enabled_surfaces?: string[] | null;
-  input_scope?: Record<string, unknown> | null;
+  input_scope?: BrandIntelligenceInputScope | null;
   sample_scope?: Record<string, unknown> | null;
   output_refs?: Record<string, unknown> | null;
   requires_user_action: boolean;
@@ -48,7 +55,7 @@ export interface BrandIntelligenceRun {
 export interface CreateBrandIntelligenceRunInput {
   run_goal?: string | null;
   analysis_mode?: string;
-  input_scope?: Record<string, unknown> | null;
+  input_scope?: BrandIntelligenceInputScope | null;
   origin_surface?: string;
   origin_session_id?: string | null;
   origin_event_id?: string | null;

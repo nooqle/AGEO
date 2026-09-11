@@ -20,6 +20,8 @@ from app.workflow.events import (
     send_stage_result,
 )
 from app.workflow.nodes_streaming import call_llm_streaming
+from app.workflow.brand_search import call_brand_search
+from functools import partial
 from app.workflow.summaries import generate_a1_summary
 from app.core.llm import BaseLLMModel
 from app.core.llm.task_routing import get_a1_llm_model, get_a2_llm_model
@@ -338,28 +340,20 @@ async def a1_brand_node(state: AgentState) -> Command:
             },
         )
 
-        # Call LLM with streaming and TPAOR events
-        # GLM5 web_search: server-side search, no tool_calls returned
-        # MiniMax: ignores non-function tool types gracefully
-        GLM5_WEB_SEARCH_TOOL = {
-            "type": "web_search",
-            "web_search": {"enable": True, "search_engine": "search_std"},
-        }
-
         model = get_llm_model_compat()
-        response = await call_llm_streaming(
+        search_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        response = await call_brand_search(
+            messages=search_messages,
             session_id=session_id,
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            step="brand_analysis",
-            step_name="品牌信息采集",
             task_id=state.get("task_id"),
-            progress_start=0.35,
-            progress_end=0.8,
-            tools=[GLM5_WEB_SEARCH_TOOL],
+            call_model=partial(
+                call_llm_streaming, session_id=session_id, model=model,
+                step="brand_analysis", step_name="品牌信息采集",
+                task_id=state.get("task_id"), progress_start=0.35, progress_end=0.8,
+            ),
         )
 
         # Parse response
@@ -423,8 +417,7 @@ async def a1_brand_node(state: AgentState) -> Command:
                 retry_response = await call_llm_streaming(
                     session_id=session_id,
                     model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
+                    messages=search_messages + [
                         {"role": "user", "content": retry_prompt},
                     ],
                     step="brand_analysis",

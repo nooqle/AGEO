@@ -8,7 +8,7 @@ import logging
 from time import perf_counter
 from typing import Any, AsyncGenerator, Callable, Generator
 
-from app.core.llm import BaseLLMModel, LLMResponse
+from app.core.llm import BaseLLMModel, LLMResponse, LLMUsage
 from app.workflow.events import send_tpaor_event, send_progress_event, send_thought_event
 from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
 
@@ -286,6 +286,8 @@ async def call_llm_streaming(
         if chunk.usage:
             last_usage = chunk.usage
 
+    # A completed provider call without counters is an unknown-usage ledger event.
+    last_usage = last_usage or LLMUsage()
     response = LLMResponse(
         content=full_content,
         thinking_blocks=all_thinking_blocks,

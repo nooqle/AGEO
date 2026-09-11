@@ -17,7 +17,7 @@ import {
 import {
   CustomerTablePanel,
   ReviewQueuePanel,
-  formatControlPlaneCost,
+  formatCustomerCostSubtotal,
 } from '@/components/control-plane/ControlPlaneDataPanels';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
@@ -123,7 +123,6 @@ function ControlPlaneWorkbench() {
       (acc, item) => {
         acc.customers += 1;
         acc.tokens += item.tokens_7d;
-        acc.cost += item.cost_7d;
         acc.activeTasks += item.active_task_count;
         acc.organizationBrands += item.organization_brand_count;
         acc.personalBrands += item.personal_brand_count;
@@ -182,8 +181,8 @@ function ControlPlaneWorkbench() {
               hint="最近 7 天活跃"
             />
             <ControlPlaneStatCard
-              label="近 7 天费用"
-              value={formatControlPlaneCost(summary.cost)}
+              label="近 7 天已计价小计"
+              value={formatCustomerCostSubtotal(customers)}
               hint={`运行中任务 ${summary.activeTasks} 个 / 品牌 ${summary.organizationBrands + summary.personalBrands}`}
             />
           </div>

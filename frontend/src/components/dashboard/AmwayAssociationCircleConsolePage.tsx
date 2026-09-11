@@ -17,6 +17,7 @@ import { useEntityStore } from '@/stores/entityStore';
 import { useIntelligenceRunStore } from '@/stores/intelligenceRunStore';
 import { useOntologyStore } from '@/stores/ontologyStore';
 import { api } from '@/services/api';
+import { defaultPlatformFetchMethods } from '@/lib/platformFetchMethods';
 import { buildBrowserState } from '@/hooks/websocket/execution';
 import { toast } from '@/components/ui/toast';
 import {
@@ -801,11 +802,15 @@ export function AmwayAssociationCircleConsolePage({
     };
   }, [isSelectedRunActive, liveTaskLookup]);
 
+  const startPendingRef = useRef(false);
   const handleStart = useCallback(
     async (payload?: AssociationCircleStartPayload) => {
-      if (!selectedEntityId) return;
+      if (!selectedEntityId || startPendingRef.current) return false;
+      const platforms = readEnabledFlowPlatforms(selectedEntityId);
+      if (!platforms.length) throw new Error('请先启用至少一个采集平台。');
       const uploadedQuestions =
         payload?.uploadedQuestions?.filter((question) => question.text.trim()) || [];
+      startPendingRef.current = true;
       try {
         let uploadedQuestionSetId: string | null = payload?.questionSetId || null;
         let questionSetVersion: number | null = payload?.questionSetVersion || null;
@@ -841,7 +846,7 @@ export function AmwayAssociationCircleConsolePage({
         } catch {
           recipeScope = {};
         }
-        await createRun(selectedEntityId, {
+        const startedRun = await createRun(selectedEntityId, {
           run_goal: '生成安利品牌联想圈层报告',
           analysis_mode: ASSOCIATION_ANALYSIS_MODE,
           origin_surface: 'amwaychina_console',
@@ -855,8 +860,8 @@ export function AmwayAssociationCircleConsolePage({
             active_center_term: effectiveCenterTerm,
             center_terms: effectiveCenterTerm ? [effectiveCenterTerm] : centerOptions,
             brand_cluster_terms: centerOptions.length ? centerOptions : DEFAULT_CENTER_TERMS,
-            platforms: readEnabledFlowPlatforms(selectedEntityId),
-            fetch_mode: payload?.fetchMode || 'full',
+            platforms,
+            platform_fetch_methods: payload?.platformFetchMethods || defaultPlatformFetchMethods(),
             enabled_surfaces: ['amwaychina_console', 'chat', 'canvas', 'brand_world'],
             question_input_mode: uploadedQuestions.length ? 'uploaded_list' : 'default_matrix',
             ...recipeScope,
@@ -874,6 +879,7 @@ export function AmwayAssociationCircleConsolePage({
               : {}),
           },
         });
+        if (!startedRun?.id) throw new Error('运行创建未确认，请稍后重试。');
         // 运行即确认：跳转生产线查看计划进度，不再要求二次确认
         const params = new URLSearchParams(searchParams.toString());
         params.set('view', 'flow');
@@ -886,8 +892,12 @@ export function AmwayAssociationCircleConsolePage({
           setHome(nextHome);
           setHomeLoadedEntityId(selectedEntityId);
         });
+        return true;
       } catch (error) {
         toast.error(error instanceof Error ? error.message : '安利圈层建模启动失败');
+        throw error;
+      } finally {
+        startPendingRef.current = false;
       }
     },
     [

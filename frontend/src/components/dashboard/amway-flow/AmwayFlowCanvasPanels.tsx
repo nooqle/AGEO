@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { describePlatformFetchMethods } from '@/lib/platformFetchMethods';
 import { Play, RotateCcw, Workflow, X } from 'lucide-react';
 import type { BrandIntelligenceRun } from '@/types/intelligenceRun';
 import type { AmwayQuestionHistorySet } from '@/types/amwayChina';
@@ -342,7 +343,8 @@ export function FlowNodeDetail({
   const boundSetId = typeof inputScope.uploaded_question_set_id === 'string' ? inputScope.uploaded_question_set_id : null;
   const boundSet = boundSetId ? questionSets.find((item) => item.id === boundSetId) || null : null;
   const boundSource = typeof inputScope.uploaded_question_source === 'string' ? inputScope.uploaded_question_source : null;
-  const fetchModeLabel = inputScope.fetch_mode === 'fast' ? 'API 采集' : '浏览器采集';
+  const fetchModeLabel = describePlatformFetchMethods(activeRun?.input_scope,
+    Array.isArray(inputScope.platforms) ? inputScope.platforms.map(String) : plannedPlatformIds || []);
   const previewQuestions = (boundSet?.questions || []).slice(0, 3);
 
   return (

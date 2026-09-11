@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Awaitable, Literal, cast
 
 from app.core.config import settings
+from app.schemas.platform_fetch_methods import resolve_platform_fetch_methods
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ _PLATFORM_ALIASES: dict[str, AioPublicPlatform] = {
     "deep_seek": "deepseek",
     "deep seek": "deepseek",
     "deepseek_browser": "deepseek",
+    "deepseek_api": "deepseek",
     "deepseek_web": "deepseek",
 }
 
@@ -119,6 +121,7 @@ class AioAnswerFetchRequest:
     auth_context: AioAuthContext
     run_context: AioRunContext
     raw_platform_filter: list[str] | None = None
+    platform_fetch_methods: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +278,12 @@ class AioAnswerFetchTool:
             auth_context=auth_context,
             run_context=run_context,
             raw_platform_filter=raw_platform_filter,
+            platform_fetch_methods=(
+                resolve_platform_fetch_methods(
+                    state["platform_fetch_methods"], platforms=platforms,
+                    fetch_mode=normalized_mode, explicit=True,
+                ) if "platform_fetch_methods" in state and state["platform_fetch_methods"] is not None else None
+            ),
         )
 
     def to_executor_platforms(
@@ -291,16 +300,23 @@ class AioAnswerFetchTool:
         api_jobs: list[AioPlatformFetchJob] = []
         browser_jobs: list[AioPlatformFetchJob] = []
 
+        from app.core.fetchers.api.hunyuan_client import HunyuanClient
+        legacy_yuanbao_browser = HunyuanClient.has_legacy_configuration(
+            configured_url=settings.HUNYUAN_BASE_URL,
+            configured_model=settings.HUNYUAN_FAST_MODEL or settings.HUNYUAN_MODEL,
+        )
+        methods = resolve_platform_fetch_methods(
+            request.platform_fetch_methods, platforms=request.platforms,
+            fetch_mode=request.mode, explicit=request.platform_fetch_methods is not None,
+            legacy_yuanbao_browser=legacy_yuanbao_browser,
+        )
         for public_platform in request.platforms:
             executor_platform = _PUBLIC_TO_EXECUTOR_PLATFORM[public_platform]
-            if request.mode != "full" and public_platform in _API_PUBLIC_PLATFORMS:
+            if methods[public_platform] == "api":
                 api_jobs.append(
                     self._build_job(request, public_platform, executor_platform, "api")
                 )
-            if (
-                request.mode == "full"
-                or public_platform in _FAST_BROWSER_PUBLIC_PLATFORMS
-            ):
+            if methods[public_platform] == "browser":
                 browser_jobs.append(
                     self._build_job(
                         request,
@@ -588,6 +604,14 @@ class AioAnswerFetchTool:
             provenance={
                 "source": "aio_answer_fetch",
                 "source_type": result.get("fetch_method") or "unknown",
+                "requested_platform": result.get("requested_platform"),
+                "requested_method": result.get("requested_method"),
+                "actual_provider": result.get("actual_provider"),
+                "provider_model": result.get("provider_model"),
+                "web_search_supported": result.get("web_search_supported"),
+                "web_search_executed": result.get("web_search_executed"),
+                "reference_scope": result.get("reference_scope"),
+                "protocol": result.get("protocol"),
                 "platform_legacy_id": str(platform or ""),
                 "duration": result.get("duration"),
                 "auth_context": auth_context.context_key if auth_context else None,

@@ -75,11 +75,11 @@ class Settings(BaseSettings):
     BROWSER_AGENT_LLM_MAX_CONCURRENCY: int = 2
     BROWSER_AGENT_LLM_MAX_TOKENS: int = 384
     BROWSER_AGENT_LLM_THINKING_ENABLED: bool = False
-    BROWSER_AGENT_LLM_MODEL_NAME: str | None = "glm-5"
+    BROWSER_AGENT_LLM_MODEL_NAME: str | None = None
     BROWSER_AGENT_LLM_API_KEY: str | None = None
 
     # LLM Provider Selection
-    LLM_PROVIDER: str = "glm5"
+    LLM_PROVIDER: str = "deepseek"
 
     # LLM API Keys
     MINIMAX_API_KEY: str | None = None
@@ -112,9 +112,9 @@ class Settings(BaseSettings):
     # DeepSeek
     DEEPSEEK_API_KEY: str | None = None
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEEPSEEK_MODEL_NAME: str = "deepseek-v4-pro"
-    DEEPSEEK_FLASH_MODEL_NAME: str = "deepseek-v4-flash"
-    DEEPSEEK_PRO_MODEL_NAME: str = "deepseek-v4-pro"
+    DEEPSEEK_MODEL_NAME: str = "deepseek-flash"
+    DEEPSEEK_FLASH_MODEL_NAME: str = "deepseek-flash"
+    DEEPSEEK_PRO_MODEL_NAME: str = "deepseek-flash"
     DEEPSEEK_THINKING_ENABLED: bool = False
     DEEPSEEK_REASONING_EFFORT: str = "high"
     DEEPSEEK_TEMPERATURE: float = 0.0
@@ -130,37 +130,37 @@ class Settings(BaseSettings):
 
     # Canonical model profiles
     TEXT_REASONING_LLM_PROVIDER: str = "deepseek"
-    TEXT_REASONING_MODEL_NAME: str = "deepseek-v4-pro"
+    TEXT_REASONING_MODEL_NAME: str = "deepseek-flash"
     TEXT_REASONING_THINKING_ENABLED: bool = True
     TEXT_LIGHT_LLM_PROVIDER: str = "deepseek"
-    TEXT_LIGHT_MODEL_NAME: str = "deepseek-v4-flash"
+    TEXT_LIGHT_MODEL_NAME: str = "deepseek-flash"
     TEXT_LIGHT_THINKING_ENABLED: bool = False
-    MULTIMODAL_LLM_PROVIDER: str = "glm5"
-    MULTIMODAL_MODEL_NAME: str = "glm-5"
+    MULTIMODAL_LLM_PROVIDER: str = "deepseek"
+    MULTIMODAL_MODEL_NAME: str = "deepseek-flash"
     MULTIMODAL_THINKING_ENABLED: bool = True
 
     # Legacy task-level LLM routing fields retained for old env compatibility.
     # Runtime task routing now maps tasks to the canonical model profiles above.
     ORCHESTRATOR_LLM_PROVIDER: str = "deepseek"
-    ORCHESTRATOR_MODEL_NAME: str = "deepseek-v4-pro"
+    ORCHESTRATOR_MODEL_NAME: str = "deepseek-flash"
     ORCHESTRATOR_THINKING_ENABLED: bool = True
     ORCHESTRATOR_RUNTIME_REMINDER_MESSAGE_ENABLED: bool = False
     ORCHESTRATOR_STABLE_TOOL_SURFACE_ENABLED: bool = False
     STABLE_SKILL_TOOL_DESCRIPTION_ENABLED: bool = False
     LONG_TEXT_LLM_PROVIDER: str = "deepseek"
-    LONG_TEXT_MODEL_NAME: str = "deepseek-v4-pro"
+    LONG_TEXT_MODEL_NAME: str = "deepseek-flash"
     LONG_TEXT_THINKING_ENABLED: bool = True
-    A1_LLM_PROVIDER: str = "glm5"
-    A1_MODEL_NAME: str = "glm-5"
+    A1_LLM_PROVIDER: str = "deepseek"
+    A1_MODEL_NAME: str = "deepseek-flash"
     A1_THINKING_ENABLED: bool = True
     A3_LLM_PROVIDER: str = "deepseek"
-    A3_MODEL_NAME: str = "deepseek-v4-pro"
+    A3_MODEL_NAME: str = "deepseek-flash"
     A3_THINKING_ENABLED: bool = False
     FAST_STRUCTURED_LLM_PROVIDER: str | None = None
     FAST_STRUCTURED_MODEL_NAME: str | None = None
     FAST_STRUCTURED_THINKING_ENABLED: bool = False
     URL_INTELLIGENCE_LLM_PROVIDER: str = "deepseek"
-    URL_INTELLIGENCE_MODEL_NAME: str = "deepseek-v4-flash"
+    URL_INTELLIGENCE_MODEL_NAME: str = "deepseek-flash"
     URL_INTELLIGENCE_TIMEOUT_SECONDS: float = 45.0
     URL_INTELLIGENCE_BATCH_SIZE: int = 60
 

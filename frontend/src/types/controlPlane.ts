@@ -1,4 +1,35 @@
-export interface ControlPlaneCustomerSummary {
+export interface ControlPlaneCurrencyCost {
+  currency: string;
+  total_cost: number;
+  total_cost_cache_aware: number | null;
+  estimated_savings: number | null;
+  priced_call_count: number;
+}
+
+export interface ControlPlanePricingCoverage {
+  priced_call_count?: number;
+  unknown_pricing_call_count?: number;
+  pricing_coverage?: number;
+  costs_by_currency?: ControlPlaneCurrencyCost[];
+}
+
+export interface ControlPlaneCacheCoverage extends ControlPlanePricingCoverage {
+  cache_known_call_count?: number;
+  cache_unknown_call_count?: number;
+  cache_coverage?: number;
+  cache_known_prompt_tokens?: number;
+}
+
+export interface ControlPlanePricingSnapshot {
+  tariff_period?: string;
+  rate_version?: string;
+  source?: string;
+  source_url?: string;
+  priced_at?: string;
+  pricing_timezone?: string;
+}
+
+export interface ControlPlaneCustomerSummary extends ControlPlanePricingCoverage {
   organization_id: string;
   customer_name: string;
   primary_account: string | null;
@@ -7,12 +38,13 @@ export interface ControlPlaneCustomerSummary {
   organization_brand_count: number;
   personal_brand_count: number;
   tokens_7d: number;
-  cost_7d: number;
+  cost_7d: number | null;
+  currency?: string | null;
   active_task_count: number;
   last_active_at: string | null;
 }
 
-export interface ControlPlaneTaskSummary {
+export interface ControlPlaneTaskSummary extends ControlPlanePricingCoverage {
   task_id: string;
   organization_id: string | null;
   customer_name: string | null;
@@ -23,9 +55,9 @@ export interface ControlPlaneTaskSummary {
   initiator_account: string | null;
   status: string;
   llm_total_tokens: number;
-  llm_estimated_cost: number;
-  llm_estimated_cost_cache_aware: number;
-  currency: string;
+  llm_estimated_cost: number | null;
+  llm_estimated_cost_cache_aware: number | null;
+  currency: string | null;
   llm_cached_prompt_tokens: number;
   llm_billable_prompt_tokens: number;
   llm_total_latency_ms: number;
@@ -68,7 +100,7 @@ export interface AmwayChinaEntitlement {
   center_terms: string[];
 }
 
-export interface ControlPlaneObservabilitySummary {
+export interface ControlPlaneObservabilitySummary extends ControlPlaneCacheCoverage {
   days: number;
   call_count: number;
   total_tokens: number;
@@ -76,11 +108,11 @@ export interface ControlPlaneObservabilitySummary {
   completion_tokens: number;
   cached_prompt_tokens: number;
   billable_prompt_tokens: number;
-  cache_hit_ratio: number;
-  total_cost: number;
-  total_cost_cache_aware: number;
-  estimated_savings: number;
-  currency: string;
+  cache_hit_ratio: number | null;
+  total_cost: number | null;
+  total_cost_cache_aware: number | null;
+  estimated_savings: number | null;
+  currency: string | null;
   total_latency_ms: number;
   avg_latency_ms: number;
   unique_models: number;
@@ -105,7 +137,7 @@ export interface ControlPlaneReuseDiagnostic {
   ratio: number | null;
 }
 
-export interface ControlPlaneCostBreakdown {
+export interface ControlPlaneCostBreakdown extends ControlPlaneCacheCoverage {
   organization_id: string | null;
   customer_name: string | null;
   brand_name: string | null;
@@ -119,16 +151,22 @@ export interface ControlPlaneCostBreakdown {
   completion_tokens: number;
   cached_prompt_tokens: number;
   billable_prompt_tokens: number;
-  cache_hit_ratio: number;
-  total_cost: number;
-  total_cost_cache_aware: number;
-  estimated_savings: number;
-  currency: string;
+  cache_hit_ratio: number | null;
+  total_cost: number | null;
+  total_cost_cache_aware: number | null;
+  estimated_savings: number | null;
+  currency: string | null;
   total_latency_ms: number;
   avg_latency_ms: number;
 }
 
 export interface ControlPlaneRecentCall {
+  usage_time_basis?: 'recorded_at_estimate' | 'caller_supplied_estimate' | 'legacy_unknown';
+  cost_is_estimate?: boolean;
+  cost_scope?: string;
+  provider_web_search_requests?: number | null;
+  search_tool_cost_status?: string;
+  estimated_search_tool_cost?: number | null;
   id: string;
   task_id: string | null;
   session_id: string | null;
@@ -144,12 +182,15 @@ export interface ControlPlaneRecentCall {
   total_tokens: number;
   cached_prompt_tokens: number;
   billable_prompt_tokens: number;
-  cache_hit_ratio: number;
+  cache_hit_ratio: number | null;
   latency_ms: number;
-  estimated_cost: number;
-  estimated_cost_cache_aware: number;
-  estimated_savings: number;
+  estimated_cost: number | null;
+  estimated_cost_cache_aware: number | null;
+  estimated_savings: number | null;
   currency: string;
+  pricing_status?: string;
+  cache_status?: string;
+  pricing?: ControlPlanePricingSnapshot | null;
   static_prompt_hash: string | null;
   tool_surface_hash: string | null;
   model_identity: string | null;

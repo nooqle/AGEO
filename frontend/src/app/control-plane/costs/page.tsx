@@ -27,18 +27,44 @@ import type {
   ControlPlaneObservabilitySnapshot,
   ControlPlaneRecentCall,
   ControlPlaneReuseDiagnostic,
+  ControlPlaneCurrencyCost,
+  ControlPlaneCacheCoverage,
 } from '@/types/controlPlane';
 import { formatDateTime } from '@/lib/utils';
 
 const palette = controlPlanePalette();
 
-function formatCost(value: number, currency = 'CNY') {
+function formatCost(value: number | null | undefined, currency: string | null | undefined = null) {
   return formatControlPlaneCost(value, currency);
 }
 
-function formatPercent(value: number) {
+function formatPercent(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '未知';
   if (!Number.isFinite(value) || value <= 0) return '0%';
   return `${(value * 100).toFixed(value >= 0.1 ? 1 : 2)}%`;
+}
+
+function formatCostSubtotal(row: {
+  total_cost_cache_aware: number | null;
+  total_cost: number | null;
+  estimated_savings: number | null;
+  currency: string | null;
+  costs_by_currency?: ControlPlaneCurrencyCost[];
+}, field: 'total_cost_cache_aware' | 'total_cost' | 'estimated_savings' = 'total_cost_cache_aware') {
+  if (row.costs_by_currency?.length) return row.costs_by_currency.map((cost) => formatCost(cost[field], cost.currency)).join(' / ');
+  return formatCost(row[field], row.currency);
+}
+
+function pricingCoverageLabel(row: ControlPlaneCacheCoverage) {
+  return `已计价 ${row.priced_call_count ?? '未知'} 次 · 未计价 ${row.unknown_pricing_call_count ?? '未知'} 次`;
+}
+
+function pricingStatusLabel(status?: string) {
+  const labels: Record<string, string> = {
+    priced: '已计价', unknown_price: '定价未知', unknown_usage: '用量未知',
+    unknown_cache: '缓存未知', invalid_usage: '用量异常', legacy_snapshot: '历史费用快照', legacy_unknown: '历史定价未知',
+  };
+  return labels[status || ''] || '定价状态未记录';
 }
 
 function formatHash(value: string | null) {
@@ -205,37 +231,28 @@ function ControlPlaneCostsContent() {
         <div className="space-y-6">
           <div className="grid gap-4 xl:grid-cols-4">
             <ControlPlaneStatCard
-              label="估算成本"
+              label="缓存后估算 · 已计价小计"
               value={
                 snapshot
-                  ? formatCost(
-                      snapshot.summary.total_cost_cache_aware,
-                      snapshot.summary.currency
-                    )
+                  ? formatCostSubtotal(snapshot.summary)
                   : '--'
               }
               hint={
                 snapshot
-                  ? `未计缓存 ${formatCost(
-                      snapshot.summary.total_cost,
-                      snapshot.summary.currency
-                    )}`
+                  ? `未缓存基准 ${formatCostSubtotal(snapshot.summary, 'total_cost')}`
                   : '等待数据'
               }
             />
             <ControlPlaneStatCard
-              label="缓存节省"
+              label="缓存节省估算"
               value={
                 snapshot
-                  ? formatCost(
-                      snapshot.summary.estimated_savings,
-                      snapshot.summary.currency
-                    )
+                  ? formatCostSubtotal(snapshot.summary, 'estimated_savings')
                   : '--'
               }
               hint={
                 snapshot
-                  ? `命中 ${formatPercent(snapshot.summary.cache_hit_ratio)}`
+                  ? `输入加权命中率 ${formatPercent(snapshot.summary.cache_hit_ratio)}`
                   : '等待数据'
               }
             />
@@ -262,6 +279,16 @@ function ControlPlaneCostsContent() {
               }
             />
           </div>
+
+          {snapshot ? (
+            <div className="space-y-1 text-sm" style={{ color: palette.muted }}>
+              <p>{pricingCoverageLabel(snapshot.summary)} · 定价覆盖率 {formatPercent(snapshot.summary.pricing_coverage)}</p>
+              <p>缓存已知 {snapshot.summary.cache_known_call_count ?? '未知'} 次 / 未知 {snapshot.summary.cache_unknown_call_count ?? '未知'} 次；输入加权命中率仅统计缓存已知的输入。</p>
+              <p>费用使用调用时保存的定价快照，均为估算。未缓存基准与缓存后费用使用相同时段费率；缓存节省不等同峰谷优惠，也不是供应商账单。</p>
+              <p>常规调用按本系统记录调用的时刻估算峰谷费率；显式导入的调用按所提供的时刻估算。跨时段调用的最终金额以供应商账单为准。</p>
+              <p>DeepSeek 原生搜索当前按返回的 token 用量估算；若供应商另收搜索工具费，该费用尚未计入，不能视为零费用。</p>
+            </div>
+          ) : null}
 
           <ControlPlanePanel title="提示词复用诊断">
             <PromptReuseDiagnostics snapshot={snapshot} loading={loading} />
@@ -454,7 +481,7 @@ function CostBreakdownTable({
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {row.total_tokens.toLocaleString()}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    计费输入 {row.billable_prompt_tokens.toLocaleString()}
+                    未命中输入 {row.billable_prompt_tokens.toLocaleString()}
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
@@ -463,13 +490,16 @@ function CostBreakdownTable({
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {formatPercent(row.cache_hit_ratio)}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    命中 {row.cached_prompt_tokens.toLocaleString()}
+                    已知命中 {row.cached_prompt_tokens.toLocaleString()} · 未知 {row.cache_unknown_call_count ?? '未知'} 次
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {formatCost(row.total_cost_cache_aware, row.currency)}
+                  {formatCostSubtotal(row)}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    省 {formatCost(row.estimated_savings, row.currency)}
+                    基准 {formatCostSubtotal(row, 'total_cost')} · 缓存节省 {formatCostSubtotal(row, 'estimated_savings')}
+                  </div>
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    {pricingCoverageLabel(row)}
                   </div>
                 </td>
                 <td className="py-4" style={{ color: palette.muted }}>
@@ -611,8 +641,8 @@ function RecentCallsTable({
             <th className="pb-3 pr-4 font-semibold">Model</th>
             <th className="pb-3 pr-4 font-semibold">Step</th>
             <th className="pb-3 pr-4 font-semibold">Token</th>
-            <th className="pb-3 pr-4 font-semibold">费用</th>
-            <th className="pb-3 pr-4 font-semibold">缓存命中</th>
+            <th className="pb-3 pr-4 font-semibold">缓存后估算 / 定价依据</th>
+            <th className="pb-3 pr-4 font-semibold">输入缓存命中</th>
             <th className="pb-3 pr-4 font-semibold">诊断</th>
             <th className="pb-3 font-semibold">时间</th>
           </tr>
@@ -669,13 +699,26 @@ function RecentCallsTable({
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {formatCost(row.estimated_cost_cache_aware, row.currency)}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    省 {formatCost(row.estimated_savings, row.currency)}
+                    基准 {formatCost(row.estimated_cost, row.currency)} · 缓存节省 {formatCost(row.estimated_savings, row.currency)}
+                  </div>
+                  {row.search_tool_cost_status === 'not_estimated' && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      仅含 token 估算 · 搜索工具费未计入
+                      {row.provider_web_search_requests != null ? ` · 搜索请求 ${row.provider_web_search_requests} 次（非收费次数）` : ''}
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    {pricingStatusLabel(row.pricing_status)} · {row.pricing?.tariff_period === 'peak' ? '高峰' : row.pricing?.tariff_period === 'off_peak' ? '低谷' : '时段未记录'}
+                  </div>
+                  <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+                    {row.pricing?.rate_version || row.pricing?.source || '定价依据未记录'}
+                    {row.pricing?.priced_at ? ` · ${formatDateTime(row.pricing.priced_at)} (${row.pricing.pricing_timezone || '时区未记录'})` : ''}
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {formatPercent(row.cache_hit_ratio)}
+                  {row.cache_status === 'known' ? formatPercent(row.cache_hit_ratio) : '未知'}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    命中 {row.cached_prompt_tokens.toLocaleString()} / 未命中 {row.billable_prompt_tokens.toLocaleString()}
+                    {row.cache_status === 'known' ? `命中 ${row.cached_prompt_tokens.toLocaleString()} / 未命中 ${row.billable_prompt_tokens.toLocaleString()}` : '未获得有效缓存用量'}
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>

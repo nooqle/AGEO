@@ -73,7 +73,26 @@ class OrganizationUpdateRequest(BaseModel):
     feature_flags: dict[str, bool] | None = None
 
 
-class ControlPlaneCustomerSummary(BaseModel):
+class CurrencyCostSummary(BaseModel):
+    currency: str
+    total_cost: float
+    total_cost_cache_aware: float | None
+    estimated_savings: float | None
+    priced_call_count: int
+
+
+class BillingCoverage(BaseModel):
+    priced_call_count: int = 0
+    unknown_pricing_call_count: int = 0
+    pricing_coverage: float = 0.0
+    cache_known_call_count: int = 0
+    cache_unknown_call_count: int = 0
+    cache_coverage: float = 0.0
+    cache_known_prompt_tokens: int = 0
+    costs_by_currency: list[CurrencyCostSummary] = Field(default_factory=list)
+
+
+class ControlPlaneCustomerSummary(BillingCoverage):
     organization_id: UUID
     customer_name: str
     primary_account: str | None = None
@@ -82,12 +101,13 @@ class ControlPlaneCustomerSummary(BaseModel):
     organization_brand_count: int = 0
     personal_brand_count: int = 0
     tokens_7d: int
-    cost_7d: float
+    cost_7d: float | None
+    currency: str | None = None
     active_task_count: int
     last_active_at: datetime | None = None
 
 
-class ControlPlaneTaskSummary(BaseModel):
+class ControlPlaneTaskSummary(BillingCoverage):
     task_id: UUID
     organization_id: UUID | None = None
     customer_name: str | None = None
@@ -98,9 +118,9 @@ class ControlPlaneTaskSummary(BaseModel):
     initiator_account: str | None = None
     status: str
     llm_total_tokens: int
-    llm_estimated_cost: float
-    llm_estimated_cost_cache_aware: float = 0.0
-    currency: str = "CNY"
+    llm_estimated_cost: float | None
+    llm_estimated_cost_cache_aware: float | None = None
+    currency: str | None = None
     llm_cached_prompt_tokens: int = 0
     llm_billable_prompt_tokens: int = 0
     llm_total_latency_ms: int
@@ -124,7 +144,7 @@ class ControlPlaneCustomerDetail(BaseModel):
     recent_tasks: list[ControlPlaneTaskSummary]
 
 
-class ControlPlaneObservabilitySummary(BaseModel):
+class ControlPlaneObservabilitySummary(BillingCoverage):
     days: int
     call_count: int
     total_tokens: int
@@ -132,11 +152,11 @@ class ControlPlaneObservabilitySummary(BaseModel):
     completion_tokens: int
     cached_prompt_tokens: int
     billable_prompt_tokens: int
-    cache_hit_ratio: float
-    total_cost: float
-    total_cost_cache_aware: float
-    estimated_savings: float
-    currency: str = "CNY"
+    cache_hit_ratio: float | None
+    total_cost: float | None
+    total_cost_cache_aware: float | None
+    estimated_savings: float | None
+    currency: str | None = None
     total_latency_ms: int
     avg_latency_ms: float
     unique_models: int
@@ -161,7 +181,7 @@ class ControlPlaneReuseDiagnostic(BaseModel):
     ratio: float | None = None
 
 
-class ControlPlaneCostBreakdown(BaseModel):
+class ControlPlaneCostBreakdown(BillingCoverage):
     organization_id: UUID | None = None
     customer_name: str | None = None
     brand_name: str | None = None
@@ -175,16 +195,25 @@ class ControlPlaneCostBreakdown(BaseModel):
     completion_tokens: int = 0
     cached_prompt_tokens: int
     billable_prompt_tokens: int = 0
-    cache_hit_ratio: float
-    total_cost: float
-    total_cost_cache_aware: float
-    estimated_savings: float
-    currency: str = "CNY"
+    cache_hit_ratio: float | None
+    total_cost: float | None
+    total_cost_cache_aware: float | None
+    estimated_savings: float | None
+    currency: str | None = None
     total_latency_ms: int
     avg_latency_ms: float
 
 
 class ControlPlaneRecentCall(BaseModel):
+    cost_scope: str = "token_estimate"
+    provider_web_search_requests: int | None = None
+    search_tool_cost_status: str = "not_reported"
+    estimated_search_tool_cost: float | None = None
+    usage_time_basis: str = "legacy_unknown"
+    cost_is_estimate: bool = True
+    pricing_status: str = "legacy_unknown"
+    cache_status: str = "legacy_unknown"
+    pricing: dict | None = None
     id: UUID
     task_id: UUID | None = None
     session_id: UUID | None = None
@@ -200,12 +229,12 @@ class ControlPlaneRecentCall(BaseModel):
     total_tokens: int
     cached_prompt_tokens: int
     billable_prompt_tokens: int
-    cache_hit_ratio: float
+    cache_hit_ratio: float | None
     latency_ms: int
-    estimated_cost: float
-    estimated_cost_cache_aware: float
-    estimated_savings: float
-    currency: str = "CNY"
+    estimated_cost: float | None
+    estimated_cost_cache_aware: float | None
+    estimated_savings: float | None
+    currency: str | None = None
     static_prompt_hash: str | None = None
     tool_surface_hash: str | None = None
     model_identity: str | None = None

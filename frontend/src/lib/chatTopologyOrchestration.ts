@@ -4,6 +4,7 @@
  */
 
 import { api } from '@/services/api';
+import { defaultPlatformFetchMethods } from '@/lib/platformFetchMethods';
 import { stripChatTopologyPrefix } from '@/lib/chatTopologyIntent';
 import { JOURNEY } from '@/lib/amwayFlowJourneyCopy';
 import {
@@ -206,6 +207,7 @@ export async function startChatFlowRun(entityId: string): Promise<{ run_id: stri
     }
   })();
 
+  if (platforms?.length === 0) throw new Error('请先在生产线启用至少一个采集平台。');
   let recipeScope: Record<string, string> = {};
   try {
     const raw = sessionStorage.getItem(`amway-flow-active-recipe:${entityId}`);
@@ -233,7 +235,7 @@ export async function startChatFlowRun(entityId: string): Promise<{ run_id: stri
       analysis_mode: 'brand_association_circle',
       report_kind: 'brand_association_circle',
       platforms,
-      fetch_mode: 'full',
+      platform_fetch_methods: defaultPlatformFetchMethods(),
       enabled_surfaces: ['amwaychina_console', 'chat', 'canvas', 'brand_world'],
       ...recipeScope,
     },

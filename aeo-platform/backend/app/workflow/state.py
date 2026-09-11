@@ -337,6 +337,7 @@ class AgentState(TypedDict):
     agent_retry_counts: (
         dict  # {tool_name: int} — tracks how many times each tool was called
     )
+    platform_fetch_methods: dict[str, str] | None
     fetch_mode: (
         str | None
     )  # "fast" (API+DeepSeek browser) or "full" (4 platforms all browser)

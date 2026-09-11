@@ -13,6 +13,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
+from app.core.config import settings
+from app.core.fetchers.api.hunyuan_client import HunyuanClient
 from app.models.brand_intelligence_run import (
     BRAND_INTELLIGENCE_ACTIVE_RUN_STATUSES,
     BRAND_INTELLIGENCE_TERMINAL_RUN_STATUSES, BrandIntelligenceRun,
@@ -23,6 +25,7 @@ from app.models.snapshot import AnalysisSnapshot, SnapshotStatus
 from app.models.task import AnalysisTask, TaskStatus
 from app.models.task_run import TaskTriggerSource
 from app.models.user import User
+from app.schemas.platform_fetch_methods import resolve_platform_fetch_methods
 from app.services.amway_circle_tracking_service import \
     AmwayCircleTrackingService
 from app.services.brand_association_circle_variant import (
@@ -389,6 +392,7 @@ def _build_brand_run_initial_state(
         "latest_user_input": run.run_goal or DEFAULT_RUN_GOAL,
         "dashboard_context": dashboard_context,
         # Keep a top-level handle for nodes/packets that read plan outside dashboard_context
+        **({"platform_fetch_methods": dict(input_scope["platform_fetch_methods"])} if "platform_fetch_methods" in input_scope else {}),
         "input_scope": input_scope,
         "table_intake_result": uploaded_question_payload,
         "confirmed_import_action": (
@@ -539,6 +543,17 @@ class BrandIntelligenceRunService:
             if association_context
             else _normalize_mode(analysis_mode)
         )
+        normalized_input_scope = dict(normalized_input_scope or {})
+        normalized_input_scope["platform_fetch_methods"] = resolve_platform_fetch_methods(
+            normalized_input_scope.get("platform_fetch_methods"),
+            platforms=normalized_input_scope.get("platforms"),
+            fetch_mode=normalized_input_scope.get("fetch_mode", "fast"),
+            explicit="platform_fetch_methods" in normalized_input_scope,
+            legacy_yuanbao_browser=HunyuanClient.has_legacy_configuration(
+                configured_url=settings.HUNYUAN_BASE_URL,
+                configured_model=settings.HUNYUAN_FAST_MODEL or settings.HUNYUAN_MODEL,
+            ),
+        )
         normalized_event_id = str(origin_event_id or "").strip() or None
         if normalized_event_id:
             existing_by_event = await self._find_by_origin_event(
@@ -560,7 +575,21 @@ class BrandIntelligenceRunService:
         )
 
         if active is not None:
-            active.input_scope = _merge_json(active.input_scope, normalized_input_scope)
+            previous_scope = dict(active.input_scope or {})
+            if "platform_fetch_methods" not in previous_scope and "platform_fetch_methods" in (input_scope or {}):
+                raise ValueError("Active legacy run collection methods are frozen; finish or cancel it before choosing explicit methods")
+            previous_methods = resolve_platform_fetch_methods(
+                previous_scope.get("platform_fetch_methods"),
+                platforms=previous_scope.get("platforms"),
+                fetch_mode=previous_scope.get("fetch_mode", "fast"),
+                explicit="platform_fetch_methods" in previous_scope,
+            )
+            if previous_methods != normalized_input_scope["platform_fetch_methods"]:
+                raise ValueError("Active run collection methods are frozen; finish or cancel it before changing methods")
+            incoming_scope = dict(normalized_input_scope)
+            if "platform_fetch_methods" not in previous_scope:
+                incoming_scope.pop("platform_fetch_methods", None)
+            active.input_scope = _merge_json(active.input_scope, incoming_scope)
             active.analysis_mode = normalized_analysis_mode
             active.last_activity_at = _now()
             active.updated_at = active.last_activity_at

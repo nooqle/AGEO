@@ -234,6 +234,7 @@ def extract_latest_fetch_recovery_plan_from_state(
             ),
             "platform_breakdown": list(current_plan.get("platform_breakdown") or []),
             "task_id": str(current_plan.get("task_id") or "").strip() or None,
+            **({"platform_fetch_methods": dict(state.get("platform_fetch_methods") or current_plan["platform_fetch_methods"])} if state.get("platform_fetch_methods") or current_plan.get("platform_fetch_methods") else {}),
             "fetch_mode": normalize_fetch_mode(
                 current_plan.get("fetch_mode") or state.get("fetch_mode")
             ),
@@ -251,6 +252,8 @@ def extract_latest_fetch_recovery_plan_from_state(
             if task_id:
                 plan["task_id"] = task_id
             plan["fetch_mode"] = normalize_fetch_mode(state.get("fetch_mode"))
+            if state.get("platform_fetch_methods") or latest_fetch.get("platform_fetch_methods"):
+                plan["platform_fetch_methods"] = dict(state.get("platform_fetch_methods") or latest_fetch["platform_fetch_methods"])
             return plan
 
     manifest = state.get("knowledge_manifest") or {}
@@ -288,6 +291,7 @@ def extract_latest_fetch_recovery_plan_from_state(
         ),
         "platform_breakdown": list(latest_fetch.get("platform_breakdown") or []),
         "task_id": str(latest_fetch.get("task_id") or "").strip() or None,
+        **({"platform_fetch_methods": dict(state.get("platform_fetch_methods") or latest_fetch["platform_fetch_methods"])} if state.get("platform_fetch_methods") or latest_fetch.get("platform_fetch_methods") else {}),
         "fetch_mode": normalize_fetch_mode(
             latest_fetch.get("fetch_mode") or state.get("fetch_mode")
         ),
