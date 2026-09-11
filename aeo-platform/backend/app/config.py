@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     BROWSER_AGENT_LLM_THINKING_ENABLED: bool = False
     BROWSER_AGENT_LLM_MODEL_NAME: str | None = None
     BROWSER_AGENT_LLM_API_KEY: str | None = None
+    # Existing dedicated browser credentials were issued for GLM5.
+    BROWSER_AGENT_LLM_API_KEY_PROVIDER: str = "glm5"
 
     # LLM Provider Selection
     LLM_PROVIDER: str = "deepseek"

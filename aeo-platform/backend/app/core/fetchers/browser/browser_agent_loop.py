@@ -300,12 +300,23 @@ def _get_browser_agent_llm_semaphore() -> asyncio.Semaphore:
 
 def _get_browser_agent_llm_model() -> Any:
     settings = get_settings()
+    provider = str(
+        getattr(settings, "MULTIMODAL_LLM_PROVIDER", "deepseek") or "deepseek"
+    ).strip().lower()
+    key_provider = str(
+        getattr(settings, "BROWSER_AGENT_LLM_API_KEY_PROVIDER", "glm5") or "glm5"
+    ).strip().lower()
+    # Never send a legacy provider's dedicated credential to a newly selected provider.
+    api_key = (
+        getattr(settings, "BROWSER_AGENT_LLM_API_KEY", None)
+        if key_provider == provider else None
+    )
     return get_llm_model(
-        provider=str(getattr(settings, "MULTIMODAL_LLM_PROVIDER", "deepseek") or "deepseek"),
+        provider=provider,
         model_name=(getattr(settings, "BROWSER_AGENT_LLM_MODEL_NAME", None)
                     or getattr(settings, "MULTIMODAL_MODEL_NAME", "deepseek-flash")),
         thinking_enabled=bool(getattr(settings, "BROWSER_AGENT_LLM_THINKING_ENABLED", False)),
-        api_key=getattr(settings, "BROWSER_AGENT_LLM_API_KEY", None),
+        api_key=api_key or None,
     )
 
 
