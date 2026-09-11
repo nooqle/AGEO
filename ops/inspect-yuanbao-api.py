@@ -223,9 +223,49 @@ async def accept_hy3(client):
     observed_models = []
 
     async def observed_ask(question):
-        response = await client.ask_with_search(question)
+        import httpx
+
+        try:
+            response = await client.ask_with_search(question)
+        except httpx.HTTPStatusError as error:
+            emit("hy3_http_failure", http_status=error.response.status_code,
+                 error_fields=structured_error(error.response, client.api_key))
+            raise
         raw = response.raw_response
-        observed_models.append(isinstance(raw, dict) and raw.get("model") == "hy3")
+        raw = raw if isinstance(raw, dict) else {}
+        observed_models.append(raw.get("model") == "hy3")
+        choices = raw.get("choices")
+        choices = choices if isinstance(choices, list) else []
+        first = choices[0] if choices and isinstance(choices[0], dict) else {}
+        message = first.get("message")
+        message = message if isinstance(message, dict) else {}
+        message_refs = message.get("search_results")
+        search_info = raw.get("search_info")
+        search_info = search_info if isinstance(search_info, dict) else {}
+        top_refs = search_info.get("search_results")
+        usage = raw.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        tools = usage.get("tool_usage")
+        tools = tools if isinstance(tools, dict) else {}
+        calls = tools.get("web_search_call")
+        prompt_details = usage.get("prompt_tokens_details")
+        prompt_details = prompt_details if isinstance(prompt_details, dict) else {}
+        input_details = usage.get("input_tokens_details")
+        input_details = input_details if isinstance(input_details, dict) else {}
+        emit("hy3_response_shape", model_is_hy3=raw.get("model") == "hy3",
+             choices_count=len(choices),
+             message_search_results_count=len(message_refs) if isinstance(message_refs, list) else 0,
+             top_search_results_count=len(top_refs) if isinstance(top_refs, list) else 0,
+             search_call_valid=type(calls) is int and calls >= 0,
+             web_search_call=calls if type(calls) is int and calls >= 0 else None,
+             prompt_cached_tokens_present="cached_tokens" in prompt_details,
+             input_cached_tokens_present="cached_tokens" in input_details,
+             prompt_cache_hit_tokens_present="prompt_cache_hit_tokens" in usage,
+             prompt_cache_miss_tokens_present="prompt_cache_miss_tokens" in usage,
+             cached_prompt_tokens_present="cached_prompt_tokens" in usage,
+             cache_miss_prompt_tokens_present="cache_miss_prompt_tokens" in usage,
+             answer_contains_http=isinstance(response.answer_text, str)
+             and "http" in response.answer_text.lower())
         return response
 
     observed_client = SimpleNamespace(
