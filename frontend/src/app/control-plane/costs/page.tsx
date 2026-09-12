@@ -30,12 +30,11 @@ import type {
   ControlPlaneCurrencyCost,
   ControlPlaneCacheCoverage,
 } from '@/types/controlPlane';
-import { formatDateTime } from '@/lib/utils';
 
 const palette = controlPlanePalette();
 
 function formatCost(value: number | null | undefined, currency: string | null | undefined = null) {
-  return formatControlPlaneCost(value, currency);
+  return formatControlPlaneCost(value, currency === 'UNKNOWN' ? null : currency);
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -72,9 +71,37 @@ function formatHash(value: string | null) {
   return value.length > 8 ? value.slice(0, 8) : value;
 }
 
-function formatSize(value: number) {
+function formatSize(value: number | null | undefined) {
+  if (value == null) return '未记录';
   if (!Number.isFinite(value) || value <= 0) return '0';
   return value.toLocaleString();
+}
+
+function tariffPeriodLabel(row: ControlPlaneRecentCall) {
+  const period = row.pricing?.tariff_period;
+  if (period === 'peak') return '高峰';
+  if (period === 'off_peak') return '低谷';
+  if (period === 'flat' || row.pricing?.source === 'tencent_hy3_guangzhou_2026_09_11') return '不区分峰谷';
+  return '计价时段未记录';
+}
+
+function pricingTimeLabel(value: string) {
+  // Display the timestamp in the same explicit timezone as the label, regardless of browser locale.
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) return `${value}（原始时间，时区未记录）`;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '计价时间无效';
+  return `${date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}（北京时间）`;
+}
+
+function SearchCostDetail({ row }: { row: ControlPlaneRecentCall }) {
+  const known = row.search_tool_cost_status === 'estimated' && row.estimated_search_tool_cost != null;
+  return (
+    <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
+      搜索工具费：{known ? formatCost(row.estimated_search_tool_cost, row.search_tool_currency || row.currency) : '未知（未计入）'}
+      {row.provider_web_search_requests != null ? ` · 搜索请求 ${row.provider_web_search_requests.toLocaleString()} 次` : ''}
+      {known ? ' · 另列估算，未含在 Token 小计中' : ' · 未知不等于零费用'}
+    </div>
+  );
 }
 
 export default function ControlPlaneCostsPage() {
@@ -172,7 +199,7 @@ function ControlPlaneCostsContent() {
         { label: '成本观测' },
       ]}
       actions={
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link
             href="/control-plane"
             className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold"
@@ -231,7 +258,7 @@ function ControlPlaneCostsContent() {
         <div className="space-y-6">
           <div className="grid gap-4 xl:grid-cols-4">
             <ControlPlaneStatCard
-              label="缓存后估算 · 已计价小计"
+              label="Token 估算 · 已计价小计"
               value={
                 snapshot
                   ? formatCostSubtotal(snapshot.summary)
@@ -284,7 +311,8 @@ function ControlPlaneCostsContent() {
             <div className="space-y-1 text-sm" style={{ color: palette.muted }}>
               <p>{pricingCoverageLabel(snapshot.summary)} · 定价覆盖率 {formatPercent(snapshot.summary.pricing_coverage)}</p>
               <p>缓存已知 {snapshot.summary.cache_known_call_count ?? '未知'} 次 / 未知 {snapshot.summary.cache_unknown_call_count ?? '未知'} 次；输入加权命中率仅统计缓存已知的输入。</p>
-              <p>费用使用调用时保存的定价快照，均为估算。未缓存基准与缓存后费用使用相同时段费率；缓存节省不等同峰谷优惠，也不是供应商账单。</p>
+              <p>小计仅含 Token 费用，搜索工具费在最近调用中另列。费用使用调用时保存的定价快照，均为估算；未计价调用不计入小计，未知不等于零费用。</p>
+              <p>未缓存基准与缓存后费用使用相同费率；缓存节省不等同峰谷优惠，也不是供应商账单。</p>
               <p>常规调用按本系统记录调用的时刻估算峰谷费率；显式导入的调用按所提供的时刻估算。跨时段调用的最终金额以供应商账单为准。</p>
               <p>DeepSeek 原生搜索当前按返回的 token 用量估算；若供应商另收搜索工具费，该费用尚未计入，不能视为零费用。</p>
             </div>
@@ -349,7 +377,7 @@ function ControlPlaneCostsContent() {
             </div>
           </ControlPlanePanel>
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)] [&>section]:min-w-0">
             <ControlPlanePanel
               title="客户与品牌"
             >
@@ -360,7 +388,7 @@ function ControlPlaneCostsContent() {
               />
             </ControlPlanePanel>
 
-            <div className="space-y-6">
+            <div className="min-w-0 space-y-6">
               <ControlPlanePanel title="模型维度">
                 <CostBreakdownTable
                   rows={snapshot?.by_model || []}
@@ -424,7 +452,7 @@ function CostBreakdownTable({
             <th className="pb-3 pr-4 font-semibold">Token</th>
             <th className="pb-3 pr-4 font-semibold">输入 / 输出</th>
             <th className="pb-3 pr-4 font-semibold">缓存</th>
-            <th className="pb-3 pr-4 font-semibold">费用</th>
+            <th className="pb-3 pr-4 font-semibold">Token 费用估算</th>
             <th className="pb-3 font-semibold">平均时延</th>
           </tr>
         </thead>
@@ -547,27 +575,27 @@ function PromptReuseDiagnostics({
     {
       label: '诊断样本',
       value: summary.diagnostic_sample_count.toLocaleString(),
-      hint: `低复用 ${summary.low_cache_call_count.toLocaleString()} 次`,
+      hint: `缓存命中偏低 ${summary.low_cache_call_count.toLocaleString()} 次`,
     },
     {
-      label: '低复用比例',
+      label: '单次缓存命中偏低比例',
       value: formatPercent(summary.low_cache_call_ratio),
-      hint: `阈值 ${formatPercent(0.2)}`,
+      hint: `单次命中率低于 ${formatPercent(0.2)}，不代表浪费`,
     },
     {
       label: '固定提示词版本',
-      value: summary.static_prompt_variant_count.toLocaleString(),
-      hint: '同一版本内越少越稳定',
+      value: summary.static_prompt_variant_count > 0 ? summary.static_prompt_variant_count.toLocaleString() : '未记录',
+      hint: '跨模型和步骤的版本可不同',
     },
     {
       label: '工具清单版本',
-      value: summary.tool_surface_variant_count.toLocaleString(),
-      hint: '工具面变化会影响复用',
+      value: summary.tool_surface_variant_count > 0 ? summary.tool_surface_variant_count.toLocaleString() : '未记录',
+      hint: '需在同模型、同步骤内比较',
     },
     {
-      label: '平均动态上下文',
+      label: '平均动态上下文（字符）',
       value: formatSize(summary.avg_runtime_context_size),
-      hint: `最大 ${formatSize(summary.max_runtime_context_size)}`,
+      hint: summary.max_runtime_context_size == null ? '尚未采集长度' : `最大 ${formatSize(summary.max_runtime_context_size)} 字符`,
     },
   ];
 
@@ -641,7 +669,7 @@ function RecentCallsTable({
             <th className="pb-3 pr-4 font-semibold">Model</th>
             <th className="pb-3 pr-4 font-semibold">Step</th>
             <th className="pb-3 pr-4 font-semibold">Token</th>
-            <th className="pb-3 pr-4 font-semibold">缓存后估算 / 定价依据</th>
+            <th className="pb-3 pr-4 font-semibold">Token 与搜索费估算 / 定价依据</th>
             <th className="pb-3 pr-4 font-semibold">输入缓存命中</th>
             <th className="pb-3 pr-4 font-semibold">诊断</th>
             <th className="pb-3 font-semibold">时间</th>
@@ -697,22 +725,17 @@ function RecentCallsTable({
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {formatCost(row.estimated_cost_cache_aware, row.currency)}
+                  Token {formatCost(row.estimated_cost_cache_aware, row.currency)}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
                     基准 {formatCost(row.estimated_cost, row.currency)} · 缓存节省 {formatCost(row.estimated_savings, row.currency)}
                   </div>
-                  {row.search_tool_cost_status === 'not_estimated' && (
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      仅含 token 估算 · 搜索工具费未计入
-                      {row.provider_web_search_requests != null ? ` · 搜索请求 ${row.provider_web_search_requests} 次（非收费次数）` : ''}
-                    </div>
-                  )}
+                  <SearchCostDetail row={row} />
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    {pricingStatusLabel(row.pricing_status)} · {row.pricing?.tariff_period === 'peak' ? '高峰' : row.pricing?.tariff_period === 'off_peak' ? '低谷' : '时段未记录'}
+                    {pricingStatusLabel(row.pricing_status)} · {tariffPeriodLabel(row)}
                   </div>
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
                     {row.pricing?.rate_version || row.pricing?.source || '定价依据未记录'}
-                    {row.pricing?.priced_at ? ` · ${formatDateTime(row.pricing.priced_at)} (${row.pricing.pricing_timezone || '时区未记录'})` : ''}
+                    {row.pricing?.priced_at ? ` · ${pricingTimeLabel(row.pricing.priced_at)}` : ''}
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
@@ -722,13 +745,13 @@ function RecentCallsTable({
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {row.reuse_diagnosis || '正常'}
+                  {row.reuse_diagnosis === '缺少提示词指纹' ? '诊断信息未采集' : row.reuse_diagnosis || '未发现复用提示'}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    动态 {row.runtime_context_size === null ? '--' : row.runtime_context_size.toLocaleString()}
+                    动态上下文：{row.runtime_context_size == null ? '未记录' : `${row.runtime_context_size.toLocaleString()} 字符`}
                   </div>
                 </td>
                 <td className="py-4" style={{ color: palette.muted }}>
-                  {row.created_at ? formatDateTime(row.created_at) : '--'}
+                  {row.created_at ? pricingTimeLabel(row.created_at) : '未记录'}
                 </td>
               </tr>
             ))

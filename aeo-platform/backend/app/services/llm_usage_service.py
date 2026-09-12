@@ -25,6 +25,38 @@ logger = logging.getLogger(__name__)
 HY3_GUANGZHOU_ENDPOINT = "https://tokenhub.tencentmaas.com/v1/chat/completions"
 HY3_PRICING_SOURCE = "https://cloud.tencent.com/document/product/1823/130055"
 HY3_SEARCH_PRICES_PER_THOUSAND = {"lite": 7.0, "standard": 12.0}
+KIMI_CN_ENDPOINT = "https://api.moonshot.cn/v1/chat/completions"
+
+
+def _is_official_kimi_route(provider: str, metadata: Any) -> bool:
+    return (
+        provider == "moonshot"
+        and isinstance(metadata, dict)
+        and metadata.get("provider_endpoint") == KIMI_CN_ENDPOINT
+    )
+
+
+def kimi_search_pricing_snapshot(
+    provider: str, model_name: str, metadata: dict[str, Any], raw_usage: Any
+) -> dict[str, Any] | None:
+    """Price returned builtin search calls separately from model tokens."""
+    if provider != "moonshot" or metadata.get("protocol") != "moonshot_chat_search":
+        return None
+    tool_usage = raw_usage.get("tool_usage") if isinstance(raw_usage, dict) else None
+    count = tool_usage.get("web_search_call") if isinstance(tool_usage, dict) else None
+    count = count if type(count) is int and count >= 0 else None
+    price = 30.0 if _is_official_kimi_route(provider, metadata) else None
+    return {
+        "status": "unknown_usage" if count is None else "unknown_price" if price is None else "estimated",
+        "provider_web_search_requests": count,
+        "search_source": "$web_search",
+        "price_per_thousand_requests": price,
+        "estimated_cost": count * price / 1000 if count is not None and price is not None else None,
+        "currency": "CNY" if price is not None else "UNKNOWN",
+        "rate_version": "kimi_builtin_search_verified_2026_09_12" if price is not None else None,
+        "source_url": "https://platform.kimi.com/docs/pricing/tools" if price is not None else None,
+        "cost_scope": "search_tool_estimate",
+    }
 
 
 def _is_official_hy3_route(provider: str, model_name: str, metadata: Any) -> bool:
@@ -229,6 +261,13 @@ def _resolve_pricing(
         source_url = "https://cloud.tencent.com/announce/detail/2227"
         input_price = settings.HUNYUAN_2_INSTRUCT_PRICE_INPUT_PER_MTOKENS
         output_price = settings.HUNYUAN_2_INSTRUCT_PRICE_OUTPUT_PER_MTOKENS
+    elif model_key == "kimi-k2.6" and _is_official_kimi_route(provider, provider_metadata):
+        # Official mainland pay-as-you-go tariff, verified 2026-09-12.
+        # Do not reuse K2.5 overrides or apply this tariff to proxy routes.
+        pricing_currency = "CNY"
+        source = "kimi_k2_6_cn_verified_2026_09_12"
+        source_url = "https://platform.kimi.com/"
+        input_price, cached_input_price, output_price = 6.5, 1.1, 27.0
     elif provider == "moonshot" and model_key.startswith("kimi-k2.5"):
         pricing_currency = "CNY"
         pricing_model = "kimi-k2.5"
@@ -263,7 +302,9 @@ def _resolve_pricing(
         reporting_currency=reporting_currency,
         source=source,
         source_url=source_url,
-        priced_at=(occurred_at or datetime.now(timezone.utc)).isoformat(),
+        priced_at=(occurred_at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(),
+        tariff_period="flat",
+        pricing_timezone="UTC",
     )
 
 
@@ -474,6 +515,10 @@ class LLMUsageService:
         search_pricing = hy3_search_pricing_snapshot(
             resolved_provider, resolved_model_name, normalized_extra_metadata, usage.raw
         )
+        if search_pricing is None:
+            search_pricing = kimi_search_pricing_snapshot(
+                resolved_provider, resolved_model_name, normalized_extra_metadata, usage.raw
+            )
         if search_pricing is not None:
             normalized_extra_metadata["search_pricing"] = search_pricing
 

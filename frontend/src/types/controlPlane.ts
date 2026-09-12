@@ -122,8 +122,9 @@ export interface ControlPlaneObservabilitySummary extends ControlPlaneCacheCover
   static_prompt_variant_count: number;
   tool_surface_variant_count: number;
   model_identity_variant_count: number;
-  avg_runtime_context_size: number;
-  max_runtime_context_size: number;
+  avg_runtime_context_size: number | null;
+  max_runtime_context_size: number | null;
+  runtime_context_known_call_count?: number;
   first_call_at: string | null;
   last_call_at: string | null;
 }
@@ -167,6 +168,7 @@ export interface ControlPlaneRecentCall {
   provider_web_search_requests?: number | null;
   search_tool_cost_status?: string;
   estimated_search_tool_cost?: number | null;
+  search_tool_currency?: string | null;
   id: string;
   task_id: string | null;
   session_id: string | null;
@@ -187,7 +189,7 @@ export interface ControlPlaneRecentCall {
   estimated_cost: number | null;
   estimated_cost_cache_aware: number | null;
   estimated_savings: number | null;
-  currency: string;
+  currency: string | null;
   pricing_status?: string;
   cache_status?: string;
   pricing?: ControlPlanePricingSnapshot | null;

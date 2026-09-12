@@ -181,7 +181,28 @@ def _api_usage_fields(response: Any, *, fallback_model: str) -> dict[str, Any]:
     return {
         "provider_usage": raw_usage,
         "provider_model": model_name or "unknown",
+        "provider_request_metadata": _api_request_metadata(raw_response.get("request_metadata")),
     }
+
+
+def _api_request_metadata(raw: Any) -> dict[str, Any]:
+    """Whitelist request diagnostics, keeping prompts and tool results out of the ledger."""
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for key in ("static_prompt_hash", "tool_surface_hash"):
+        value = raw.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{16}", value):
+            result[key] = value
+    for key in ("runtime_context_size", "request_round_count"):
+        value = raw.get(key)
+        if type(value) is int and value >= 0:
+            result[key] = value
+    if raw.get("runtime_context_unit") == "characters":
+        result["runtime_context_unit"] = "characters"
+    if raw.get("runtime_context_scope") == "max_serialized_non_system_messages":
+        result["runtime_context_scope"] = raw["runtime_context_scope"]
+    return result
 
 
 def _llm_usage_from_provider_payload(raw_usage: dict[str, Any]) -> LLMUsage:
@@ -203,6 +224,7 @@ def _llm_usage_from_provider_payload(raw_usage: dict[str, Any]) -> LLMUsage:
     if cached_prompt_tokens is None:
         cached_prompt_tokens = _int_from_mapping(
             raw_usage,
+            "cached_tokens",
             "cached_prompt_tokens",
             "prompt_cache_hit_tokens",
         )
@@ -266,6 +288,7 @@ async def _record_a4_api_usage(
         usage=_llm_usage_from_provider_payload(raw_usage),
         latency_ms=max(int(float(result.get("duration") or 0) * 1000), 0),
         extra_metadata={
+            **_api_request_metadata(result.get("provider_request_metadata")),
             "platform": platform,
             "requested_platform": normalize_public_platform_id(platform),
             "requested_method": "api",
@@ -2141,6 +2164,7 @@ async def _retry_fetch(
     }
     usage_observed = False
     usage_attempts: list[dict[str, Any]] = []
+    request_metadata_attempts: list[dict[str, Any]] = []
     native_attempts: list[dict[str, Any]] = []
     retry_identity: dict[str, Any] = {}
 
@@ -2148,12 +2172,28 @@ async def _retry_fetch(
         if not usage_observed:
             return result
         attached = {**retry_identity, **result, "provider_usage": {**retry_usage_totals, "attempts": usage_attempts}}
-        if platform == "hunyuan" and method == "api":
+        # An incomplete attempt cannot establish the size of the whole fetch.
+        attached.pop("provider_request_metadata", None)
+        if request_metadata_attempts and all(request_metadata_attempts):
+            metadata = dict(request_metadata_attempts[-1])
+            metadata["runtime_context_size"] = max(
+                item.get("runtime_context_size", 0) for item in request_metadata_attempts
+            )
+            metadata["request_round_count"] = sum(
+                item.get("request_round_count", 0) for item in request_metadata_attempts
+            )
+            for key in ("static_prompt_hash", "tool_surface_hash"):
+                if len({item.get(key) for item in request_metadata_attempts}) != 1:
+                    metadata.pop(key, None)
+            attached["provider_request_metadata"] = metadata
+        if platform in {"hunyuan", "kimi"} and method == "api":
             counts = [item.get("tool_usage", {}).get("web_search_call")
                       if isinstance(item.get("tool_usage"), dict) else None for item in usage_attempts]
             attached["provider_usage"]["tool_usage"] = {
                 "web_search_call": sum(counts) if all(type(n) is int and n >= 0 for n in counts) else None,
             }
+        if platform == "kimi" and method == "api":
+            attached["provider_usage"]["cache_accounting_version"] = 2
         if native_attempts:
             counts = [item.get("server_tool_use", {}).get("web_search_requests")
                       if isinstance(item.get("server_tool_use"), dict) else None for item in native_attempts]
@@ -2175,6 +2215,7 @@ async def _retry_fetch(
             if isinstance(raw_usage, dict) or method == "api":
                 parsed_usage = _llm_usage_from_provider_payload(raw_usage) if isinstance(raw_usage, dict) else LLMUsage()
                 usage_attempts.append(raw_usage if isinstance(raw_usage, dict) else {})
+                request_metadata_attempts.append(_api_request_metadata(result.get("provider_request_metadata")))
                 for field in retry_usage_totals:
                     if field == "total_tokens":
                         value = (parsed_usage.prompt_tokens + parsed_usage.completion_tokens
@@ -2184,7 +2225,8 @@ async def _retry_fetch(
                     previous = retry_usage_totals[field]
                     retry_usage_totals[field] = previous + value if previous is not None and value is not None else None
                 retry_identity.update({key: result[key] for key in (
-                    "protocol", "provider_model", "actual_provider", "provider_endpoint", "search_source"
+                    "protocol", "provider_model", "actual_provider", "provider_endpoint", "search_source",
+                    "provider_request_metadata",
                 ) if result.get(key)})
                 if result.get("protocol") == "anthropic_native_search":
                     native = result.get("native_provider_usage")
@@ -2196,9 +2238,10 @@ async def _retry_fetch(
                 return attach_retry_usage(result)
             last_result = result
         except Exception as e:
-            if platform == "hunyuan" and method == "api":
+            if platform in {"hunyuan", "kimi"} and method == "api":
                 # A transport/provider failure gives no reliable billable usage.
                 usage_attempts.append({})
+                request_metadata_attempts.append({})
                 retry_usage_totals = dict.fromkeys(retry_usage_totals)
                 usage_observed = True
             last_result = {
@@ -4793,6 +4836,11 @@ async def _fetch_from_kimi(client, question: str) -> dict[str, Any]:
         usage_fields = _api_usage_fields(
             response,
             fallback_model=str(getattr(client, "model", "") or "kimi"),
+        )
+        usage_fields.update(
+            protocol="moonshot_chat_search",
+            actual_provider="moonshot",
+            provider_endpoint=getattr(client, "endpoint", None),
         )
 
         if not answer_text or not answer_text.strip():

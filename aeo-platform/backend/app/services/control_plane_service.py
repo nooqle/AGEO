@@ -50,11 +50,12 @@ class ControlPlaneService:
     @staticmethod
     def _metadata_int(metadata: dict[str, object], key: str) -> int | None:
         value = metadata.get(key)
-        if value is None:
+        if value is None or isinstance(value, bool):
             return None
         try:
-            return max(int(value), 0)
-        except (TypeError, ValueError):
+            count = int(value)
+            return count if count >= 0 and str(value).strip() == str(count) else None
+        except (TypeError, ValueError, OverflowError):
             return None
 
     @classmethod
@@ -66,7 +67,7 @@ class ControlPlaneService:
         )
         runtime_context_size = cls._metadata_int(metadata, "runtime_context_size")
         if cache_status_for_record(record) == "known" and record.prompt_tokens > 0 and cache_hit_ratio < cls.LOW_CACHE_HIT_RATIO_THRESHOLD:
-            return "复用率低"
+            return "缓存命中偏低（单次）"
         if runtime_context_size is not None and (
             runtime_context_size > cls.RUNTIME_CONTEXT_SIZE_BUDGET
         ):
@@ -74,7 +75,9 @@ class ControlPlaneService:
         if not metadata.get("static_prompt_hash") or not metadata.get(
             "tool_surface_hash"
         ):
-            return "缺少提示词指纹"
+            return "未采集诊断信息"
+        if cache_status_for_record(record) != "known":
+            return "缓存信息未知"
         return None
 
     @classmethod
@@ -90,6 +93,10 @@ class ControlPlaneService:
         low_cache_call_count = 0
         missing_fingerprint_count = 0
         oversized_runtime_context_count = 0
+        cache_known_count = 0
+        # Compare only equivalent call surfaces, not unrelated platforms/nodes.
+        prompt_groups: dict[tuple, set[str]] = {}
+        tool_groups: dict[tuple, set[str]] = {}
 
         if sample_count == 0:
             return (
@@ -100,8 +107,9 @@ class ControlPlaneService:
                     "static_prompt_variant_count": 0,
                     "tool_surface_variant_count": 0,
                     "model_identity_variant_count": 0,
-                    "avg_runtime_context_size": 0,
-                    "max_runtime_context_size": 0,
+                    "avg_runtime_context_size": None,
+                    "max_runtime_context_size": None,
+                    "runtime_context_known_call_count": 0,
                 },
                 [],
             )
@@ -112,10 +120,18 @@ class ControlPlaneService:
             tool_surface_hash = metadata.get("tool_surface_hash")
             model_identity = metadata.get("model_identity")
             runtime_context_size = cls._metadata_int(metadata, "runtime_context_size")
+            group = tuple(str(value or "") for value in (
+                record.provider, record.model_name, getattr(record, "step", None),
+                getattr(record, "skill_key", None), metadata.get("protocol"),
+                metadata.get("provider_endpoint"),
+                metadata.get("runtime_context_scope"),
+            ))
             if isinstance(static_prompt_hash, str) and static_prompt_hash:
                 static_prompt_hashes.add(static_prompt_hash)
+                prompt_groups.setdefault(group, set()).add(static_prompt_hash)
             if isinstance(tool_surface_hash, str) and tool_surface_hash:
                 tool_surface_hashes.add(tool_surface_hash)
+                tool_groups.setdefault(group, set()).add(tool_surface_hash)
             if isinstance(model_identity, str) and model_identity:
                 model_identities.add(model_identity)
             else:
@@ -126,14 +142,14 @@ class ControlPlaneService:
                     oversized_runtime_context_count += 1
             if not static_prompt_hash or not tool_surface_hash:
                 missing_fingerprint_count += 1
-            if cache_status_for_record(record) == "known" and record.prompt_tokens > 0 and (
-                cls._cache_hit_ratio(record.prompt_tokens, record.cached_prompt_tokens)
-                < cls.LOW_CACHE_HIT_RATIO_THRESHOLD
-            ):
-                low_cache_call_count += 1
+            if cache_status_for_record(record) == "known" and record.prompt_tokens > 0:
+                cache_known_count += 1
+                if (cls._cache_hit_ratio(record.prompt_tokens, record.cached_prompt_tokens)
+                        < cls.LOW_CACHE_HIT_RATIO_THRESHOLD):
+                    low_cache_call_count += 1
 
         low_cache_ratio = (
-            round(low_cache_call_count / sample_count, 4) if sample_count > 0 else 0.0
+            round(low_cache_call_count / cache_known_count, 4) if cache_known_count else 0.0
         )
         missing_fingerprint_ratio = (
             round(missing_fingerprint_count / sample_count, 4)
@@ -143,45 +159,56 @@ class ControlPlaneService:
         avg_runtime_context_size = (
             round(sum(runtime_context_sizes) / len(runtime_context_sizes))
             if runtime_context_sizes
-            else 0
+            else None
         )
-        max_runtime_context_size = max(runtime_context_sizes, default=0)
+        max_runtime_context_size = max(runtime_context_sizes, default=None)
 
         diagnostics: list[dict[str, object]] = []
+        cache_unknown_count = sum(cache_status_for_record(record) != "known" for record in records)
+        if cache_unknown_count:
+            diagnostics.append({
+                "severity": "info",
+                "code": "cache_usage_unknown",
+                "title": "部分调用缓存用量未知",
+                "message": "缺少可靠缓存计数的调用不参与命中率计算；历史聚合缺陷产生的零值也按未知处理。",
+                "affected_count": cache_unknown_count,
+                "ratio": round(cache_unknown_count / sample_count, 4),
+            })
         if low_cache_call_count > 0:
-            severity = "critical" if low_cache_ratio >= 0.5 else "warning"
             diagnostics.append(
                 {
-                    "severity": severity,
+                    "severity": "info",
                     "code": "low_cache_hit_ratio",
-                    "title": "提示词复用率偏低",
+                    "title": "部分调用缓存命中低于 20%",
                     "message": (
-                        "最近调用中有较多请求没有命中缓存，优先检查固定提示词、"
-                        "工具清单和模型身份是否在频繁变化。"
+                        "比例仅统计已知缓存用量的调用。首次请求、不同问题和供应商缓存策略"
+                        "都可能影响命中率，单次低命中不代表浪费，应按平台和节点对比。"
                     ),
                     "affected_count": low_cache_call_count,
                     "ratio": low_cache_ratio,
                 }
             )
-        if len(static_prompt_hashes) > 1:
+        changed_prompt_groups = sum(len(values) > 1 for values in prompt_groups.values())
+        if changed_prompt_groups:
             diagnostics.append(
                 {
-                    "severity": "warning",
+                    "severity": "info",
                     "code": "static_prompt_hash_changed",
                     "title": "固定提示词指纹出现多个版本",
-                    "message": "同一窗口内固定提示词 hash 不止一个，需要确认是否为预期发布或 flag 变化。",
-                    "affected_count": len(static_prompt_hashes),
+                    "message": "同一平台、模型、节点和协议内出现多个指纹，可能是预期发布或配置变化，并不直接证明缓存损失。",
+                    "affected_count": changed_prompt_groups,
                     "ratio": None,
                 }
             )
-        if len(tool_surface_hashes) > 1:
+        changed_tool_groups = sum(len(values) > 1 for values in tool_groups.values())
+        if changed_tool_groups:
             diagnostics.append(
                 {
-                    "severity": "warning",
+                    "severity": "info",
                     "code": "tool_surface_hash_changed",
                     "title": "工具清单指纹出现多个版本",
-                    "message": "工具面仍在变化，可能来自 feature flag、skill 注册或状态相关工具过滤。",
-                    "affected_count": len(tool_surface_hashes),
+                    "message": "同一平台、模型、节点和协议内工具配置存在多个版本，请结合预期配置判断。",
+                    "affected_count": changed_tool_groups,
                     "ratio": None,
                 }
             )
@@ -191,7 +218,7 @@ class ControlPlaneService:
                     "severity": "warning",
                     "code": "runtime_context_oversized",
                     "title": "动态上下文偏大",
-                    "message": "本轮提醒或运行时上下文过长，会增加输入 token，也可能稀释可复用比例。",
+                    "message": "部分已记录动态上下文超过 12,000 字符；这是长度提示，不是 token 数或费用结论。",
                     "affected_count": oversized_runtime_context_count,
                     "ratio": round(oversized_runtime_context_count / sample_count, 4)
                     if sample_count > 0
@@ -199,13 +226,12 @@ class ControlPlaneService:
                 }
             )
         if missing_fingerprint_count > 0:
-            severity = "warning" if missing_fingerprint_ratio >= 0.3 else "info"
             diagnostics.append(
                 {
-                    "severity": severity,
+                    "severity": "info",
                     "code": "prompt_fingerprint_missing",
-                    "title": "部分调用缺少提示词指纹",
-                    "message": "这些调用可能不是 orchestrator，或发生在观测字段上线前，低复用原因无法完全解释。",
+                    "title": "部分调用未采集诊断信息",
+                    "message": "缺少提示词或工具配置指纹，仅影响变化原因分析，不表示供应商缓存失效。历史调用不会补造指纹。",
                     "affected_count": missing_fingerprint_count,
                     "ratio": missing_fingerprint_ratio,
                 }
@@ -232,6 +258,7 @@ class ControlPlaneService:
                 "model_identity_variant_count": len(model_identities),
                 "avg_runtime_context_size": avg_runtime_context_size,
                 "max_runtime_context_size": max_runtime_context_size,
+                "runtime_context_known_call_count": len(runtime_context_sizes),
             },
             diagnostics,
         )

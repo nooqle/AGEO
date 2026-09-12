@@ -1,5 +1,6 @@
 """Tencent HY3 API client with explicit endpoint and credential configuration."""
 
+import json
 import logging
 import re
 import time
@@ -11,6 +12,7 @@ import httpx
 from app.core.config import settings
 from app.core.fetchers.api.base_client import BaseAPIClient
 from app.schemas.fetch import LLMResponse, SearchReference
+from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +239,18 @@ class HunyuanClient(BaseAPIClient):
                 "search_source": self.search_source,
             },
         }
+        request_metadata = {
+            "static_prompt_hash": fingerprint_text(payload["messages"][0]["content"]),
+            "tool_surface_hash": fingerprint_tools([
+                {"web_search_options": payload["web_search_options"]},
+            ]),
+            "runtime_context_size": len(json.dumps(
+                payload["messages"][1:], ensure_ascii=False, separators=(",", ":"),
+            )),
+            "runtime_context_unit": "characters",
+            "runtime_context_scope": "max_serialized_non_system_messages",
+            "request_round_count": 1,
+        }
 
         # Make request
         headers = {
@@ -282,7 +296,10 @@ class HunyuanClient(BaseAPIClient):
         return LLMResponse(
             answer_text=answer_text,
             search_references=search_refs,
-            raw_response={**data, "protocol": "hunyuan_chat_search"},
+            raw_response={
+                **data, "protocol": "hunyuan_chat_search",
+                "request_metadata": request_metadata,
+            },
             duration=duration,
         )
 

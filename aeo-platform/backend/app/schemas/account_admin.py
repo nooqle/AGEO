@@ -166,8 +166,9 @@ class ControlPlaneObservabilitySummary(BillingCoverage):
     static_prompt_variant_count: int = 0
     tool_surface_variant_count: int = 0
     model_identity_variant_count: int = 0
-    avg_runtime_context_size: int = 0
-    max_runtime_context_size: int = 0
+    avg_runtime_context_size: int | None = None
+    max_runtime_context_size: int | None = None
+    runtime_context_known_call_count: int = 0
     first_call_at: datetime | None = None
     last_call_at: datetime | None = None
 
@@ -209,6 +210,7 @@ class ControlPlaneRecentCall(BaseModel):
     provider_web_search_requests: int | None = None
     search_tool_cost_status: str = "not_reported"
     estimated_search_tool_cost: float | None = None
+    search_tool_currency: str | None = None
     usage_time_basis: str = "legacy_unknown"
     cost_is_estimate: bool = True
     pricing_status: str = "legacy_unknown"

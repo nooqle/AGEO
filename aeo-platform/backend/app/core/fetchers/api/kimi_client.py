@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.constants import LLMConstants, PlatformConstants
 from app.core.fetchers.api.base_client import BaseAPIClient
 from app.schemas.fetch import LLMResponse, SearchReference
+from app.workflow.prompt_fingerprint import fingerprint_text, fingerprint_tools
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,87 @@ _SYSTEM_PROMPT = """\
 - citations 数组列出你引用的所有来源，每个来源包含 index（序号）、title（标题）、url（链接）、snippet（摘要）
 - 如果没有引用来源，citations 为空数组 []
 """
+
+
+def _token_count(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        count = int(value)
+        return count if count >= 0 and count == float(value) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _usage_snapshot(raw: Any) -> dict[str, Any] | None:
+    """Retain usage evidence only; never copy provider content into metadata."""
+    if not isinstance(raw, dict):
+        return None
+    keys = (
+        "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens",
+        "cached_prompt_tokens", "prompt_cache_hit_tokens",
+        "cache_miss_prompt_tokens", "prompt_cache_miss_tokens",
+    )
+    snapshot = {key: _token_count(raw[key]) for key in keys if key in raw}
+    details = raw.get("prompt_tokens_details")
+    if isinstance(details, dict) and "cached_tokens" in details:
+        snapshot["prompt_tokens_details"] = {
+            "cached_tokens": _token_count(details["cached_tokens"]),
+        }
+    return snapshot
+
+
+def _cache_counts(usage: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Infer a missing side only from valid, non-conflicting provider counters."""
+    prompt = _token_count(usage.get("prompt_tokens"))
+    if prompt is None:
+        return None, None
+    hits = [usage[key] for key in (
+        "cached_tokens", "cached_prompt_tokens", "prompt_cache_hit_tokens",
+    ) if key in usage]
+    details = usage.get("prompt_tokens_details") or {}
+    if "cached_tokens" in details:
+        hits.append(details["cached_tokens"])
+    misses = [usage[key] for key in (
+        "cache_miss_prompt_tokens", "prompt_cache_miss_tokens",
+    ) if key in usage]
+    hit_values = {_token_count(value) for value in hits}
+    miss_values = {_token_count(value) for value in misses}
+    if None in hit_values or None in miss_values or len(hit_values) > 1 or len(miss_values) > 1:
+        return None, None
+    hit = next(iter(hit_values), None)
+    miss = next(iter(miss_values), None)
+    if hit is None and miss is None:
+        return None, None
+    if hit is None:
+        hit = prompt - miss
+    if miss is None:
+        miss = prompt - hit
+    if hit < 0 or miss < 0 or hit + miss != prompt:
+        return None, None
+    return hit, miss
+
+
+def _aggregate_usage(rounds: list[dict[str, Any] | None], searches: int) -> dict[str, Any]:
+    """A missing round or cache counter makes the corresponding total unknown."""
+    totals: dict[str, Any] = dict.fromkeys(
+        ("prompt_tokens", "completion_tokens", "total_tokens",
+         "cached_prompt_tokens", "cache_miss_prompt_tokens"), 0,
+    )
+    for raw in rounds:
+        usage = raw or {}
+        cached, miss = _cache_counts(usage)
+        values = {**usage, "cached_prompt_tokens": cached, "cache_miss_prompt_tokens": miss}
+        for key, previous in totals.items():
+            value = _token_count(values.get(key))
+            totals[key] = previous + value if previous is not None and value is not None else None
+    totals.update(
+        prompt_tokens_details={"cached_tokens": totals["cached_prompt_tokens"]},
+        tool_usage={"web_search_call": searches},
+        cache_accounting_version=2,
+        rounds=rounds,
+    )
+    return totals
 
 
 class KimiClient(BaseAPIClient):
@@ -82,15 +164,8 @@ class KimiClient(BaseAPIClient):
 
     async def ask_with_search(self, question: str) -> LLMResponse:
         start_time = time.time()
-        usage_totals = {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "cached_prompt_tokens": 0,
-            "cache_miss_prompt_tokens": 0,
-            "prompt_tokens_details": {"cached_tokens": 0},
-        }
-        usage_observed = False
+        usage_rounds: list[dict[str, Any] | None] = []
+        search_calls = 0
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -103,6 +178,14 @@ class KimiClient(BaseAPIClient):
                 "function": {"name": "$web_search"},
             }
         ]
+        request_metadata = {
+            "static_prompt_hash": fingerprint_text(_SYSTEM_PROMPT),
+            "tool_surface_hash": fingerprint_tools(tools),
+            "runtime_context_size": 0,
+            "runtime_context_unit": "characters",
+            "runtime_context_scope": "max_serialized_non_system_messages",
+            "request_round_count": 0,
+        }
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -118,6 +201,13 @@ class KimiClient(BaseAPIClient):
                     "thinking": {"type": "disabled"},
                     "response_format": {"type": "json_object"},
                 }
+                runtime_chars = len(json.dumps(
+                    messages[1:], ensure_ascii=False, separators=(",", ":"),
+                ))
+                request_metadata["runtime_context_size"] = max(
+                    request_metadata["runtime_context_size"], runtime_chars,
+                )
+                request_metadata["request_round_count"] += 1
 
                 response = await client.post(
                     self.endpoint,
@@ -127,58 +217,7 @@ class KimiClient(BaseAPIClient):
                 )
                 response.raise_for_status()
                 data = response.json()
-                raw_usage = data.get("usage")
-                if isinstance(raw_usage, dict):
-                    usage_observed = True
-                    round_prompt_tokens = 0
-                    for key in (
-                        "prompt_tokens",
-                        "completion_tokens",
-                        "total_tokens",
-                    ):
-                        try:
-                            token_count = max(int(raw_usage.get(key) or 0), 0)
-                            usage_totals[key] += token_count
-                            if key == "prompt_tokens":
-                                round_prompt_tokens = token_count
-                        except (TypeError, ValueError):
-                            continue
-                    raw_prompt_details = raw_usage.get("prompt_tokens_details")
-                    if not isinstance(raw_prompt_details, dict):
-                        raw_prompt_details = {}
-                    try:
-                        cached_tokens = max(
-                            int(
-                                raw_prompt_details.get("cached_tokens")
-                                or raw_usage.get("cached_prompt_tokens")
-                                or raw_usage.get("prompt_cache_hit_tokens")
-                                or 0
-                            ),
-                            0,
-                        )
-                    except (TypeError, ValueError):
-                        cached_tokens = 0
-                    raw_cache_miss = raw_usage.get("cache_miss_prompt_tokens")
-                    if raw_cache_miss is None:
-                        raw_cache_miss = raw_usage.get("prompt_cache_miss_tokens")
-                    if raw_cache_miss is None:
-                        cache_miss_tokens = max(
-                            round_prompt_tokens - cached_tokens,
-                            0,
-                        )
-                    else:
-                        try:
-                            cache_miss_tokens = max(int(raw_cache_miss), 0)
-                        except (TypeError, ValueError):
-                            cache_miss_tokens = max(
-                                round_prompt_tokens - cached_tokens,
-                                0,
-                            )
-                    usage_totals["cached_prompt_tokens"] += cached_tokens
-                    usage_totals["cache_miss_prompt_tokens"] += cache_miss_tokens
-                    usage_totals["prompt_tokens_details"][
-                        "cached_tokens"
-                    ] += cached_tokens
+                usage_rounds.append(_usage_snapshot(data.get("usage")))
 
                 choice = data.get("choices", [{}])[0]
                 finish_reason = choice.get("finish_reason", "")
@@ -188,6 +227,10 @@ class KimiClient(BaseAPIClient):
                     messages.append(assistant_msg)
 
                     tool_calls = assistant_msg.get("tool_calls", [])
+                    search_calls += sum(
+                        tc.get("function", {}).get("name") == "$web_search"
+                        for tc in tool_calls
+                    )
                     for tc in tool_calls:
                         messages.append({
                             "role": "tool",
@@ -204,8 +247,10 @@ class KimiClient(BaseAPIClient):
 
                 answer_text, search_refs = self._parse_json_response(raw_content)
                 raw_response = dict(data)
-                if usage_observed:
-                    raw_response["usage_aggregate"] = usage_totals
+                raw_response.update(
+                    usage_aggregate=_aggregate_usage(usage_rounds, search_calls),
+                    request_metadata=request_metadata,
+                )
 
                 return LLMResponse(
                     answer_text=answer_text,
@@ -220,9 +265,10 @@ class KimiClient(BaseAPIClient):
         return LLMResponse(
             answer_text="",
             search_references=[],
-            raw_response=(
-                {"usage_aggregate": usage_totals} if usage_observed else {}
-            ),
+            raw_response={
+                "usage_aggregate": _aggregate_usage(usage_rounds, search_calls),
+                "request_metadata": request_metadata,
+            },
             duration=duration,
         )
 

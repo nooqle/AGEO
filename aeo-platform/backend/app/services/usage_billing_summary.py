@@ -13,13 +13,19 @@ def cache_status_for_record(record: LLMUsageRecord) -> str:
     raw = metadata.get("provider_usage") or {}
     if not isinstance(raw, dict):
         raw = {}
+    # Older A4 Kimi aggregation silently replaced unrecognised cache counters
+    # with zero. These persisted totals cannot prove a cache miss.
+    if (getattr(record, "provider", None) == "moonshot"
+            and metadata.get("usage_scope") == "a4_platform_fetch"
+            and raw.get("cache_accounting_version") != 2):
+        return "legacy_unknown"
     details = metadata.get("prompt_tokens_details") or raw.get("prompt_tokens_details") or raw.get("input_tokens_details") or {}
     if not isinstance(details, dict):
         details = {}
     normalized = metadata.get("normalized_usage") or {}
     if not isinstance(normalized, dict):
         normalized = {}
-    hit_values = [raw.get("prompt_cache_hit_tokens"), normalized.get("cached_prompt_tokens")]
+    hit_values = [raw.get("prompt_cache_hit_tokens"), raw.get("cached_tokens"), normalized.get("cached_prompt_tokens")]
     miss_values = [raw.get("prompt_cache_miss_tokens"), metadata.get("prompt_cache_miss_tokens"), normalized.get("cache_miss_prompt_tokens")]
     for candidate in (details, raw.get("prompt_tokens_details"), raw.get("input_tokens_details"), normalized.get("prompt_tokens_details")):
         if isinstance(candidate, dict):
@@ -49,14 +55,18 @@ def billing_details(record: LLMUsageRecord) -> dict[str, Any]:
     server_use = native_usage.get("server_tool_use") or {}
     requests = server_use.get("web_search_requests") if isinstance(server_use, dict) else None
     is_hy3 = getattr(record, "provider", None) == "hunyuan" and getattr(record, "model_name", None) == "hy3"
-    if is_hy3:
+    is_kimi_search = (getattr(record, "provider", None) == "moonshot"
+                      and (metadata.get("protocol") == "moonshot_chat_search"
+                           or metadata.get("usage_scope") == "a4_platform_fetch"))
+    if is_hy3 or is_kimi_search:
         provider_usage = metadata.get("provider_usage")
         tool_usage = provider_usage.get("tool_usage") if isinstance(provider_usage, dict) else None
         requests = tool_usage.get("web_search_call") if isinstance(tool_usage, dict) else None
     requests = requests if type(requests) is int and requests >= 0 else None
     search_status = "not_estimated" if metadata.get("protocol") == "anthropic_native_search" else "not_reported"
     search_cost = None
-    if is_hy3:
+    search_currency = None
+    if is_hy3 or is_kimi_search:
         # Only read the saved estimate, never apply today's rates to old calls.
         snapshot = metadata.get("search_pricing")
         snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -65,9 +75,10 @@ def billing_details(record: LLMUsageRecord) -> dict[str, Any]:
         if (search_status == "estimated" and requests is not None
                 and type(snapshot.get("provider_web_search_requests")) is int
                 and snapshot["provider_web_search_requests"] == requests
-                and snapshot.get("currency") == record.currency
+                and snapshot.get("currency") == "CNY"
                 and type(candidate) in (int, float) and math.isfinite(candidate) and candidate >= 0):
             search_cost = float(candidate)
+            search_currency = snapshot["currency"]
         elif search_status == "estimated":
             search_status = "invalid_usage"
     pricing = metadata.get("pricing")
@@ -79,7 +90,7 @@ def billing_details(record: LLMUsageRecord) -> dict[str, Any]:
     cache_status = cache_status_for_record(record)
     if cache_status == "invalid":
         status = "invalid_usage"
-    if status == "priced" and cache_status != "known" and pricing and (
+    if status in {"priced", "legacy_snapshot"} and cache_status != "known" and pricing and (
         pricing.get("input_cache_hit_price_per_mtokens") != pricing.get("input_cache_miss_price_per_mtokens")
     ) and record.prompt_tokens > 0:
         status = "unknown_cache"
@@ -97,6 +108,7 @@ def billing_details(record: LLMUsageRecord) -> dict[str, Any]:
         "provider_web_search_requests": requests,
         "search_tool_cost_status": search_status,
         "estimated_search_tool_cost": search_cost,
+        "search_tool_currency": search_currency,
         "currency": record.currency,
         "estimated_cost": baseline,
         "estimated_cost_cache_aware": actual,
