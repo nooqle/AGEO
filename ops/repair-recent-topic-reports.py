@@ -12,6 +12,8 @@ import re
 import subprocess
 import sys
 import resource
+import shutil
+from uuid import uuid4
 
 ROOT = Path("/srv/ageo-deploy/shared/runtime/topic-repairs")
 CURRENT = Path("/srv/ageo-deploy/current")
@@ -84,21 +86,28 @@ def load_plan(path):
         return json.load(handle)
 
 
-def plan_summary(plan):
+def plan_summary(plan, store):
     counts = {}
     nodes = []
     for change in plan["changes"]:
         counts[change["table"]] = counts.get(change["table"], 0) + 1
         if change["table"] == "amway_circle_projections":
-            old, new = change["before"], change["after"]
+            old, new = store.read(change["before"]), store.read(change["after"])
             nodes.append({"projection_id": change["id"], "run_id": new.get("circle_run_id"),
                           "scope": new["projection_scope"],
+                          "source_run_ids": new.get("source_run_ids"),
+                          "created_at": new.get("created_at"),
                           "old_nodes": len((old.get("association_circle_projection") or {}).get("nodes") or []),
-                          "new_nodes": len((new.get("association_circle_projection") or {}).get("nodes") or [])})
+                          "new_nodes": len((new.get("association_circle_projection") or {}).get("nodes") or []),
+                          "topic_count": ((new.get("association_circle_projection") or {}).get("topic_coverage") or {}).get("included_topic_count"),
+                          "anchor_count": ((new.get("association_circle_projection") or {}).get("topic_coverage") or {}).get("anchor_node_count")})
+            del old, new
     return {key: plan[key] for key in ("repair_id", "manifest_hash", "start_utc", "end_utc", "counts",
                                       "source_lexicon_hash", "target_lexicon_hash", "run_ids", "report_ids")} | {
         "changed_rows_by_table": counts, "node_changes": nodes,
         "provider_calls": False, "original_answers_changed": False,
+        "source_answer_hashes": plan["source_answer_hashes"],
+        "backup_storage": plan["row_storage"],
         "protected_rows_hash": plan["protected_rows_hash"],
         "backup_contains_complete_before_and_after_rows": True}
 
@@ -106,7 +115,8 @@ def plan_summary(plan):
 async def run(args, directory):
     from sqlalchemy import text
     from app.core.database import AsyncSessionLocal, engine
-    from app.services.amway_topic_repair_service import AmwayTopicRepairService, apply_manifest, digest, ENTITY_ID
+    from app.services.amway_topic_repair_service import (AmwayTopicRepairService, RepairRowStore,
+        apply_manifest, digest, ENTITY_ID, validate_manifest, repair_stage)
     plan_path = directory / "plan.json.gz"
     try:
         async with AsyncSessionLocal() as db:
@@ -122,25 +132,47 @@ async def run(args, directory):
                 inventory = json.loads(Path(args.inventory).read_text(encoding="utf-8"))
                 if package["repair_id"] != args.repair_id:
                     raise ValueError("repair_id_mismatch")
-                plan = await AmwayTopicRepairService(db).stage(inventory, package)
+                if shutil.disk_usage(directory).free < 5 * 1024 ** 3:
+                    raise ValueError("insufficient_backup_disk_space")
+                store = RepairRowStore(directory)
+                plan = await AmwayTopicRepairService(db, row_store=store).stage(inventory, package)
                 await db.rollback()
                 check_release(args.expected_release)
                 plan["release_sha"] = args.expected_release
                 plan["manifest_hash"] = digest({k: v for k, v in plan.items() if k != "manifest_hash"})
                 # Manifest includes exact deleted rows/IDs and every overwritten JSON.
                 # This is also the inverse restore plan; store before any production apply.
-                checksum = save_exclusive(plan_path, plan, compressed=True)
-                summary = plan_summary(plan) | {"mode": "dry-run", "database_committed": False,
+                pending_path = directory / f"plan-pending-{uuid4().hex}.json.gz"
+                checksum = save_exclusive(pending_path, plan, compressed=True)
+                summary = plan_summary(plan, store) | {"mode": "dry-run", "database_committed": False,
                                                 "plan_file_sha256": checksum,
                                                 "release_sha": args.expected_release}
                 del plan
                 db.expunge_all()
                 gc.collect()
-                loaded = load_plan(plan_path)
+                loaded = load_plan(pending_path)
                 if loaded["manifest_hash"] != summary["manifest_hash"] or digest({k:v for k,v in loaded.items() if k != "manifest_hash"}) != summary["manifest_hash"]:
                     raise ValueError("backup_manifest_readback_failed")
+                validate_manifest(loaded, row_store=store)
                 del loaded
+                # Flush row-directory entries before publishing the ready marker.
+                for current, _, _ in os.walk(store.directory, topdown=False):
+                    descriptor = os.open(current, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
                 save_exclusive(directory / "summary.json", summary)
+                # Publish only after all row images verify and their directory
+                # entries are durable; hard-link creation cannot replace a plan.
+                os.link(pending_path, plan_path)
+                pending_path.unlink()
+                descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                repair_stage("plan_published")
                 return summary
             if not args.expected_manifest_hash:
                 raise ValueError("expected_manifest_hash_required")
@@ -151,11 +183,13 @@ async def run(args, directory):
                 raise ValueError("repair_id_mismatch")
             if plan["release_sha"] != args.expected_release:
                 raise ValueError("plan_release_mismatch")
+            store = RepairRowStore(directory, namespace=plan["row_storage"]["namespace"])
             if args.mode == "verify":
                 if plan["manifest_hash"] != args.expected_manifest_hash or digest({k: v for k, v in plan.items() if k != "manifest_hash"}) != args.expected_manifest_hash:
                     raise ValueError("manifest_hash_mismatch")
-                service = AmwayTopicRepairService(db)
-                if digest(await service.capture()) != plan["after_hash"]:
+                validate_manifest(plan, row_store=store)
+                service = AmwayTopicRepairService(db, row_store=store)
+                if digest(await service.capture_rows()) != plan["after_hash"]:
                     raise ValueError("verification_rows_drifted")
                 views = {}
                 for period in ("latest_run", "last_7_days"):
@@ -172,7 +206,7 @@ async def run(args, directory):
                         "all_persisted_rows_match_plan": True, "counts": plan["counts"],
                         "browser_ui_verified": False, "database_committed": False}
             result = await apply_manifest(db, plan, expected_hash=args.expected_manifest_hash,
-                                          reverse=args.mode == "restore")
+                                          reverse=args.mode == "restore", row_store=store)
             check_release(args.expected_release)
             await db.commit()
             return result | {"release_sha": args.expected_release,

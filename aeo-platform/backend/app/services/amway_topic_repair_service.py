@@ -12,12 +12,19 @@ from enum import Enum
 import hashlib
 import json
 import gc
+import gzip
+import os
+from pathlib import Path
+import re
+import time
+from uuid import uuid4
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete, inspect, or_, select, update
 from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import lazyload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.amway_circle_tracking import (
@@ -54,6 +61,86 @@ MODELS = (
     BrandIntelligenceFinding, BrandMention, AmwayEntityLexiconOverride, AmwayCircleExport,
 )
 MODEL_BY_TABLE = {model.__tablename__: model for model in MODELS}
+
+
+def repair_stage(name: str, **counts) -> None:
+    """Only fixed stage names, IDs and numeric counters; never row contents."""
+    try:
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except ImportError:
+        peak = None
+    print(json.dumps({"repair_stage": name, "unix_time": int(time.time()),
+                      "peak_rss_kib": peak, **counts}), flush=True)
+
+
+class RepairRowStore:
+    """Immutable gzip row images under the server's restricted repair directory."""
+    def __init__(self, root: Path, namespace: str | None = None):
+        self.root = Path(root).resolve()
+        if not self.root.is_dir() or Path(root).is_symlink():
+            raise ValueError("invalid_row_store_root")
+        self.namespace = namespace or f"rows-{uuid4().hex}"
+        if not re.fullmatch(r"rows-[0-9a-f]{32}", self.namespace):
+            raise ValueError("invalid_row_store_namespace")
+        self.directory = self.root / self.namespace
+        if self.directory.is_symlink():
+            raise ValueError("unsafe_row_store_directory")
+        self.directory.mkdir(mode=0o700, exist_ok=True)
+
+    def _path(self, relative: str) -> Path:
+        if not re.fullmatch(r"rows-[0-9a-f]{32}/(?:before|after|memo)/[a-z_]+/[0-9a-f-]{36}\.json\.gz", relative):
+            raise ValueError("invalid_row_reference")
+        if relative.split("/", 1)[0] != self.namespace:
+            raise ValueError("row_reference_namespace_mismatch")
+        path = self.root / relative
+        if path.resolve() != path or not path.is_relative_to(self.directory):
+            raise ValueError("unsafe_row_reference_path")
+        return path
+
+    def write(self, phase: str, table: str, row_id: str, value: dict) -> dict:
+        relative = f"{self.namespace}/{phase}/{table}/{row_id}.json.gz"
+        path = self._path(relative)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as file:
+            with gzip.GzipFile(fileobj=file, mode="wb", mtime=0, compresslevel=1) as stream:
+                for chunk in json.JSONEncoder(ensure_ascii=False, separators=(",", ":"), default=json_value).iterencode(value):
+                    stream.write(chunk.encode())
+            file.flush()
+            os.fsync(file.fileno())
+        return {"row_file": relative, "row_hash": digest(value), "file_hash": self.file_hash(path)}
+
+    @staticmethod
+    def file_hash(path: Path) -> str:
+        checksum = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                checksum.update(chunk)
+        return checksum.hexdigest()
+
+    def read(self, reference: dict) -> dict:
+        path = self._path(reference["row_file"])
+        if not path.is_file() or (os.name != "nt" and path.stat().st_mode & 0o077):
+            raise ValueError("insecure_or_missing_row_image")
+        if self.file_hash(path) != reference["file_hash"]:
+            raise ValueError("row_image_file_hash_mismatch")
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            value = json.load(stream)
+        if digest(value) != reference["row_hash"]:
+            raise ValueError("row_image_content_hash_mismatch")
+        return value
+
+
+def resolve_change(change: dict, store: RepairRowStore | None) -> dict:
+    if store is None:
+        return change
+    return {**change, "before": store.read(change["before"]) if change["before"] else None,
+            "after": store.read(change["after"]) if change["after"] else None}
+
+
+def image_index(images: dict, *, references=False) -> dict:
+    return {table: {row_id: value["row_hash"] if references else digest(value)
+                    for row_id, value in rows.items()} for table, rows in images.items()}
 
 
 def json_value(value: Any) -> Any:
@@ -94,14 +181,14 @@ def _set(row: Any, values: dict[str, Any]) -> None:
     # Historical sorting is based on these dates; a repair is not a new report.
     updated_at = getattr(row, "updated_at", None)
     for key, value in values.items():
-        setattr(row, key, deepcopy(value))
+        setattr(row, key, value)
     if updated_at is not None:
         row.updated_at = updated_at
         flag_modified(row, "updated_at")
 
 
 def _preserve_identity(artifact: dict, old: dict, repair: dict) -> dict:
-    result = deepcopy(artifact)
+    result = dict(artifact)
     for key in ("id", "report_id", "artifact_id", "artifact_key", "session_id",
                 "entity_id", "created_at", "updated_at"):
         if key in old:
@@ -111,16 +198,17 @@ def _preserve_identity(artifact: dict, old: dict, repair: dict) -> dict:
 
 
 def _projection(artifact: dict) -> dict:
-    return deepcopy(artifact["dashboard_projection"]["association_circle_projection"])
+    return artifact["dashboard_projection"]["association_circle_projection"]
 
 
 class AmwayTopicRepairService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, row_store: RepairRowStore | None = None):
         self.db = db
         self.tracking = tracking.AmwayCircleTrackingService(db)
+        self.row_store = row_store
 
     async def _rows(self, model, *conditions, lock=False):
-        query = select(model).where(*conditions)
+        query = select(model).options(lazyload("*")).where(*conditions)
         if lock:
             query = query.with_for_update()
         return list((await self.db.scalars(query)).all())
@@ -142,6 +230,33 @@ class AmwayTopicRepairService:
             result[model.__tablename__] = {str(row.id): row_image(row) for row in rows}
         return result
 
+    async def capture_rows(self, *, phase: str | None = None, lock=False) -> dict:
+        """Explicit columns, one row at a time; no ORM eager relationships."""
+        run_ids = list((await self.db.scalars(select(AmwayCircleRun.id).where(AmwayCircleRun.entity_id == ENTITY_ID))).all())
+        message_ids = list((await self.db.scalars(select(BrandReportVersion.message_id).where(BrandReportVersion.entity_id == ENTITY_ID))).all())
+        result = {}
+        for model in MODELS:
+            if model is Message:
+                condition = model.id.in_([item for item in message_ids if item])
+            elif model in (AmwayCircleEvidence, AmwayCircleEdgeSnapshot):
+                condition = model.circle_run_id.in_(run_ids)
+            else:
+                condition = model.entity_id == ENTITY_ID
+            query = select(*model.__table__.columns).where(condition).order_by(model.id).execution_options(yield_per=1)
+            if lock:
+                query = query.with_for_update()
+            stream = await self.db.stream(query)
+            rows = {}
+            async for record in stream.mappings():
+                value = {key: json_value(item) if isinstance(item, (UUID, datetime, Enum)) else item for key, item in record.items()}
+                row_id = str(value["id"])
+                rows[row_id] = self.row_store.write(phase, model.__tablename__, row_id, value) if phase else digest(value)
+                del value
+            await stream.close()
+            result[model.__tablename__] = rows
+            repair_stage("captured_table", table=model.__tablename__, row_count=len(rows))
+        return result
+
     async def _source(self, run: AmwayCircleRun) -> tuple[Any, Any, dict]:
         brand = await self.db.get(BrandIntelligenceRun, run.brand_intelligence_run_id)
         task = await self.db.get(AnalysisTask, run.analysis_task_id) if run.analysis_task_id else None
@@ -150,10 +265,11 @@ class AmwayTopicRepairService:
         snapshot = await self.db.get(AnalysisSnapshot, UUID(str(snapshot_id))) if snapshot_id else None
         if not snapshot or snapshot.entity_id != ENTITY_ID:
             raise ValueError(f"missing_scoped_snapshot:{run.id}")
-        raw = deepcopy(snapshot.raw_data or {})
+        raw = dict(snapshot.raw_data or {})
         if not isinstance(raw.get("fetch_results"), list) or not raw["fetch_results"]:
             raise ValueError(f"missing_original_answers:{run.id}")
-        stored = await self._rows(AmwayCircleAnswer, AmwayCircleAnswer.circle_run_id == run.id)
+        stored = (await self.db.execute(select(AmwayCircleAnswer.question_id, AmwayCircleAnswer.platform,
+                                              AmwayCircleAnswer.answer_hash).where(AmwayCircleAnswer.circle_run_id == run.id))).all()
         stored_hashes = {(row.question_id, row.platform): row.answer_hash for row in stored}
         expected = tracking._answer_records(fetch_results=raw["fetch_results"], source_appendix=[], center_terms=run.center_terms)
         for answer in expected:
@@ -278,7 +394,7 @@ class AmwayTopicRepairService:
             raise ValueError(f"ambiguous_brand_report_binding:{run.id}:{len(candidates)}")
         # raw has just been staged; recover the original snapshot artifact from
         # its persisted version for binding by identity and original sample scope.
-        version = candidates[0]
+        version = await self.db.get(BrandReportVersion, candidates[0].id, options=[lazyload("*")])
         if version.report_id != f"{snapshot.session_id}_report_brand_association_circle" or version.report_kind != "brand_association_circle":
             raise ValueError("brand_report_identity_mismatch")
         if (version.payload or {}).get("session_id") != str(snapshot.session_id):
@@ -287,10 +403,10 @@ class AmwayTopicRepairService:
             raise ValueError("brand_report_snapshot_nodes_mismatch")
         if int(((version.payload or {}).get("sample_scope") or {}).get("valid_answer_count", -1)) != run.valid_answer_count:
             raise ValueError("brand_report_answer_scope_mismatch")
-        await self._stage_brand_report(candidates[0], artifact, repair)
+        await self._stage_brand_report(version, artifact, repair)
 
     async def _stage_brand_report(self, version, artifact, repair):
-        message = await self.db.get(Message, version.message_id)
+        message = await self.db.get(Message, version.message_id, options=[lazyload("*")])
         if message is None or message.session_id != version.session_id:
             raise ValueError("missing_exact_report_message")
         output = json.loads(message.output_data or "{}")
@@ -348,10 +464,13 @@ class AmwayTopicRepairService:
                 if (row.association_circle_projection or {}).get("topic_repair", {}).get("repair_id") == repair["repair_id"]:
                     result.append(row)
                 else:
+                    stored_body = computed[run_id]["body"]
+                    if self.row_store:
+                        stored_body = self.row_store.read(stored_body)["body"]
                     result.append(AmwayCircleProjection(circle_run_id=UUID(run_id),
                         source_run_hash=row.source_run_hash,
                         projection_version=computed[run_id]["artifact"].get("schema_version") or row.projection_version,
-                        association_circle_projection=deepcopy(computed[run_id]["body"])))
+                        association_circle_projection=stored_body))
             return result
         currents, previouses = await proxies(current_ids), await proxies(previous_ids)
         body = tracking._aggregate_projection(currents, current)
@@ -398,92 +517,123 @@ class AmwayTopicRepairService:
         if end - start != timedelta(days=7):
             raise ValueError("repair_window_must_be_seven_days")
         await self.tracking._lock_entity(ENTITY_ID)
-        before = await self.capture(lock=True)
+        await AmwayEntityLexiconService(self.db)._lock_entity(ENTITY_ID)
+        repair_stage("before_images_started")
+        before = await self.capture_rows(phase="before", lock=True) if self.row_store else await self.capture(lock=True)
+        repair_stage("before_images_completed")
         registry = await self._stage_lexicon(package)
         run_ids = {r["run_id"] for r in inventory["runs"]}
         report_ids = {r["id"] for r in inventory["reports"]}
         version_ids = {r["id"] for r in inventory["brand_report_versions"]}
-        actual_runs = {key for key, r in before[AmwayCircleRun.__tablename__].items()
-                       if start <= _utc(datetime.fromisoformat(r["completed_at"] or r["created_at"])) <= end}
-        actual_reports = {key for key, r in before[AmwayCircleReport.__tablename__].items()
-                          if start <= _utc(datetime.fromisoformat(r["created_at"])) <= end}
+        run_metadata = (await self.db.execute(select(AmwayCircleRun.id, AmwayCircleRun.completed_at, AmwayCircleRun.created_at)
+                                              .where(AmwayCircleRun.entity_id == ENTITY_ID))).all()
+        report_metadata = (await self.db.execute(select(AmwayCircleReport.id, AmwayCircleReport.projection_id,
+            AmwayCircleReport.report_scope, AmwayCircleReport.created_at).where(AmwayCircleReport.entity_id == ENTITY_ID))).all()
+        projection_metadata = (await self.db.execute(select(AmwayCircleProjection.id, AmwayCircleProjection.circle_run_id,
+            AmwayCircleProjection.source_run_ids).where(AmwayCircleProjection.entity_id == ENTITY_ID))).all()
+        actual_runs = {str(r.id) for r in run_metadata if start <= _utc(r.completed_at or r.created_at) <= end}
+        actual_reports = {str(r.id) for r in report_metadata if start <= _utc(r.created_at) <= end}
         if actual_runs != run_ids or actual_reports != report_ids:
             raise ValueError("inventory_target_drift")
         if len(run_ids) != package["expected_run_count"] or len(report_ids) != package["expected_report_count"]:
             raise ValueError("package_count_mismatch")
         target_projection_ids = {row["projection_id"] for row in inventory["reports"]}
-        target_projection_ids.update(key for key, value in before[AmwayCircleProjection.__tablename__].items()
-                                     if value.get("circle_run_id") in run_ids)
+        target_projection_ids.update(str(row.id) for row in projection_metadata if str(row.circle_run_id) in run_ids)
         if await self._rows(AmwayCircleExport, AmwayCircleExport.entity_id == ENTITY_ID,
             or_((AmwayCircleExport.created_at >= start) & (AmwayCircleExport.created_at <= end),
                 AmwayCircleExport.circle_run_id.in_([UUID(r) for r in run_ids]),
                 AmwayCircleExport.report_id.in_([UUID(r) for r in report_ids]),
                 AmwayCircleExport.projection_id.in_([UUID(p) for p in target_projection_ids]))):
             raise ValueError("export_requires_explicit_file_repair")
-        reports = await self._rows(AmwayCircleReport, AmwayCircleReport.id.in_([UUID(r) for r in report_ids]))
-        versions = await self._rows(BrandReportVersion, BrandReportVersion.id.in_([UUID(v) for v in version_ids]))
+        versions = (await self.db.execute(select(BrandReportVersion.id, BrandReportVersion.session_id,
+            BrandReportVersion.report_id, BrandReportVersion.report_kind, BrandReportVersion.message_id)
+            .where(BrandReportVersion.id.in_([UUID(v) for v in version_ids])))).all()
         source_ids = set(run_ids)
-        for report in reports:
-            projection = await self.db.get(AmwayCircleProjection, report.projection_id)
-            source_ids.update(projection.source_run_ids or [])
+        for row in projection_metadata:
+            if str(row.id) in target_projection_ids:
+                source_ids.update(row.source_run_ids or [])
         repair = {"repair_id": repair_id, "schema_version": SCHEMA_VERSION,
                   "start_utc": start.isoformat(), "end_utc": end.isoformat(),
                   "target_lexicon_hash": registry.effective_hash}
         computed = {}
+        source_answer_hashes, snapshot_ids = {}, []
         for run_id in sorted(source_ids):
+            repair_stage("run_started", run_id=run_id, write_run=run_id in run_ids)
             run = await self.db.get(AmwayCircleRun, UUID(run_id))
             if not run or run.entity_id != ENTITY_ID or run.status not in ("completed", "partial"):
                 raise ValueError(f"invalid_source_run:{run_id}")
-            computed[run_id] = await self._compute(run, registry, repair)
-        for run_id in sorted(run_ids):
-            await self._stage_run(computed[run_id], versions, repair)
-        for report in reports:
-            if report.report_scope == "period_view":
+            item = await self._compute(run, registry, repair)
+            source_answer_hashes[run_id] = digest(item["raw"]["fetch_results"])
+            if run_id in run_ids:
+                snapshot_ids.append(str(item["snapshot"].id))
+                await self._stage_run(item, versions, repair)
+            body = self.row_store.write("memo", "run_projection", run_id, {"body": item["body"]}) if self.row_store else item["body"]
+            computed[run_id] = {"run": SimpleNamespace(**row_image(run)), "body": body,
+                "artifact": {"schema_version": item["artifact"].get("schema_version")},
+                "extraction": {key: item["extraction"][key] for key in ("schema_version", "effective_lexicon_hash")}}
+            await self.db.flush()
+            self.db.expunge_all()
+            del item, body, run
+            gc.collect()
+            repair_stage("run_completed", run_id=run_id)
+        for metadata in report_metadata:
+            if str(metadata.id) in report_ids and metadata.report_scope == "period_view":
+                repair_stage("period_started", report_id=str(metadata.id))
+                report = await self.db.get(AmwayCircleReport, metadata.id, options=[lazyload("*")])
                 await self._stage_period(report, computed, repair)
-        source_answer_hashes = {r: digest(computed[r]["raw"]["fetch_results"]) for r in source_ids}
-        snapshot_ids = sorted(str(computed[r]["snapshot"].id) for r in run_ids)
+                await self.db.flush()
+                self.db.expunge_all()
+                del report
+                gc.collect()
+                repair_stage("period_completed", report_id=str(metadata.id))
         await self.db.flush()
         computed.clear()
-        del reports, versions
+        del versions
         self.db.expire_all()
         gc.collect()
-        after = await self.capture()
+        repair_stage("after_images_started")
+        after = await self.capture_rows(phase="after") if self.row_store else await self.capture()
+        repair_stage("after_images_completed")
+        before_index = image_index(before, references=bool(self.row_store))
+        after_index = image_index(after, references=bool(self.row_store))
         changes = []
         for table, old_rows in before.items():
             for row_id in sorted(set(old_rows) | set(after[table])):
                 old, new = old_rows.get(row_id), after[table].get(row_id)
-                if old != new:
+                if before_index[table].get(row_id) != after_index[table].get(row_id):
                     changes.append({"table": table, "id": row_id, "before": old, "after": new})
         manifest = {**repair, "entity_id": str(ENTITY_ID), "source_lexicon_hash": package["expected_lexicon_hash"],
                     "run_ids": sorted(run_ids), "report_ids": sorted(report_ids),
                     "version_ids": sorted(version_ids), "changes": changes,
-                    "before_hash": digest(before), "after_hash": digest(after),
+                    "before_hash": digest(before_index), "after_hash": digest(after_index),
                     "counts": {"runs": len(run_ids), "reports": len(report_ids), "versions": len(version_ids)},
                     "source_answer_hashes": source_answer_hashes}
         manifest["allowed_ids"] = {
-            AnalysisSnapshot.__tablename__: snapshot_ids,
-            AmwayCircleProjection.__tablename__: sorted(key for key, value in before[AmwayCircleProjection.__tablename__].items()
-                if value.get("circle_run_id") in run_ids or any(r["projection_id"] == key for r in inventory["reports"])),
+            AnalysisSnapshot.__tablename__: sorted(snapshot_ids),
+            AmwayCircleProjection.__tablename__: sorted(target_projection_ids),
             Message.__tablename__: sorted(v["message_id"] for v in inventory["brand_report_versions"]),
-            BrandMetricSnapshot.__tablename__: sorted(key for key, value in before[BrandMetricSnapshot.__tablename__].items()
-                if value.get("report_version_id") in version_ids),
-            BrandIntelligenceFinding.__tablename__: sorted(key for key, value in before[BrandIntelligenceFinding.__tablename__].items()
-                if value.get("report_version_id") in version_ids),
+            BrandMetricSnapshot.__tablename__: sorted(str(value) for value in (await self.db.scalars(select(BrandMetricSnapshot.id)
+                .where(BrandMetricSnapshot.report_version_id.in_([UUID(v) for v in version_ids])))).all()),
+            BrandIntelligenceFinding.__tablename__: sorted(str(value) for value in (await self.db.scalars(select(BrandIntelligenceFinding.id)
+                .where(BrandIntelligenceFinding.report_version_id.in_([UUID(v) for v in version_ids])))).all()),
         }
-        validate_manifest(manifest)
+        if self.row_store:
+            manifest["row_storage"] = {"version": 1, "namespace": self.row_store.namespace}
+        validate_manifest(manifest, row_store=self.row_store)
         changed_keys = {(change["table"], change["id"]) for change in changes}
         protected_before = {table: {row_id: value for row_id, value in rows.items() if (table, row_id) not in changed_keys}
-                            for table, rows in before.items()}
+                            for table, rows in before_index.items()}
         protected_after = {table: {row_id: value for row_id, value in rows.items() if (table, row_id) not in changed_keys}
-                           for table, rows in after.items()}
+                           for table, rows in after_index.items()}
         if digest(protected_before) != digest(protected_after):
             raise ValueError("protected_rows_changed")
         manifest["protected_rows_hash"] = digest(protected_before)
         manifest["manifest_hash"] = digest(manifest)
+        repair_stage("manifest_completed", changed_rows=len(changes))
         return manifest
 
 
-def validate_manifest(plan: dict) -> None:
+def validate_manifest(plan: dict, *, row_store: RepairRowStore | None = None) -> None:
     """Every mutation must belong to the exact authorized historical target."""
     run_ids, report_ids, version_ids = map(set, (plan["run_ids"], plan["report_ids"], plan["version_ids"]))
     start, end = (datetime.fromisoformat(plan[k]) for k in ("start_utc", "end_utc"))
@@ -491,6 +641,8 @@ def validate_manifest(plan: dict) -> None:
         raise ValueError("invalid_repair_scope")
     if plan["counts"] != {"runs": len(run_ids), "reports": len(report_ids), "versions": len(version_ids)}:
         raise ValueError("manifest_counts_mismatch")
+    if plan.get("row_storage") and (not row_store or plan["row_storage"] != {"version": 1, "namespace": row_store.namespace}):
+        raise ValueError("row_store_binding_mismatch")
     column_allowlist = {
         AmwayCircleRun.__tablename__: {"lexicon_hash", "lexicon_version", "extraction_version", "calibration_version"},
         AnalysisSnapshot.__tablename__: {"raw_data"},
@@ -503,51 +655,63 @@ def validate_manifest(plan: dict) -> None:
         AmwayCircleProjection.__tablename__: {"association_circle_projection", "sample_scope", "report_input", "data_quality",
                                              "projection_version", "source_run_hash", "compare_summary"},
     }
-    for change in plan["changes"]:
-        table, old, new = change["table"], change["before"], change["after"]
-        if table not in MODEL_BY_TABLE:
-            raise ValueError("unapproved_table")
-        row = old or new
-        if str(row.get("id")) != change["id"]:
-            raise ValueError("row_identity_mismatch")
-        if row.get("entity_id") and row["entity_id"] != str(ENTITY_ID):
-            raise ValueError("cross_entity_change")
-        if table == AmwayEntityLexiconOverride.__tablename__:
-            if row["lexicon_entity_id"] not in {"strategy_active_health", "touchpoint_sports_area", "touchpoint_national_experience_centers"}:
-                raise ValueError("unapproved_lexicon_row")
-            continue
-        if table in {m.__tablename__ for m in CHILD_MODELS}:
-            if row["circle_run_id"] not in run_ids:
-                raise ValueError("outside_window_child_change")
-            continue
-        if old is None or new is None:
-            raise ValueError("identity_rows_cannot_be_created_or_deleted")
-        if table in plan.get("allowed_ids", {}) and change["id"] not in plan["allowed_ids"][table]:
-            raise ValueError(f"outside_target_copy:{table}")
-        if set(k for k in old if old[k] != new[k]) - column_allowlist.get(table, set()):
-            raise ValueError(f"unapproved_column_change:{table}")
-        for field in ("id", "entity_id", "created_at", "updated_at", "completed_at", "started_at",
-                      "built_at", "captured_at", "run_sequence", "is_latest", "question_signature",
-                      "source_run_ids", "source_run_count"):
-            if old.get(field) != new.get(field):
-                raise ValueError(f"protected_identity_changed:{table}:{field}")
-        if table == AmwayCircleAnswer.__tablename__:
-            raise ValueError("original_answer_changed")
-        if table == AmwayCircleRun.__tablename__ and change["id"] not in run_ids:
-            raise ValueError("outside_window_run_change")
-        if table == AmwayCircleReport.__tablename__ and change["id"] not in report_ids:
-            raise ValueError("outside_window_report_change")
-        if table == BrandReportVersion.__tablename__ and change["id"] not in version_ids:
-            raise ValueError("outside_window_version_change")
-        if table == AnalysisSnapshot.__tablename__:
-            if digest(old["raw_data"].get("fetch_results")) != digest(new["raw_data"].get("fetch_results")):
-                raise ValueError("snapshot_original_answers_changed")
-        if table == BrandMention.__tablename__:
-            raise ValueError("unsupported_report_derivative_change")
+    seen = set()
+    for encoded_change in plan["changes"]:
+        key = (encoded_change["table"], encoded_change["id"])
+        if key in seen:
+            raise ValueError("duplicate_manifest_row")
+        seen.add(key)
+        _validate_change(encoded_change, row_store, plan, column_allowlist, run_ids, report_ids, version_ids)
+
+
+def _validate_change(encoded_change, row_store, plan, column_allowlist, run_ids, report_ids, version_ids):
+    change = resolve_change(encoded_change, row_store)
+    table, old, new = change["table"], change["before"], change["after"]
+    if table not in MODEL_BY_TABLE:
+        raise ValueError("unapproved_table")
+    if old is not None and new is not None and old.keys() != new.keys():
+        raise ValueError("row_column_set_mismatch")
+    row = old or new
+    if str(row.get("id")) != change["id"]:
+        raise ValueError("row_identity_mismatch")
+    if row.get("entity_id") and row["entity_id"] != str(ENTITY_ID):
+        raise ValueError("cross_entity_change")
+    if table == AmwayEntityLexiconOverride.__tablename__:
+        if row["lexicon_entity_id"] not in {"strategy_active_health", "touchpoint_sports_area", "touchpoint_national_experience_centers"}:
+            raise ValueError("unapproved_lexicon_row")
+        return
+    if table in {m.__tablename__ for m in CHILD_MODELS}:
+        if row["circle_run_id"] not in run_ids:
+            raise ValueError("outside_window_child_change")
+        return
+    if old is None or new is None:
+        raise ValueError("identity_rows_cannot_be_created_or_deleted")
+    if table in plan.get("allowed_ids", {}) and change["id"] not in plan["allowed_ids"][table]:
+        raise ValueError(f"outside_target_copy:{table}")
+    if set(k for k in old if old[k] != new[k]) - column_allowlist.get(table, set()):
+        raise ValueError(f"unapproved_column_change:{table}")
+    for field in ("id", "entity_id", "created_at", "updated_at", "completed_at", "started_at",
+                  "built_at", "captured_at", "run_sequence", "is_latest", "question_signature",
+                  "source_run_ids", "source_run_count"):
+        if old.get(field) != new.get(field):
+            raise ValueError(f"protected_identity_changed:{table}:{field}")
+    if table == AmwayCircleAnswer.__tablename__:
+        raise ValueError("original_answer_changed")
+    if table == AmwayCircleRun.__tablename__ and change["id"] not in run_ids:
+        raise ValueError("outside_window_run_change")
+    if table == AmwayCircleReport.__tablename__ and change["id"] not in report_ids:
+        raise ValueError("outside_window_report_change")
+    if table == BrandReportVersion.__tablename__ and change["id"] not in version_ids:
+        raise ValueError("outside_window_version_change")
+    if table == AnalysisSnapshot.__tablename__:
+        if digest(old["raw_data"].get("fetch_results")) != digest(new["raw_data"].get("fetch_results")):
+            raise ValueError("snapshot_original_answers_changed")
+    if table == BrandMention.__tablename__:
+        raise ValueError("unsupported_report_derivative_change")
 
 
 def _typed_values(model, values):
-    result = deepcopy(values)
+    result = dict(values)
     for column in inspect(model).columns:
         value = result.get(column.key)
         if value is None:
@@ -565,20 +729,24 @@ def _typed_values(model, values):
     return result
 
 
-async def apply_manifest(db: AsyncSession, plan: dict, *, expected_hash: str, reverse=False) -> dict:
+async def apply_manifest(db: AsyncSession, plan: dict, *, expected_hash: str, reverse=False,
+                         row_store: RepairRowStore | None = None) -> dict:
     """Caller owns transaction, secure backup, release check and commit."""
     supplied = plan.get("manifest_hash")
     if supplied != expected_hash or digest({k: v for k, v in plan.items() if k != "manifest_hash"}) != supplied:
         raise ValueError("manifest_hash_mismatch")
-    validate_manifest(plan)
-    service = AmwayTopicRepairService(db)
+    repair_stage("plan_validation_started")
+    validate_manifest(plan, row_store=row_store)
+    service = AmwayTopicRepairService(db, row_store=row_store)
     await service.tracking._lock_entity(ENTITY_ID)
-    current = await service.capture(lock=True)
+    await AmwayEntityLexiconService(db)._lock_entity(ENTITY_ID)
+    current = await service.capture_rows(lock=True) if row_store else image_index(await service.capture(lock=True))
     source_hash, target_hash = (plan["after_hash"], plan["before_hash"]) if reverse else (plan["before_hash"], plan["after_hash"])
     if digest(current) == target_hash:
         return {"status": "already_restored" if reverse else "already_applied", "repair_id": plan["repair_id"]}
     if digest(current) != source_hash:
         raise ValueError("source_rows_drifted")
+    repair_stage("source_verified", changed_rows=len(plan["changes"]))
     changes = [{**c, "before": c["after"], "after": c["before"]} for c in plan["changes"]] if reverse else plan["changes"]
     # Delete FK children first, then insert parents before referencing children.
     mutable_models = (*CHILD_MODELS, AmwayEntityLexiconOverride)
@@ -589,18 +757,24 @@ async def apply_manifest(db: AsyncSession, plan: dict, *, expected_hash: str, re
     for change in changes:
         if change["before"] is not None and change["after"] is not None:
             model = MODEL_BY_TABLE[change["table"]]
-            await db.execute(update(model).where(model.id == UUID(change["id"])).values(**_typed_values(model, change["after"])))
+            after = row_store.read(change["after"]) if row_store else change["after"]
+            await db.execute(update(model.__table__).where(model.id == UUID(change["id"])).values(**_typed_values(model, after)))
+            del after
     for model in reversed(mutable_models):
         for change in changes:
             if change["table"] == model.__tablename__ and change["before"] is None:
-                await db.execute(model.__table__.insert().values(**_typed_values(model, change["after"])))
+                after = row_store.read(change["after"]) if row_store else change["after"]
+                await db.execute(model.__table__.insert().values(**_typed_values(model, after)))
+                del after
     await db.flush()
     db.expire_all()
-    if digest(await service.capture()) != target_hash:
+    result_index = await service.capture_rows() if row_store else image_index(await service.capture())
+    if digest(result_index) != target_hash:
         raise ValueError("post_apply_verification_failed")
     registry = await AmwayEntityLexiconService(db).registry_for_entity(ENTITY_ID)
     expected_lexicon = plan["source_lexicon_hash"] if reverse else plan["target_lexicon_hash"]
     if registry.effective_hash != expected_lexicon:
         raise ValueError("post_apply_lexicon_hash_mismatch")
+    repair_stage("target_verified", changed_rows=len(changes))
     return {"status": "restored" if reverse else "applied", "repair_id": plan["repair_id"],
             "counts": plan["counts"], "changed_rows": len(changes)}
