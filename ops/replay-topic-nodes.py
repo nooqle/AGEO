@@ -25,6 +25,10 @@ CONTEXT_KEYS = (
 )
 
 
+def stage(name):
+    print(json.dumps({"stage": name}), flush=True)
+
+
 def configure(expected, output_dir):
     global SECRET_VALUES
     if not re.fullmatch(r"[a-f0-9]{40}", expected):
@@ -210,6 +214,7 @@ async def collect(expected):
             await db.execute(text("SET LOCAL statement_timeout = '45s'"))
             if (await db.execute(text("SHOW transaction_read_only"))).scalar_one() != "on":
                 raise ValueError("read_only_transaction_required")
+            stage("read-only")
             tracking = AmwayCircleTrackingService(db)
             run = await tracking._latest_completed_run(ENTITY_ID, center_term=CENTER)
             if run is None:
@@ -220,6 +225,7 @@ async def collect(expected):
             projections = await tracking._run_projections(ENTITY_ID, [run.id])
             if len(projections) != 1:
                 raise ValueError("missing_run_projection")
+            stage("selected")
             brand_run = await db.get(BrandIntelligenceRun, run.brand_intelligence_run_id) if run.brand_intelligence_run_id else None
             snapshot_id = (brand_run.output_refs or {}).get("snapshot_id") if brand_run else None
             if not snapshot_id and run.analysis_task_id:
@@ -234,10 +240,13 @@ async def collect(expected):
             fetch = raw["fetch_results"]
             stored_extraction = raw["entity_extraction_result"]
             stored_calibration = raw["entity_calibration_result"]
+            stage("snapshot")
             frozen = AmwayEntityOntologyRegistry.from_snapshot(stored_extraction["effective_lexicon_snapshot"])
             current = await AmwayEntityLexiconService(db).registry_for_entity(ENTITY_ID)
             extraction = AmwayEntityExtractionService(frozen).extract_from_fetch_results(fetch)
+            stage("extracted")
             calibration = AmwayEntityCalibrationService(frozen).calibrate(fetch_results=fetch, extraction_result=extraction, center_terms=stored_calibration["association_map"]["center_terms"])
+            stage("calibrated")
             safe_fetch = safe_answers(fetch)
             safe_extraction = AmwayEntityExtractionService(frozen).extract_from_fetch_results(safe_fetch)
             if safe_extraction != extraction:
@@ -295,6 +304,7 @@ def write_output(output, answers, report):
         "page_node_count": len(report["page_projection"].get("nodes") or []),
         "replayed_node_count": len(report["replayed_calibration"]["association_circle_projection"]["nodes"]),
         "reasons": dict(Counter(row["replay_reason"] for row in rows)),
+        "file_bytes": {name: (output / name).stat().st_size for name in ("answers.json", "replay.json", "topics.csv")},
         "files": {name: hashlib.sha256((output / name).read_bytes()).hexdigest() for name in ("answers.json", "replay.json", "topics.csv")},
     }, ensure_ascii=True))
 
@@ -306,10 +316,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         destination = configure(args.expected_release, args.output_dir)
-        answers, report = asyncio.run(collect(args.expected_release))
+        stage("configured")
+        async def bounded_collect():
+            return await asyncio.wait_for(collect(args.expected_release), timeout=180)
+        answers, report = asyncio.run(bounded_collect())
         if Path("/srv/ageo-deploy/current/.release-sha").read_text().strip() != args.expected_release:
             raise ValueError("release_changed_during_replay")
         write_output(destination, answers, report)
+        stage("exported")
     except Exception as exc:
         # Tracebacks or arbitrary provider/configuration strings must not enter CI logs.
         failure = {"failed": True, "failure_type": type(exc).__name__}

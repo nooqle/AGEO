@@ -43,8 +43,8 @@ jobs:
           printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
           chmod 600 "$key_path"
           ssh-keygen -y -f "$key_path" >/dev/null
-          ssh_options=(-i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
-          scp_options=(-i "$key_path" -P "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          ssh_options=(-i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          scp_options=(-i "$key_path" -P "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
           remote="${DEMO_SSH_USER}@${DEMO_SSH_HOST}"
           cleanup() {
             if [[ "$remote_dir" =~ ^/tmp/ageo-topic-replay\.[A-Za-z0-9]{12}$ ]]; then
@@ -53,12 +53,17 @@ jobs:
             rm -f "$key_path"
           }
           trap cleanup EXIT
+          echo 'stage=mktemp'
           remote_dir=$(ssh "${ssh_options[@]}" "$remote" 'umask 077; mktemp -d /tmp/ageo-topic-replay.XXXXXXXXXXXX')
           [[ "$remote_dir" =~ ^/tmp/ageo-topic-replay\.[A-Za-z0-9]{12}$ ]] || exit 2
+          echo 'stage=copy'
           scp "${scp_options[@]}" ops/replay-topic-nodes.py "$remote:$remote_dir/replay-topic-nodes.py"
-          ssh "${ssh_options[@]}" "$remote" "sudo -n /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python -B '$remote_dir/replay-topic-nodes.py' --expected-release '$EXPECTED_RELEASE' --output-dir '$remote_dir'"
+          echo 'stage=run'
+          ssh "${ssh_options[@]}" "$remote" "sudo -n timeout --signal=TERM --kill-after=10s 240s /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python -B -u '$remote_dir/replay-topic-nodes.py' --expected-release '$EXPECTED_RELEASE' --output-dir '$remote_dir'"
+          echo 'stage=download'
           for file in answers.json replay.json topics.csv; do
-            scp "${scp_options[@]}" "$remote:$remote_dir/$file" "replay-output/$file"
+            echo "stage=download file=$file"
+            timeout --signal=TERM --kill-after=5s 90s scp -C "${scp_options[@]}" "$remote:$remote_dir/$file" "replay-output/$file"
           done
       - uses: actions/upload-artifact@v4
         with:
