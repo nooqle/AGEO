@@ -999,7 +999,43 @@ export interface OntologyAssociationCircleStorylineAnalysis {
   evidence_refs?: string[];
 }
 
+export type AmwayTopicCoverageStatus = 'included' | 'unmatched' | 'relation_filtered' | 'pending_review' | 'excluded';
+
+export interface AmwayTopicCoverageRow {
+  entity_id: string;
+  canonical_name: string;
+  status: AmwayTopicCoverageStatus;
+  reason: string;
+  review_status: string;
+  answer_count: number;
+  signal_count: number;
+  reason_counts: Record<string, number>;
+  score?: number;
+  evidence_samples: Array<{
+    answer_id: string;
+    question_id: string;
+    platform: string;
+    question: string;
+    evidence_text: string;
+    reason: string;
+  }>;
+}
+
+export interface AmwayTopicCoverage {
+  schema_version: 1;
+  scope: 'run' | 'period';
+  analysis_version: string;
+  lexicon_hash: string;
+  total_topic_count: number;
+  included_topic_count: number;
+  anchor_node_count: number;
+  other_node_count: number;
+  status_counts: Record<string, number>;
+  topics: AmwayTopicCoverageRow[];
+}
+
 export interface OntologyAssociationCircleProjection {
+  topic_coverage?: AmwayTopicCoverage | null;
   object_index?: Array<{ entity_id: string; entity_name: string; evidence_text: string; platform: string; answer_id: string; semantic_definition?: { semantic_type?: string } }>;
   dashboard_variant?: string | null;
   analysis_mode?: string;

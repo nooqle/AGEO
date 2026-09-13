@@ -16,6 +16,7 @@ from typing import Any
 from app.ontology import AmwayEntityDefinition, AmwayEntityOntologyRegistry
 from app.ontology import load_default_amway_entity_ontology
 from app.services.amway_topic_projection import topic_support_summary
+from app.services.amway_topic_coverage import TopicCoverageRecorder
 from app.services.amway_entity_extraction_service import (
     AmwayEntityExtractionService,
 )
@@ -232,9 +233,10 @@ class AmwayEntityCalibrationService:
             if frozen.effective_hash != self.registry.effective_hash:
                 raise ValueError("Calibration registry differs from extraction snapshot")
         from app.services.amway_topic_projection import project_topic_signals
+        coverage = TopicCoverageRecorder(self.registry)
         signals = project_topic_signals(
-            [signal for signal in signals if signal.get("relation_type") not in EXCLUDED_RELATION_TYPES],
-            self.registry,
+            signals, self.registry,
+            excluded_relation_types=EXCLUDED_RELATION_TYPES, coverage=coverage,
         )
         accumulators = self._build_accumulators(signals)
         sample_scope = self._build_sample_scope(
@@ -252,7 +254,9 @@ class AmwayEntityCalibrationService:
             total_valid_answers=int(sample_scope.get("valid_answer_count") or 0),
             total_platforms=max(len(platforms), 1),
             total_questions=max(len(question_bank), 1),
+            coverage=coverage,
         )
+        topic_coverage = coverage.finish(nodes, signals)
         sample_scope["normalized_node_count"] = len(nodes)
         tracking_projection = _build_tracking_projection(
             nodes=nodes,
@@ -307,6 +311,7 @@ class AmwayEntityCalibrationService:
             source_appendix=source_appendix,
         )
         report_input = {
+            "topic_coverage": topic_coverage,
             "contract_version": CALIBRATION_SCHEMA_VERSION,
             "count_semantics": "distinct_answer_refs",
             "question_scope": _build_question_scope(question_bank),
@@ -322,6 +327,7 @@ class AmwayEntityCalibrationService:
             "tracking_projection": tracking_projection,
         }
         projection = {
+            "topic_coverage": topic_coverage,
             "object_index": object_index,
             "effective_lexicon_hash": extraction_result.get("effective_lexicon_hash"),
             "extraction_version": extraction_result.get("schema_version") or "legacy_unknown",
@@ -346,6 +352,7 @@ class AmwayEntityCalibrationService:
 
         return {
             "service": "AmwayEntityCalibrationService",
+            "topic_coverage": topic_coverage,
             "object_index": object_index,
             "schema_version": CALIBRATION_SCHEMA_VERSION,
             "ontology_id": self.registry.definition.ontology_id,
@@ -441,6 +448,7 @@ class AmwayEntityCalibrationService:
         total_valid_answers: int,
         total_platforms: int,
         total_questions: int,
+        coverage: TopicCoverageRecorder | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         nodes: list[dict[str, Any]] = []
         evidence_samples: list[dict[str, Any]] = []
@@ -448,6 +456,8 @@ class AmwayEntityCalibrationService:
         for acc in accumulators.values():
             entity = self.registry.require_entity(acc.entity_id)
             if entity.entity_type in {"CenterBrand", "MarketContext"}:
+                if coverage:
+                    coverage.decide(entity.entity_id, "type_excluded")
                 continue
             acc = self._risk_scoped_accumulator(entity, acc)
             score_components = _score_accumulator(
@@ -486,8 +496,12 @@ class AmwayEntityCalibrationService:
                 "competitive_evidence_count": stance_summary["competitive"],
             }
             if not is_risk and entity.graph_policy.main_orbit == "not_allowed":
+                if coverage:
+                    coverage.decide(entity.entity_id, "graph_policy_excluded", score)
                 continue
             if score < 12 and not is_risk and acc.term_origin != "strategy":
+                if coverage:
+                    coverage.decide(entity.entity_id, "below_threshold", score)
                 continue
             orbit, orbit_label = _orbit_for(score)
             if is_risk:

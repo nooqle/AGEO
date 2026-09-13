@@ -1,0 +1,75 @@
+name: Repair Authorized Recent Topic Reports
+
+on:
+  push:
+    branches: [codex/deepseek41-platform-billing-20260911]
+    paths: [.github/workflows/repair-recent-topic-reports.yml]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Execute the reviewed scoped repair mode.
+        type: choice
+        required: true
+        options: [dry-run, apply, verify, restore]
+      expected_release:
+        description: Exact deployed SHA containing reviewed repair code and scope.
+        type: string
+        required: true
+      expected_manifest_hash:
+        description: Exact reviewed manifest hash; required for apply, verify or restore.
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authorized-amway-topic-repair-20260913
+  cancel-in-progress: false
+
+jobs:
+  register:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Workflow registered; production repair requires explicit dispatch.'
+  repair:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run the bounded operation from the verified production release
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          REPAIR_MODE: ${{ inputs.mode }}
+          EXPECTED_RELEASE: ${{ inputs.expected_release }}
+          EXPECTED_MANIFEST: ${{ inputs.expected_manifest_hash }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_RELEASE" =~ ^[a-f0-9]{40}$ ]] || exit 2
+          case "$REPAIR_MODE" in dry-run|apply|verify|restore) ;; *) exit 2 ;; esac
+          if [[ "$REPAIR_MODE" != dry-run ]]; then
+            [[ "$EXPECTED_MANIFEST" =~ ^[a-f0-9]{64}$ ]] || exit 2
+          fi
+          install -d -m 700 ~/.ssh repair-output
+          key_path=~/.ssh/ageo_topic_repair_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(-i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=2 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          remote="${DEMO_SSH_USER}@${DEMO_SSH_HOST}"
+          release=/srv/ageo-deploy/current
+          # Arguments are validated literals; execute only the deployed immutable code.
+          ssh "${ssh_options[@]}" "$remote" "sudo -n systemd-run --scope --quiet -p MemoryMax=3G -p MemorySwapMax=0 -p CPUQuota=100% timeout --signal=TERM --kill-after=15s 900s '$release/aeo-platform/backend/.venv/bin/python' -B -u '$release/ops/repair-recent-topic-reports.py' --mode '$REPAIR_MODE' --expected-release '$EXPECTED_RELEASE' --repair-id 'amway-topic-coverage-20260913-v1' --package '$release/ops/amway-topic-repair-20260913.json' --inventory '$release/ops/amway-topic-repair-20260913-inventory.json' --expected-manifest-hash '$EXPECTED_MANIFEST'" | tee repair-output/result.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: amway-topic-repair-summary-${{ github.run_id }}
+          path: repair-output/result.jsonl
+          retention-days: 7
+          if-no-files-found: warn

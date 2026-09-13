@@ -17,6 +17,7 @@ import type {
 import { api } from '@/services/api';
 import { COLLECTION_PLATFORMS, defaultPlatformFetchMethods, describePlatformFetchMethods, platformFetchMethodsFromScope, type PlatformFetchMethods } from '@/lib/platformFetchMethods';
 import { semanticTypeLabels } from './amwaySemanticLabels';
+import { AmwayTopicCoveragePanel } from './AmwayTopicCoveragePanel';
 import type {
   OntologyAssociationCircleEvidence,
   OntologyAssociationCircleEvidenceFinding,
@@ -198,6 +199,7 @@ export function AmwayAssociationCircleDashboard({
 }: AmwayAssociationCircleDashboardProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<ConsoleWorkspace>('map');
+  const [lexiconMode, setLexiconMode] = useState<'current' | 'coverage'>('current');
   const [uploadedQuestions, setUploadedQuestions] = useState<UploadedAssociationQuestion[]>([]);
   const [uploadedQuestionSource, setUploadedQuestionSource] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -254,6 +256,11 @@ export function AmwayAssociationCircleDashboard({
   );
   const projection = isRunActive ? liveProjection : officialProjection;
   const nodes = useMemo(() => projection.nodes || [], [projection.nodes]);
+  const topicCoverage = !isRunActive && !periodSelectionUnavailable ? projection.topic_coverage : null;
+  const coverageScopeLabel = PERIOD_OPTIONS.find((option) => option.value === periodType)?.label || '所选分析';
+  const nodeCountLabel = topicCoverage
+    ? `${topicCoverage.included_topic_count} 个主题 + ${topicCoverage.anchor_node_count} 个品牌节点${topicCoverage.other_node_count > 0 ? ` + ${topicCoverage.other_node_count} 个其他节点` : ''}`
+    : `${nodes.length} 个节点`;
   const mapGroups = useMemo(() => buildAssociationMapGroups(nodes), [nodes]);
   const strategyTerms = useMemo(() => buildAssociationStrategyTerms(projection), [projection]);
   const status: CircleStatus = isRunActive
@@ -501,7 +508,18 @@ export function AmwayAssociationCircleDashboard({
           </div>
         </div>
         {workspace === 'lexicon' ? (
-          <AmwayEntityLexiconPanel entityId={selectedEntityId} entityName={selectedEntity.name} />
+          <section className="space-y-4">
+            <div role="group" aria-label="词库与分析记录" className="flex flex-wrap gap-2">
+              {([{ value: 'current', label: '维护当前词库' }, { value: 'coverage', label: '查看所选分析去向' }] as const).map((mode) => <button
+                key={mode.value} type="button" aria-pressed={lexiconMode === mode.value} onClick={() => setLexiconMode(mode.value)}
+                className={`rounded-lg border px-3 py-2 text-sm ${lexiconMode === mode.value ? 'border-[var(--brand-border)] bg-[var(--brand-bg)] text-[var(--brand-primary)]' : 'border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-secondary)]'}`}
+              >{mode.label}</button>)}
+            </div>
+            {lexiconMode === 'current' ? <AmwayEntityLexiconPanel entityId={selectedEntityId} entityName={selectedEntity.name} /> : <AmwayTopicCoveragePanel
+              key={`${selectedEntityId}-${activeCenterTerm}-${periodType}-${periodCustomStart}-${periodCustomEnd}-${topicCoverage?.lexicon_hash || 'unknown'}`}
+              coverage={topicCoverage} scopeLabel={coverageScopeLabel} isLoading={isPeriodLoading}
+            />}
+          </section>
         ) : workspace === 'questions' ? (
           <AmwayQuestionHistoryPanel
             entityId={selectedEntityId}
@@ -541,12 +559,16 @@ export function AmwayAssociationCircleDashboard({
                   <h1 className="text-2xl font-semibold leading-tight tracking-tight">品牌联想图谱</h1>
                   <p className="text-sm tabular-nums text-[var(--text-secondary)]" aria-label="本轮数据范围">
                     {answerCount > 0
-                      ? `${headerStatusLabel} · ${samplePlatformCountFromScope(sampleScope)} 个平台 · ${nodes.length} 个节点`
+                      ? `${headerStatusLabel} · ${samplePlatformCountFromScope(sampleScope)} 个平台 · ${nodeCountLabel}`
                       : headerStatusLabel === '待运行'
                         ? '尚未运行采集，从图谱中心开始'
                         : headerStatusLabel}
                   </p>
                 </div>
+                {!isRunActive && status === 'ready' && <button type="button" onClick={() => { setLexiconMode('coverage'); setWorkspace('lexicon'); }}
+                  className="mt-2 rounded text-sm text-[var(--brand-primary)] underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--brand-primary)]">
+                  {topicCoverage ? `查看 ${topicCoverage.total_topic_count} 个主题的分析去向` : '主题去向未记录 · 查看说明'}
+                </button>}
               </div>
 
               <div className="flex flex-wrap items-center gap-4">

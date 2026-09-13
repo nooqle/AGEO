@@ -1,0 +1,30 @@
+{
+  "repair_id": "amway-topic-coverage-20260913-v1",
+  "entity_id": "70eec83d-a767-4c99-8f28-0a068bfcc8a8",
+  "start_utc": "2026-09-06T04:44:53.363747+00:00",
+  "end_utc": "2026-09-13T04:44:53.363747+00:00",
+  "expected_lexicon_hash": "b44fed9296dbe946fea3ef0e96a5973db3fdbab4045d97fa90428a3d8cc314d7",
+  "expected_target_lexicon_hash": "4c9fc12095c33256abfd94a3f41b2f8ac4ba2de3fc4fcc176815e49f399854f2",
+  "expected_run_count": 7,
+  "expected_report_count": 11,
+  "updates": [
+    {
+      "entity_id": "strategy_active_health",
+      "review_status": "approved"
+    },
+    {
+      "entity_id": "touchpoint_sports_area",
+      "match_exclusions": [
+        "运动区间"
+      ]
+    },
+    {
+      "entity_id": "touchpoint_national_experience_centers",
+      "aliases": [
+        "安利体验馆",
+        "安利体验店",
+        "安利体验中心"
+      ]
+    }
+  ]
+}

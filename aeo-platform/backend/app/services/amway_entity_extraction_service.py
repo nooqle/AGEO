@@ -330,15 +330,12 @@ class AmwayEntityExtractionService:
         return list(matched.values())
 
     def _build_candidates(self, *, source_side: str) -> list[_CandidateTerm]:
+        from app.services.amway_topic_coverage import extraction_eligibility_reason
+
         candidates: list[_CandidateTerm] = []
         seen: set[tuple[str, str]] = set()
         for entity in self.registry.entities:
-            if entity.review_status != "approved":
-                continue
-            if entity.semantic_definition and entity.semantic_definition.match_policy == "disabled":
-                continue
-            entity_type = self.registry.get_entity_type(entity.entity_type)
-            if entity_type is None or source_side not in entity_type.extractable_from:
+            if extraction_eligibility_reason(entity, self.registry, source_side):
                 continue
             terms = [
                 (entity.canonical_name, "canonical_name"),
@@ -382,7 +379,8 @@ def _matched_candidates(candidates: list[_CandidateTerm], text: str) -> list[tup
                 (term[0].isascii() and term[0].isalnum() and start_raw > 0 and text[start_raw - 1].isascii() and text[start_raw - 1].isalnum())
                 or (term[-1].isascii() and term[-1].isalnum() and end_raw < len(text) and text[end_raw].isascii() and text[end_raw].isalnum())
             )
-            if boundary_ok and _identity_context_matches(candidate.entity, text, start_raw, end_raw):
+            if (boundary_ok and not _match_is_excluded(candidate.entity, compact, offset, end)
+                    and _identity_context_matches(candidate.entity, text, start_raw, end_raw)):
                 spans.setdefault((start_raw, end_raw), []).append(candidate)
             offset = compact.find(term, offset + 1)
     selected, covered = [], []
@@ -395,6 +393,18 @@ def _matched_candidates(candidates: list[_CandidateTerm], text: str) -> list[tup
         if len({candidate.entity.entity_id for candidate in matches}) == 1:
             selected.append((matches[0], start, end))
     return selected
+
+
+def _match_is_excluded(entity, compact_text: str, start: int, end: int) -> bool:
+    semantic = entity.semantic_definition
+    for phrase in semantic.match_exclusions if semantic else ():
+        phrase = _compact(phrase)
+        # Only an occurrence containing this match excludes it. A genuine mention
+        # elsewhere in the same answer remains eligible, even beside a negative one.
+        offset = compact_text.find(phrase, max(0, end - len(phrase)), start + len(phrase))
+        if offset >= 0 and offset <= start and offset + len(phrase) >= end:
+            return True
+    return False
 
 
 def _identity_context_matches(entity, text: str, start: int, end: int) -> bool:

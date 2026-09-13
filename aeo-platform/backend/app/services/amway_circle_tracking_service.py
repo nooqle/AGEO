@@ -40,6 +40,7 @@ from app.services.amway_entity_calibration_service import (
 )
 from app.services.amway_entity_extraction_service import EXTRACTION_SCHEMA_VERSION
 from app.services.amway_topic_projection import topic_support_summary
+from app.services.amway_topic_coverage import aggregate_topic_coverage
 from app.tools.a4_fetch_agent import normalize_public_platform_id
 from app.workflow.a5.association_circle import (
     REPORT_COPY_CONSTRAINT_VERSION,
@@ -2433,6 +2434,9 @@ def _aggregate_projection(
                 "comparison_notice": "所选轮次的词库或抽取口径不同，请查看单轮结果。",
                 "version_groups": sorted({_semantic_version(value) for _, value in bodies})}
     body["nodes"] = _aggregate_nodes(list(reversed(bodies)))
+    coverage = aggregate_topic_coverage(bodies, body["nodes"])
+    if coverage is not None:
+        body["topic_coverage"] = coverage
     question_bank = _aggregate_question_bank(bodies)
     # 实时聚合路径同样需要携带证据与答案原文（报告路径 _build_period_report_artifact
     # 有相同逻辑），否则 period view 的 projection 会丢 source_appendix/evidence_samples。
@@ -3072,6 +3076,7 @@ def _build_period_report_artifact(
         "sample_questions": question_bank[:8],
     }
     report_input = {
+        **({"topic_coverage": body["topic_coverage"]} if "topic_coverage" in body else {}),
         "question_scope": question_scope,
         "platform_scope": platform_scope,
         "association_map": {

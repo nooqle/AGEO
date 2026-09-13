@@ -3,6 +3,7 @@ from collections import defaultdict
 from typing import Any
 
 from app.ontology import AmwayEntityOntologyRegistry
+from app.services.amway_topic_coverage import TopicCoverageRecorder
 
 
 def topic_support_summary(contributions: list[dict]) -> dict:
@@ -20,7 +21,11 @@ def topic_support_summary(contributions: list[dict]) -> dict:
     }
 
 
-def project_topic_signals(signals: list[dict], registry: AmwayEntityOntologyRegistry) -> list[dict]:
+def project_topic_signals(
+    signals: list[dict], registry: AmwayEntityOntologyRegistry, *,
+    excluded_relation_types: set[str] | frozenset[str] = frozenset(),
+    coverage: TopicCoverageRecorder | None = None,
+) -> list[dict]:
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for signal in signals:
         entity = registry.get_entity(str(signal.get("entity_id") or ""))
@@ -37,7 +42,20 @@ def project_topic_signals(signals: list[dict], registry: AmwayEntityOntologyRegi
                 target = registry.require_entity(mapping.target_entity_id)
                 if mapping.review_status == "approved" and target.review_status == "approved":
                     targets.append((target, mapping))
+                elif coverage:
+                    coverage.record(target.entity_id, "mapping_excluded", signal)
         for target, mapping in targets:
+            if target.semantic_definition and target.semantic_definition.match_policy == "disabled":
+                if coverage:
+                    coverage.record(target.entity_id, "matching_disabled", signal)
+                continue
+            relation = str(signal.get("relation_type") or "")
+            if relation in excluded_relation_types:
+                if coverage:
+                    coverage.record(target.entity_id, relation.lower(), signal)
+                continue
+            if coverage:
+                coverage.record(target.entity_id, "accepted", signal)
             contribution = {
                 "entity_id": entity.entity_id, "entity_name": entity.canonical_name,
                 "semantic_type": semantic.semantic_type if semantic else None,

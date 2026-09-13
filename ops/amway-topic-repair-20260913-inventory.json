@@ -1,0 +1,187 @@
+{
+  "entity_id": "70eec83d-a767-4c99-8f28-0a068bfcc8a8",
+  "start_utc": "2026-09-06T04:44:53.363747+00:00",
+  "end_utc": "2026-09-13T04:44:53.363747+00:00",
+  "runs": [
+    {
+      "run_id": "e05ce437-1246-446a-9801-99a9a81f946f",
+      "snapshot_id": "66245b1e-b9d3-4690-a817-3570a559c9ef",
+      "answer_hash": "edd19541c7bba92f7956118b000a62ad8c0b7c2a8221f6932c9fd176efc055f6",
+      "completed_at": "2026-09-08 06:27:05.418398+00:00",
+      "question_count": 1,
+      "valid_answer_count": 3
+    },
+    {
+      "run_id": "440cf491-947b-4987-873c-adeb94d3cfd1",
+      "snapshot_id": "a737b5fd-49ab-4e56-831b-a0b99065c084",
+      "answer_hash": "74fd52f870e89c77fc543de3260fdafd889ec79c846253489972f0359202ccd7",
+      "completed_at": "2026-09-08 09:01:09.711172+00:00",
+      "question_count": 32,
+      "valid_answer_count": 71
+    },
+    {
+      "run_id": "18608c98-4e79-40ad-bd1e-21ed3445b5e6",
+      "snapshot_id": "08b36f13-43f2-47e6-934a-0cd7bf2cc44f",
+      "answer_hash": "86e002341bf737d154c9946f903cf22ad847bb0c8828b1247e0d411be36a8124",
+      "completed_at": "2026-09-08 09:57:22.693067+00:00",
+      "question_count": 32,
+      "valid_answer_count": 49
+    },
+    {
+      "run_id": "442ae6cc-180d-4ea2-b8e1-82e38a775618",
+      "snapshot_id": "962b3332-ad4a-46c6-b636-a74d17b214db",
+      "answer_hash": "63e669328b0cc0d57c2cdf8f3b2e387811505e46023377498ca0eb4a720c6e3b",
+      "completed_at": "2026-09-10 04:18:06.686164+00:00",
+      "question_count": 32,
+      "valid_answer_count": 53
+    },
+    {
+      "run_id": "839d3903-33fb-4a1f-9774-634820df7eb6",
+      "snapshot_id": "c9ec25f8-3356-47cc-a4a6-7e5f249bae22",
+      "answer_hash": "b48d038933b7a093756e592d9b0a049f93e2bfaf7f61b346540833107f19ab24",
+      "completed_at": "2026-09-12 03:23:26.264156+00:00",
+      "question_count": 32,
+      "valid_answer_count": 96
+    },
+    {
+      "run_id": "44161730-0898-4633-b3e5-c56c4130f280",
+      "snapshot_id": "86cd0713-0e16-4a58-8b05-a3a6dd16d1de",
+      "answer_hash": "2e41c9f88d249c71d7244b6d1658091830644411856bd58e365a7562c9128981",
+      "completed_at": "2026-09-12 17:44:27.623583+00:00",
+      "question_count": 32,
+      "valid_answer_count": 66
+    },
+    {
+      "run_id": "ed8b9367-1baf-4cd9-ad0b-5c56a36a6b0f",
+      "snapshot_id": "6a0bcbc6-7ec9-4783-94b3-50caf501715f",
+      "answer_hash": "f13689c53e86369b15ab8c5271ea3ca46f4f110d85cb82e1ec6e999d903aa6e1",
+      "completed_at": "2026-09-13 03:08:21.894006+00:00",
+      "question_count": 32,
+      "valid_answer_count": 128
+    }
+  ],
+  "reports": [
+    {
+      "id": "cdaac09c-e082-438a-af1c-d5c0d6135a0c",
+      "projection_id": "fe71cc8c-88de-4ccb-a9d6-a0e675d5ad0f",
+      "circle_run_id": null,
+      "report_scope": "period_view",
+      "created_at": "2026-09-07 02:48:44.036821+00:00"
+    },
+    {
+      "id": "f3726ff2-bada-4ada-90dc-f049faa70535",
+      "projection_id": "094a1f48-e8cf-4785-9fd7-b1732c5a0eeb",
+      "circle_run_id": null,
+      "report_scope": "period_view",
+      "created_at": "2026-09-08 07:56:11.195205+00:00"
+    },
+    {
+      "id": "76bf50ed-c073-4bbb-a91a-dd7b3ab2260e",
+      "projection_id": "9b37ad9e-189b-427b-8ae5-d8789405e454",
+      "circle_run_id": null,
+      "report_scope": "period_view",
+      "created_at": "2026-09-10 03:25:09.758637+00:00"
+    },
+    {
+      "id": "19ece1c4-b4bb-4851-999f-3923502c0475",
+      "projection_id": "bdde1ca9-9a7d-4eea-a76d-07e16fefc7aa",
+      "circle_run_id": null,
+      "report_scope": "period_view",
+      "created_at": "2026-09-13 03:35:05.395250+00:00"
+    },
+    {
+      "id": "59f97430-226a-4fb8-ae01-671933d2b3e0",
+      "projection_id": "5f101f38-1e1d-4cd3-8319-bd12a403b718",
+      "circle_run_id": "e05ce437-1246-446a-9801-99a9a81f946f",
+      "report_scope": "run",
+      "created_at": "2026-09-08 06:27:08.102462+00:00"
+    },
+    {
+      "id": "da8066b9-169f-4a8b-9f0a-d278f15122f0",
+      "projection_id": "3457e98b-9c35-4e2b-98a5-59fcaa115d9e",
+      "circle_run_id": "440cf491-947b-4987-873c-adeb94d3cfd1",
+      "report_scope": "run",
+      "created_at": "2026-09-08 09:01:13.676757+00:00"
+    },
+    {
+      "id": "29ef3a5d-9693-4290-98b3-140ee6d05763",
+      "projection_id": "d5331f1e-70fd-4f7b-937c-fdccad9dadda",
+      "circle_run_id": "18608c98-4e79-40ad-bd1e-21ed3445b5e6",
+      "report_scope": "run",
+      "created_at": "2026-09-08 09:57:25.920652+00:00"
+    },
+    {
+      "id": "3e4534f3-c29b-4bc4-9346-c31bdaaec01b",
+      "projection_id": "2d4182b9-4625-4d2b-bdd3-6990289cca91",
+      "circle_run_id": "442ae6cc-180d-4ea2-b8e1-82e38a775618",
+      "report_scope": "run",
+      "created_at": "2026-09-10 04:18:10.351243+00:00"
+    },
+    {
+      "id": "94c86b48-40c0-48dc-8e4e-8e9d813fdb65",
+      "projection_id": "7ff70a09-5d80-4ab5-abb0-c6d6aab85036",
+      "circle_run_id": "839d3903-33fb-4a1f-9774-634820df7eb6",
+      "report_scope": "run",
+      "created_at": "2026-09-12 03:23:29.819913+00:00"
+    },
+    {
+      "id": "4031ee38-11f6-41e4-a2c2-03b0879c8897",
+      "projection_id": "6d3662ec-14bc-4c41-8ef5-e70922f8ab1d",
+      "circle_run_id": "44161730-0898-4633-b3e5-c56c4130f280",
+      "report_scope": "run",
+      "created_at": "2026-09-12 17:44:29.964468+00:00"
+    },
+    {
+      "id": "6fe55826-d29a-4052-9ed4-f2f785dc1a18",
+      "projection_id": "f30deb53-d635-494a-bad3-6c6b332b5d33",
+      "circle_run_id": "ed8b9367-1baf-4cd9-ad0b-5c56a36a6b0f",
+      "report_scope": "run",
+      "created_at": "2026-09-13 03:08:26.392781+00:00"
+    }
+  ],
+  "brand_report_versions": [
+    {
+      "id": "f7943ce3-c333-4af2-a28c-a6d076cda12d",
+      "message_id": "39587672-6263-48c0-ac79-2c8fd33194a3",
+      "report_id": "9537a105-e300-443e-a625-6072c9160d5a_report_brand_association_circle",
+      "created_at": "2026-09-08 06:27:06.894831+00:00"
+    },
+    {
+      "id": "c123465e-2498-428b-818b-87ccf1b2e22e",
+      "message_id": "07c2d32f-3a7a-4ab3-b89f-abcd8a8fe0d9",
+      "report_id": "4eeb891b-5e5f-4557-aeb5-1ffa0a6c2d90_report_brand_association_circle",
+      "created_at": "2026-09-08 09:01:11.915622+00:00"
+    },
+    {
+      "id": "fbc2a874-5386-4f5e-8b7d-523d9dcde1e1",
+      "message_id": "ea6705e7-e27f-471f-916d-934d875a92bc",
+      "report_id": "09f448a7-4947-4ba7-9d68-98f44cbde052_report_brand_association_circle",
+      "created_at": "2026-09-08 09:57:24.410622+00:00"
+    },
+    {
+      "id": "c01816a9-bb90-40cf-84a7-8aa2ea577147",
+      "message_id": "53243556-3ebc-4b63-85ab-9f568f25375b",
+      "report_id": "b8b4a9a6-d5d7-4d06-a1a6-2bc0a975df4d_report_brand_association_circle",
+      "created_at": "2026-09-10 04:18:08.881554+00:00"
+    },
+    {
+      "id": "e3e40dd4-e451-445f-b923-5f4cd8b1cf3e",
+      "message_id": "3cefca19-6d32-499f-a432-a9bbbe634d6b",
+      "report_id": "02b61c06-07b2-4cbe-be30-af318e56329b_report_brand_association_circle",
+      "created_at": "2026-09-12 03:23:27.924114+00:00"
+    },
+    {
+      "id": "4d6ae2cb-5fdf-40fe-a4a0-e0a5d0dc0383",
+      "message_id": "ea106d28-d114-4471-808b-82d157e1829e",
+      "report_id": "028210ef-629e-4136-8e00-873163128d2a_report_brand_association_circle",
+      "created_at": "2026-09-12 17:44:28.911640+00:00"
+    },
+    {
+      "id": "e15de367-b2cf-4222-b8bf-6bb11296a2e8",
+      "message_id": "4947ae6d-59a2-49d9-af7c-8b2632afa5bb",
+      "report_id": "d442b5a8-0f00-4260-be1c-5c9ede3fd527_report_brand_association_circle",
+      "created_at": "2026-09-13 03:08:24.378490+00:00"
+    }
+  ],
+  "exports": []
+}

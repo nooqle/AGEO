@@ -52,7 +52,7 @@ const EMPTY_FORM: LexiconFormState = {
 
 const REVIEW_STATUS_LABELS: Record<string, string> = {
   approved: '已确认',
-  pending_review: '待复核',
+  pending_review: '待复核（不参与识别）',
   rejected: '已排除',
   merged: '已合并',
 };
@@ -214,7 +214,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
         eyebrow="实体词库"
         title="安利主题与对象索引"
         description="主图按分析主题聚合；产品、原料、工具等对象保留独立身份，通过主题下钻查看。"
-        meta={`${entityName || data?.entity_name || '安利实体'} · 名称与同义名称调整后，下一轮分析生效`}
+        meta={`${entityName || data?.entity_name || '安利实体'} · 名称、同义名称与审核状态调整后，下一轮分析生效`}
         action={
           <div className="flex items-center gap-2">
             <button
@@ -305,7 +305,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                         </h3>
                         <StatusPill label={entry.semantic_definition ? view === 'topics' ? '分析主题' : view === 'context' ? entry.semantic_definition.graph_role === 'anchor' ? '品牌锚点' : '上下文' : semanticTypeLabels[entry.semantic_definition.semantic_type] || entry.semantic_definition.semantic_type : '未分类（旧版）'} tone="neutral" />
                         <StatusPill
-                          label={lexiconStatusLabels[entry.review_status] || entry.review_status}
+                          label={entry.review_status === 'pending_review' ? '待复核 · 不参与识别' : lexiconStatusLabels[entry.review_status] || entry.review_status}
                           tone={entry.review_status === 'approved' ? 'success' : 'warning'}
                         />
                       </div>
@@ -364,13 +364,13 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
           </div>
         </div>
 
-        <aside ref={detailRef} tabIndex={-1} aria-label="词条详情与名称维护" className="amway-surface min-w-0 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--brand-primary)]">
+        <aside ref={detailRef} tabIndex={-1} aria-label="词条详情与审核维护" className="amway-surface min-w-0 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--brand-primary)]">
           {editingId ? (
             <div className="space-y-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-xs font-medium text-[var(--text-tertiary)]">
-                    {editingId === '__new__' ? '新增旧版词条' : '名称与同义名称维护'}
+                    {editingId === '__new__' ? '新增旧版词条' : '名称、别名与审核状态维护'}
                   </div>
                   <h2 className="mt-1 text-lg font-semibold">{editingId === '__new__' ? '旧版词条维护' : editingEntry?.canonical_name}</h2>
                 </div>
@@ -445,6 +445,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                     </option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">只有已确认词条参与识别。待复核、已排除和已合并词条不参与下一轮抽取；保存不会自动重算历史报告。</p>
               </LexiconField>
               {formError ? <InlineError message={formError} /> : null}
               <button
@@ -464,6 +465,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                 <button type="button" aria-label="关闭词条详情" onClick={() => setSelectedEntryId(null)} className="rounded-lg border border-[var(--border-subtle)] p-2"><X size={16} /></button>
               </div>
               <p>别名：{selectedEntry.aliases.join('、') || '无'}</p>
+              <p>审核状态：{REVIEW_STATUS_LABELS[selectedEntry.review_status] || selectedEntry.review_status}</p>
               <p>{selectedEntry.description || '暂无定义说明'}</p>
               {selectedEntry.semantic_definition ? <>
                 <p>对象类型：{semanticTypeLabels[selectedEntry.semantic_definition.semantic_type] || selectedEntry.semantic_definition.semantic_type}</p>
@@ -495,7 +497,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                 <p>旧主图策略：{graphPolicyLabel(selectedEntry.graph_policy?.main_orbit)}</p>
                 <p>旧风险图策略：{graphPolicyLabel(selectedEntry.graph_policy?.risk_view)}</p>
               </details>
-              <button type="button" disabled={isSaving} onClick={() => beginEdit(selectedEntry)} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm"><Edit3 size={14} />名称与同义名称维护</button>
+              <button type="button" disabled={isSaving} onClick={() => beginEdit(selectedEntry)} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm"><Edit3 size={14} />名称、别名与审核状态维护</button>
             </div>
           ) : (
             <div className="rounded-xl bg-[var(--bg-secondary)] p-4 text-sm leading-6 text-[var(--text-secondary)]">
@@ -504,7 +506,7 @@ export function AmwayEntityLexiconPanel({ entityId, entityName }: AssetPanelProp
                 先查看分析主题，再展开关联对象。点击对象名称可查看其独立身份、主题归属与来源；对象索引支持按类型和主题筛选。
               </p>
               <p className="mt-3">
-                名称与同义名称维护会影响下一轮分析。删除会在当前品牌下隐藏词条；旧业务分类仅保留在历史详情中。
+                名称、别名与审核状态维护会影响下一轮分析。待复核词条不参与识别。删除会在当前品牌下隐藏词条；旧业务分类仅保留在历史详情中。
               </p>
             </div>
           )}

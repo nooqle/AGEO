@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 
 MainOrbitPolicy = Literal[
@@ -90,6 +90,7 @@ class AmwaySemanticDefinition(BaseModel):
     identity_scope: str = Field(min_length=1)
     match_policy: Literal["exact", "contextual", "disabled"] = "disabled"
     context_terms: tuple[str, ...] = ()
+    match_exclusions: tuple[str, ...] = ()
     graph_role: Literal["topic", "object", "context", "anchor"]
     merged_into: str | None = None
     repair_id: str | None = None
@@ -104,7 +105,17 @@ class AmwaySemanticDefinition(BaseModel):
             raise ValueError("contextual matching requires context_terms")
         if self.semantic_type == "unresolved" and self.match_policy != "disabled":
             raise ValueError("unresolved identities cannot match automatically")
+        if any(len("".join(term.split())) < 2 for term in self.match_exclusions):
+            raise ValueError("match exclusions require nonempty containing phrases")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_matching(self, handler):
+        payload = handler(self)
+        # Adding an optional matching rule must not invalidate historical hashes.
+        if not self.match_exclusions:
+            payload.pop("match_exclusions", None)
+        return payload
 
 
 class AmwayEntityDefinition(BaseModel):
