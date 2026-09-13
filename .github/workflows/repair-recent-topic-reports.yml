@@ -64,12 +64,38 @@ jobs:
           ssh_options=(-i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=2 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
           remote="${DEMO_SSH_USER}@${DEMO_SSH_HOST}"
           release=/srv/ageo-deploy/current
-          # Arguments are validated literals; execute only the deployed immutable code.
-          ssh "${ssh_options[@]}" "$remote" "sudo -n systemd-run --scope --quiet -p MemoryMax=3G -p MemorySwapMax=0 -p CPUQuota=100% timeout --signal=TERM --kill-after=15s 900s '$release/aeo-platform/backend/.venv/bin/python' -B -u '$release/ops/repair-recent-topic-reports.py' --mode '$REPAIR_MODE' --expected-release '$EXPECTED_RELEASE' --repair-id 'amway-topic-coverage-20260913-v1' --package '$release/ops/amway-topic-repair-20260913.json' --inventory '$release/ops/amway-topic-repair-20260913-inventory.json' --expected-manifest-hash '$EXPECTED_MANIFEST'" | tee repair-output/result.jsonl
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || exit 2
+          unit="ageo-topic-repair-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          directory=/srv/ageo-deploy/shared/runtime/topic-repairs/amway-topic-coverage-20260913-v1
+          output="$directory/$unit.jsonl"
+          # A named service survives an SSH interruption. Each attempt has one
+          # unique unit; uncertain starts are inspected, never blindly repeated.
+          start_status=0
+          ssh "${ssh_options[@]}" "$remote" "sudo -n install -d -m 700 '$directory' && sudo -n systemd-run --unit='$unit' --quiet -p Type=exec -p RemainAfterExit=yes -p MemoryMax=3G -p MemorySwapMax=0 -p CPUQuota=100% -p RuntimeMaxSec=900 -p TimeoutStopSec=15 -p UMask=0077 -p StandardOutput=append:'$output' -p StandardError=journal '$release/aeo-platform/backend/.venv/bin/python' -B -u '$release/ops/repair-recent-topic-reports.py' --mode '$REPAIR_MODE' --expected-release '$EXPECTED_RELEASE' --repair-id 'amway-topic-coverage-20260913-v1' --package '$release/ops/amway-topic-repair-20260913.json' --inventory '$release/ops/amway-topic-repair-20260913-inventory.json' --expected-manifest-hash '$EXPECTED_MANIFEST'" || start_status=$?
+          echo "start_transport_status=$start_status unit=$unit"
+          finished=false
+          for attempt in $(seq 1 66); do
+            state=$(ssh "${ssh_options[@]}" "$remote" "sudo -n systemctl show '$unit.service' -p LoadState -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p MemoryPeak" 2>/dev/null) || state='transport_unavailable'
+            printf '%s\n' "$state" > repair-output/service-state.txt
+            if grep -q '^SubState=exited$\|^ActiveState=failed$\|^ActiveState=inactive$' <<< "$state"; then
+              finished=true
+              break
+            fi
+            if grep -q '^LoadState=not-found$' <<< "$state" && (( attempt >= 3 )); then break; fi
+            sleep 15
+          done
+          cat repair-output/service-state.txt
+          # Only this runner's safe JSON stdout is retrieved. Full row backups
+          # and stderr remain on the server, including after connection loss.
+          ssh "${ssh_options[@]}" "$remote" "sudo -n cat '$output'" > repair-output/result.jsonl
+          cat repair-output/result.jsonl
+          [[ "$finished" == true ]] || exit 3
+          grep -q '^Result=success$' repair-output/service-state.txt
+          grep -q '^ExecMainStatus=0$' repair-output/service-state.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: amway-topic-repair-summary-${{ github.run_id }}
-          path: repair-output/result.jsonl
+          path: repair-output/
           retention-days: 7
           if-no-files-found: warn
