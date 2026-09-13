@@ -45,9 +45,19 @@ async def inventory(helper):
                 func.coalesce(AmwayCircleRun.completed_at, AmwayCircleRun.created_at) < start,
             ))
             result = {"entity_id": str(helper.ENTITY_ID), "start_utc": start.isoformat(), "end_utc": end.isoformat(),
-                      "runs": [], "reports": [], "old_run_count": old_run_count,
+                      "runs": [], "source_runs": [], "reports": [], "old_run_count": old_run_count,
                       "current_lexicon": (await AmwayEntityLexiconService(db).registry_for_entity(helper.ENTITY_ID)).snapshot()}
-            for run in runs:
+            source_ids = set()
+            target_ids = {run.id for run in runs}
+            for report in reports:
+                projection = await db.get(AmwayCircleProjection, report.projection_id)
+                if projection:
+                    from uuid import UUID
+                    source_ids.update(UUID(str(value)) for value in projection.source_run_ids or [])
+            old_sources = list((await db.scalars(select(AmwayCircleRun).where(
+                AmwayCircleRun.entity_id == helper.ENTITY_ID, AmwayCircleRun.id.in_(source_ids - target_ids)
+            ))).all())
+            for run in [*runs, *old_sources]:
                 brand = await db.get(BrandIntelligenceRun, run.brand_intelligence_run_id) if run.brand_intelligence_run_id else None
                 task = await db.get(AnalysisTask, run.analysis_task_id) if run.analysis_task_id else None
                 snapshot_id = (brand.output_refs or {}).get("snapshot_id") if brand else None
@@ -72,7 +82,7 @@ async def inventory(helper):
                        "answers": helper.safe_answers(answers),
                        "projections": [{"id": str(p.id), "scope": p.projection_scope,
                                         "node_count": len((p.association_circle_projection or {}).get("nodes") or [])} for p in projections]}
-                result["runs"].append(row)
+                result["runs" if run.id in target_ids else "source_runs"].append(row)
             for report in reports:
                 projection = await db.get(AmwayCircleProjection, report.projection_id)
                 item = {key: getattr(report, key) for key in (
@@ -119,6 +129,8 @@ if __name__ == "__main__":
             return await asyncio.wait_for(inventory(helper), timeout=180)
         result = asyncio.run(bounded())
         result["release_sha"] = args.expected_release
+        result["memory_kb"] = {line.split(':')[0]: int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()
+                               if line.startswith(('MemTotal:', 'MemAvailable:', 'SwapFree:'))}
         if Path("/srv/ageo-deploy/current/.release-sha").read_text().strip() != args.expected_release:
             raise ValueError("release_changed")
         destination = output / "inventory.json"
