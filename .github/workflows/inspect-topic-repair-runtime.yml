@@ -37,10 +37,16 @@ jobs:
           journalctl -k --since '2026-09-13 05:20:00 UTC' --no-pager | grep -Ei 'oom|out of memory|killed process|memory cgroup' | tail -n 20 || true
           journalctl --since '2026-09-13 05:20:00 UTC' -u 'run-*.scope' --no-pager | tail -n 30
           systemctl list-units --all --type=scope --no-pager | grep -E 'run-|session-' || true
+          for unit in $(systemctl list-units --all --type=service --plain --no-legend 'ageo-topic-repair-*' | awk '{print $1}'); do
+            systemctl show "$unit" -p Id -p ActiveState -p SubState -p Result -p ExecMainStatus -p MemoryCurrent -p MemoryPeak
+          done
           ps -eo pid,ppid,rss,etime,args | grep '[r]epair-recent-topic-reports.py' || true
           directory=/srv/ageo-deploy/shared/runtime/topic-repairs/amway-topic-coverage-20260913-v1
           if test -d "$directory"; then
             find "$directory" -maxdepth 1 -type f -printf '%f %s bytes mode=%m\n'
+            for output in "$directory"/ageo-topic-repair-*.jsonl; do
+              if test -f "$output"; then tail -n 3 "$output"; fi
+            done
             if test -f "$directory/summary.json"; then cat "$directory/summary.json"; fi
           fi
           REMOTE
