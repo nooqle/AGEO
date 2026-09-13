@@ -66,7 +66,11 @@ def cdp_endpoint(base: str, reported: str) -> str:
         raise ProbeFailure("cdp_endpoint_rejected")
     # Only AIO's same-origin /cdp proxy is admitted. Metadata aliases never
     # receive credentials, and arbitrary devtools hosts/paths are not followed.
-    if endpoint.path not in {"/cdp", "/cdp/"}:
+    browser_proxy = re.fullmatch(
+        r"/cdp/devtools/browser/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{12}", endpoint.path,
+    )
+    if endpoint.path not in {"/cdp", "/cdp/"} and browser_proxy is None:
         raise ProbeFailure("cdp_proxy_path_unsupported")
     if endpoint.hostname not in {None, trusted.hostname, "localhost"}:
         try:
