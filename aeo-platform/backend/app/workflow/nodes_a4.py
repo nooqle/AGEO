@@ -17,9 +17,10 @@ import logging
 import os
 import random
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Coroutine, Iterator, Literal
+from typing import Any, AsyncIterator, Callable, Coroutine, Iterator, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -1709,10 +1710,11 @@ class _ProgressTracker:
         """Record one API task completion and emit progress event."""
         self.completed += 1
         logger.info(
-            "[A4] ProgressTracker: %s completed (%d/%d)",
+            "[A4] ProgressTracker: %s completed (%d/%d) task=%s",
             platform,
             self.completed,
             self.total_tasks,
+            self.task_id,
         )
         self._platform_done[platform] = self._platform_done.get(platform, 0) + 1
 
@@ -1798,12 +1800,18 @@ async def _tracked_api_fetch(
     tracker: _ProgressTracker,
 ) -> dict[str, Any]:
     """Wrap an API fetch coroutine to report completion via tracker."""
-    logger.info("[A4] _tracked_api_fetch started for %s", platform)
+    logger.info(
+        "[A4] _tracked_api_fetch started for %s task=%s", platform, tracker.task_id
+    )
     try:
         result = await coro
-        return result
-    finally:
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         await tracker.record_completion(platform)
+        raise
+    await tracker.record_completion(platform)
+    return result
 
 
 async def _tracked_api_fetch_with_context(
@@ -1819,6 +1827,32 @@ async def _tracked_api_fetch_with_context(
     except Exception as exc:
         return q_idx, platform, None, exc
     return q_idx, platform, result, None
+
+
+@asynccontextmanager
+async def _managed_api_fetch_tasks(
+    coroutines: list[Coroutine[Any, Any, dict[str, Any]]],
+    task_map: list[tuple[int, str]],
+    tracker: _ProgressTracker,
+) -> AsyncIterator[list[asyncio.Task]]:
+    """Keep API children within their run, including during result persistence."""
+    tasks: list[asyncio.Task] = []
+    try:
+        for coro, (q_idx, platform) in zip(coroutines, task_map):
+            tasks.append(asyncio.create_task(
+                _tracked_api_fetch_with_context(q_idx, platform, coro, tracker)
+            ))
+        yield tasks
+    finally:
+        # as_completed does not cancel its children when the parent is cancelled.
+        # Cancel every waiter before yielding so none can take a released slot.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        # A wrapper cancelled before its first step never awaits its coroutine.
+        for coro in coroutines:
+            coro.close()
 
 
 def _get_browser_timeout(platform: str) -> float:
@@ -3268,64 +3302,71 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                 api_tasks = []
                 api_task_map: list[tuple[int, str]] = []  # (question_idx, platform)
-                for idx, question in enumerate(questions):
-                    question_id = _question_id_from_state_question(question)
-                    allowed_platforms = question_platform_targets.get(question_id)
-                    q_text = question.get("text", "")
-                    for failed_platform, init_error in api_init_errors.items():
-                        if allowed_platforms and failed_platform not in allowed_platforms:
-                            continue
-                        failed_result = _attach_aio_platform_packet(
-                            {"platform": failed_platform, "fetch_method": "api", "success": False,
-                             "error": init_error, "error_type": "api_initialization_failed"},
-                            question=question, request=aio_fetch_request,
-                        )
-                        question_results[idx].append(failed_result)
-                        await _persist_incremental_fetch_result(idx, failed_result, event_source="api")
-                    if deepseek_client is not None and (not allowed_platforms or "deepseek" in allowed_platforms):
-                        api_tasks.append(_throttled_retry_fetch(
-                            _fetch_from_deepseek, deepseek_client, q_text, platform="deepseek", method="api",
-                        ))
-                        api_task_map.append((idx, "deepseek"))
-                    if doubao_client is not None and (
-                        not allowed_platforms or "doubao" in allowed_platforms
-                    ):
-                        api_tasks.append(
-                            _throttled_retry_fetch(
-                                _fetch_from_doubao,
-                                doubao_client,
-                                q_text,
-                                platform="doubao",
-                                method="api",
+                try:
+                    for idx, question in enumerate(questions):
+                        question_id = _question_id_from_state_question(question)
+                        allowed_platforms = question_platform_targets.get(question_id)
+                        q_text = question.get("text", "")
+                        for failed_platform, init_error in api_init_errors.items():
+                            if allowed_platforms and failed_platform not in allowed_platforms:
+                                continue
+                            failed_result = _attach_aio_platform_packet(
+                                {"platform": failed_platform, "fetch_method": "api", "success": False,
+                                 "error": init_error, "error_type": "api_initialization_failed"},
+                                question=question, request=aio_fetch_request,
                             )
-                        )
-                        api_task_map.append((idx, "doubao"))
-                    if hunyuan_client is not None and (
-                        not allowed_platforms or "hunyuan" in allowed_platforms
-                    ):
-                        api_tasks.append(
-                            _throttled_retry_fetch(
-                                _fetch_from_hunyuan,
-                                hunyuan_client,
-                                q_text,
-                                platform="hunyuan",
-                                method="api",
+                            question_results[idx].append(failed_result)
+                            await _persist_incremental_fetch_result(idx, failed_result, event_source="api")
+                        if deepseek_client is not None and (not allowed_platforms or "deepseek" in allowed_platforms):
+                            api_tasks.append(_throttled_retry_fetch(
+                                _fetch_from_deepseek, deepseek_client, q_text, platform="deepseek", method="api",
+                            ))
+                            api_task_map.append((idx, "deepseek"))
+                        if doubao_client is not None and (
+                            not allowed_platforms or "doubao" in allowed_platforms
+                        ):
+                            api_tasks.append(
+                                _throttled_retry_fetch(
+                                    _fetch_from_doubao,
+                                    doubao_client,
+                                    q_text,
+                                    platform="doubao",
+                                    method="api",
+                                )
                             )
-                        )
-                        api_task_map.append((idx, "hunyuan"))
-                    if kimi_client is not None and (
-                        not allowed_platforms or "kimi" in allowed_platforms
-                    ):
-                        api_tasks.append(
-                            _throttled_retry_fetch(
-                                _fetch_from_kimi,
-                                kimi_client,
-                                q_text,
-                                platform="kimi",
-                                method="api",
+                            api_task_map.append((idx, "doubao"))
+                        if hunyuan_client is not None and (
+                            not allowed_platforms or "hunyuan" in allowed_platforms
+                        ):
+                            api_tasks.append(
+                                _throttled_retry_fetch(
+                                    _fetch_from_hunyuan,
+                                    hunyuan_client,
+                                    q_text,
+                                    platform="hunyuan",
+                                    method="api",
+                                )
                             )
-                        )
-                        api_task_map.append((idx, "kimi"))
+                            api_task_map.append((idx, "hunyuan"))
+                        if kimi_client is not None and (
+                            not allowed_platforms or "kimi" in allowed_platforms
+                        ):
+                            api_tasks.append(
+                                _throttled_retry_fetch(
+                                    _fetch_from_kimi,
+                                    kimi_client,
+                                    q_text,
+                                    platform="kimi",
+                                    method="api",
+                                )
+                            )
+                            api_task_map.append((idx, "kimi"))
+                except BaseException:
+                    # Construction can await failed-platform persistence before
+                    # the task manager owns these unstarted coroutines.
+                    for coro in api_tasks:
+                        coro.close()
+                    raise
 
                 # Build active API platforms list and create progress tracker
                 api_clients = {
@@ -3348,32 +3389,51 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 )
 
                 api_success_total = 0
-                tracked_tasks = [
-                    asyncio.create_task(
-                        _tracked_api_fetch_with_context(q_idx, platform, task, tracker)
-                    )
-                    for task, (q_idx, platform) in zip(api_tasks, api_task_map)
-                ]
+                async with _managed_api_fetch_tasks(
+                    api_tasks, api_task_map, tracker
+                ) as tracked_tasks:
+                    # Persist and extract each answer as soon as it completes so the
+                    # console can show a live graph instead of waiting for all APIs.
+                    for completed_task in asyncio.as_completed(tracked_tasks):
+                        q_idx, platform, result, result_err = await completed_task
+                        if result_err is not None:
+                            logger.error(
+                                "[A4] API %s Q%d exception: %s",
+                                platform,
+                                q_idx + 1,
+                                result_err,
+                            )
+                            enriched_result = _attach_aio_platform_packet(
+                                {
+                                    "platform": platform,
+                                    "fetch_method": "api",
+                                    "provider_model": getattr(api_clients.get(platform), "model", None),
+                                    "success": False,
+                                    "error": str(result_err),
+                                },
+                                question=questions[q_idx],
+                                request=aio_fetch_request,
+                            )
+                            question_results[q_idx].append(enriched_result)
+                            await _persist_incremental_fetch_result(
+                                q_idx,
+                                enriched_result,
+                                event_source="api",
+                            )
+                            continue
 
-                # Persist and extract each answer as soon as it completes so the
-                # console can show a live graph instead of waiting for all APIs.
-                for completed_task in asyncio.as_completed(tracked_tasks):
-                    q_idx, platform, result, result_err = await completed_task
-                    if result_err is not None:
-                        logger.error(
-                            "[A4] API %s Q%d exception: %s",
-                            platform,
-                            q_idx + 1,
-                            result_err,
+                        if result is None:
+                            continue
+                        result.setdefault("provider_model", getattr(api_clients.get(platform), "model", None))
+                        await _record_a4_api_usage(
+                            session_id=session_id,
+                            task_id=str(task_id) if task_id else None,
+                            question_id=_question_id_from_state_question(questions[q_idx]),
+                            platform=platform,
+                            result=result,
                         )
                         enriched_result = _attach_aio_platform_packet(
-                            {
-                                "platform": platform,
-                                "fetch_method": "api",
-                                "provider_model": getattr(api_clients.get(platform), "model", None),
-                                "success": False,
-                                "error": str(result_err),
-                            },
+                            result,
                             question=questions[q_idx],
                             request=aio_fetch_request,
                         )
@@ -3383,31 +3443,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
                             enriched_result,
                             event_source="api",
                         )
-                        continue
-
-                    if result is None:
-                        continue
-                    result.setdefault("provider_model", getattr(api_clients.get(platform), "model", None))
-                    await _record_a4_api_usage(
-                        session_id=session_id,
-                        task_id=str(task_id) if task_id else None,
-                        question_id=_question_id_from_state_question(questions[q_idx]),
-                        platform=platform,
-                        result=result,
-                    )
-                    enriched_result = _attach_aio_platform_packet(
-                        result,
-                        question=questions[q_idx],
-                        request=aio_fetch_request,
-                    )
-                    question_results[q_idx].append(enriched_result)
-                    await _persist_incremental_fetch_result(
-                        q_idx,
-                        enriched_result,
-                        event_source="api",
-                    )
-                    if result.get("success"):
-                        api_success_total += 1
+                        if result.get("success"):
+                            api_success_total += 1
 
                 logger.info(
                     "[A4] Phase 1 (API) done: %d/%d succeeded",
