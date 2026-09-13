@@ -1,0 +1,46 @@
+name: Inspect Topic Repair Runtime Read Only
+on:
+  push:
+    branches: [codex/deepseek41-platform-billing-20260911]
+    paths: [.github/workflows/inspect-topic-repair-runtime.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read resource events and repair backup metadata
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_repair_inspect_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh -i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" 'sudo -n bash -s' <<'REMOTE'
+          set -u
+          date -u
+          readlink -f /srv/ageo-deploy/current
+          systemctl show ageo-backend.service ageo-frontend.service -p ActiveState -p MainPID -p MemoryCurrent -p Result
+          curl -sS -o /dev/null -w 'backend_http=%{http_code}\n' --max-time 10 http://127.0.0.1:8000/health
+          curl -sS -o /dev/null -w 'frontend_http=%{http_code}\n' --max-time 10 http://127.0.0.1:3000
+          grep -E 'MemTotal|MemAvailable|SwapFree' /proc/meminfo
+          journalctl -k --since '2026-09-13 05:20:00 UTC' --no-pager | grep -Ei 'oom|out of memory|killed process|memory cgroup' | tail -n 20 || true
+          journalctl --since '2026-09-13 05:20:00 UTC' -u 'run-*.scope' --no-pager | tail -n 30
+          systemctl list-units --all --type=scope --no-pager | grep -E 'run-|session-' || true
+          ps -eo pid,ppid,rss,etime,args | grep '[r]epair-recent-topic-reports.py' || true
+          directory=/srv/ageo-deploy/shared/runtime/topic-repairs/amway-topic-coverage-20260913-v1
+          if test -d "$directory"; then
+            find "$directory" -maxdepth 1 -type f -printf '%f %s bytes mode=%m\n'
+            if test -f "$directory/summary.json"; then cat "$directory/summary.json"; fi
+          fi
+          REMOTE
