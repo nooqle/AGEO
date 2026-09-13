@@ -28,7 +28,7 @@ CLEANUP_SECONDS = 15
 COMMAND_SECONDS = 15
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
 MAX_BLOCK_DIAGNOSTICS = 12
-SEARCH_URL = "https://www.bing.com/search?" + urlencode(
+SEARCH_URL = "https://cn.bing.com/search?" + urlencode(
     {"q": "site:example.com Example Domain"}
 )
 SOURCE_URLS = frozenset({"https://example.com/", "https://www.example.com/"})
