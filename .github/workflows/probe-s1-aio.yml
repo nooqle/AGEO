@@ -1,0 +1,60 @@
+name: Probe S1 AIO Public Compatibility
+
+on:
+  push:
+    branches:
+      - codex/s1-aio-probe-20260913
+    paths:
+      - ops/probes/s1_aio_probe.py
+      - .github/workflows/probe-s1-aio.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s1-aio-public-compatibility-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Run exactly one isolated public probe
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${DEMO_SSH_HOST:?Missing SSH host}"
+          : "${DEMO_SSH_USER:?Missing SSH user}"
+          : "${DEMO_SSH_KEY:?Missing SSH key}"
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/s1_aio_probe_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null 2>/dev/null
+          ssh_options=(
+            -i "$key_path" -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+            -o LogLevel=ERROR
+          )
+          # No remote file writes, application imports, deployment, or retries.
+          # timeout is a final process guard; the probe reserves its own cleanup time.
+          if ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+            'timeout --signal=TERM --kill-after=5 125 /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python -B -' \
+            < ops/probes/s1_aio_probe.py 2>/dev/null; then
+            echo 'Probe process completed; inspect structured compatibility and cleanup results.'
+          else
+            echo 'Probe failed or connection outcome is uncertain; not retried.'
+            exit 1
+          fi
