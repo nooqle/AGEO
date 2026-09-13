@@ -27,6 +27,7 @@ WORK_SECONDS = 100
 CLEANUP_SECONDS = 15
 COMMAND_SECONDS = 15
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
+MAX_BLOCK_DIAGNOSTICS = 12
 SEARCH_URL = "https://www.bing.com/search?" + urlencode(
     {"q": "site:example.com Example Domain"}
 )
@@ -36,6 +37,51 @@ ENV_PATH = Path("/srv/ageo-deploy/shared/backend/.env.local")
 
 class ProbeFailure(Exception):
     """Only fixed stage codes are printed, never exception text or remote data."""
+
+
+def blocked_request_diagnostic(params: dict, *, allowed_urls: set[str],
+                               frame_id: str, document_seen: bool,
+                               allowed_count: int) -> dict:
+    """Return only fixed enums/booleans; remote strings never enter logs."""
+    request = params.get("request", {})
+    raw_url = request.get("url")
+    resource = params.get("resourceType")
+    known_resources = {
+        "Document", "Stylesheet", "Image", "Media", "Font", "Script", "TextTrack",
+        "XHR", "Fetch", "Prefetch", "EventSource", "WebSocket", "Manifest",
+        "SignedExchange", "Ping", "CSPViolationReport", "Preflight", "Other",
+    }
+    parsed = None
+    try:
+        if isinstance(raw_url, str):
+            parsed = urlsplit(raw_url)
+    except ValueError:
+        pass
+    known_hosts = {"www.bing.com", "cn.bing.com", "bing.com"}
+    host = parsed.hostname if parsed is not None else None
+    is_get = request.get("method") == "GET"
+    main_frame = bool(frame_id) and params.get("frameId") == frame_id
+    checks = (
+        (raw_url in allowed_urls, "url_not_allowed"),
+        (is_get, "non_get"),
+        (resource == "Document", "non_document"),
+        (main_frame, "non_main_frame"),
+        (not document_seen, "document_already_admitted"),
+        (allowed_count < 2, "document_budget_exhausted"),
+    )
+    return {
+        "resource_type": resource if resource in known_resources else "Other",
+        "is_get": is_get,
+        "is_main_frame": main_frame,
+        "redirect_marker_present": bool(params.get("redirectedRequestId")),
+        "host_class": host if host in known_hosts else "other",
+        "path_is_search": parsed is not None and parsed.path == "/search",
+        "query_matches_search": parsed is not None and parsed.query == urlsplit(SEARCH_URL).query,
+        "query_matches_navigation": parsed is not None and any(
+            parsed.query == urlsplit(url).query for url in allowed_urls
+        ),
+        "blocking_reasons": [reason for passed, reason in checks if not passed],
+    }
 
 
 def emit(stage: str, **values: object) -> None:
@@ -186,6 +232,11 @@ class CDP:
         if not allowed:
             arguments["errorReason"] = "BlockedByClient"
             self.blocked_count += 1
+            if self.blocked_count <= MAX_BLOCK_DIAGNOSTICS:
+                emit("request_blocked", **blocked_request_diagnostic(
+                    params, allowed_urls=self.allowed_urls, frame_id=self.frame_id,
+                    document_seen=self.document_request_seen, allowed_count=self.allowed_count,
+                ))
         else:
             self.document_request_seen = True
             self.allowed_count += 1
