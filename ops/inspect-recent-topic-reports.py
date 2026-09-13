@@ -17,7 +17,8 @@ async def inventory(helper):
     from sqlalchemy import select, text, func
     from app.core.database import AsyncSessionLocal, engine
     from app.models.amway_circle_tracking import AmwayCircleRun, AmwayCircleReport, AmwayCircleProjection, AmwayCircleExport
-    from app.models.brand_intelligence import BrandReportVersion
+    from app.models.brand_intelligence import BrandReportVersion, BrandMetricSnapshot, BrandIntelligenceFinding, BrandMention
+    from app.models.message import Message
     from app.models.brand_intelligence_run import BrandIntelligenceRun
     from app.models.snapshot import AnalysisSnapshot
     from app.models.task import AnalysisTask
@@ -88,6 +89,16 @@ async def inventory(helper):
                 for export in (await db.scalars(select(AmwayCircleExport).where(
                     AmwayCircleExport.entity_id == helper.ENTITY_ID, AmwayCircleExport.created_at >= start,
                     AmwayCircleExport.created_at <= end))).all()]
+            result["consumer_counts"] = []
+            for version in result["brand_report_versions"]:
+                row = await db.get(BrandReportVersion, version["id"])
+                message = await db.get(Message, row.message_id) if row.message_id else None
+                output = json.loads(message.output_data or "{}") if message else {}
+                counts = {model.__tablename__: await db.scalar(select(func.count()).select_from(model).where(model.report_version_id == row.id))
+                          for model in (BrandMetricSnapshot, BrandIntelligenceFinding, BrandMention)}
+                result["consumer_counts"].append({"version_id": str(row.id), "counts": counts,
+                    "payload_keys": sorted(row.payload or {}), "output_keys": sorted(output),
+                    "payload_report_id": (row.payload or {}).get("report_id"), "output_report_id": output.get("report_id")})
             await db.rollback()
             return helper.redact_export(result)
     finally:
