@@ -1,0 +1,73 @@
+name: Inspect Recent Topic Reports Read Only
+
+on:
+  push:
+    branches: [codex/deepseek41-platform-billing-20260911]
+    paths:
+      - ops/inspect-recent-topic-reports.py
+      - .github/workflows/inspect-recent-topic-reports.yml
+  workflow_dispatch:
+    inputs:
+      expected_release:
+        description: Exact production release SHA to replay, without changing the release.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inspect-recent-topic-reports-read-only
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replay the current official Amway projection without writes or provider calls
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          EXPECTED_RELEASE: ${{ inputs.expected_release || 'fb2c5e24a26baf9e6684c1851513e384b049ea40' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_RELEASE" =~ ^[a-f0-9]{40}$ ]] || exit 2
+          install -d -m 700 ~/.ssh replay-output
+          key_path=~/.ssh/ageo_topic_replay_key
+          remote_dir=''
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(-i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=1 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          scp_options=(-i "$key_path" -P "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          remote="${DEMO_SSH_USER}@${DEMO_SSH_HOST}"
+          cleanup() {
+            if [[ "$remote_dir" =~ ^/tmp/ageo-topic-replay\.[A-Za-z0-9]{12}$ ]]; then
+              ssh "${ssh_options[@]}" "$remote" "sudo -n rm -f '$remote_dir/replay-topic-nodes.py' '$remote_dir/inspect-recent-topic-reports.py' '$remote_dir/inventory.json'; rmdir '$remote_dir'" || true
+            fi
+            rm -f "$key_path"
+          }
+          trap cleanup EXIT
+          echo 'stage=mktemp'
+          remote_dir=$(ssh "${ssh_options[@]}" "$remote" 'umask 077; mktemp -d /tmp/ageo-topic-replay.XXXXXXXXXXXX')
+          [[ "$remote_dir" =~ ^/tmp/ageo-topic-replay\.[A-Za-z0-9]{12}$ ]] || exit 2
+          echo 'stage=copy'
+          scp "${scp_options[@]}" ops/replay-topic-nodes.py ops/inspect-recent-topic-reports.py "$remote:$remote_dir/"
+          echo 'stage=run'
+          ssh "${ssh_options[@]}" "$remote" "sudo -n timeout --signal=TERM --kill-after=10s 240s /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python -B -u '$remote_dir/inspect-recent-topic-reports.py' --expected-release '$EXPECTED_RELEASE' --output-dir '$remote_dir'"
+          echo 'stage=download'
+          for file in inventory.json; do
+            echo "stage=download file=$file"
+            timeout --signal=TERM --kill-after=5s 90s scp -C "${scp_options[@]}" "$remote:$remote_dir/$file" "replay-output/$file"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amway-topic-inventory-${{ github.run_id }}
+          path: replay-output/
+          retention-days: 1
+          if-no-files-found: error
