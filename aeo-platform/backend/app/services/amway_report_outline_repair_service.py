@@ -8,16 +8,21 @@ import json
 import re
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.amway_circle_tracking import (
-    AmwayCircleExport, AmwayCircleProjection, AmwayCircleReport,
+    AmwayCircleEvidence, AmwayCircleEdgeSnapshot, AmwayCircleExport,
+    AmwayCircleProjection, AmwayCircleReport, AmwayCircleRun,
 )
+from app.models.entity import Entity
 from app.models.brand_intelligence import BrandIntelligenceFinding, BrandReportVersion
 from app.models.message import Message
 from app.models.snapshot import AnalysisSnapshot
-from app.services.amway_topic_repair_service import RepairRowStore, digest, json_value
+from app.services.amway_topic_repair_service import (
+    MODELS, RepairRowStore, digest, json_value, repair_stage,
+)
+from app.services.amway_circle_tracking_service import AmwayCircleTrackingService
 
 ENTITY_ID = UUID("70eec83d-a767-4c99-8f28-0a068bfcc8a8")
 REPAIR_ID = "amway-report-outline-20260914-v1"
@@ -67,7 +72,7 @@ def trim_markdown(value: str, path: str) -> tuple[str, list[str]]:
             token = marker.group(1)
             if fence is None:
                 fence = token
-            elif token[0] == fence[0] and len(token) >= len(fence):
+            elif token[0] == fence[0] and len(token) >= len(fence) and not line[marker.end():].strip():
                 fence = None
             if skipped_level is None:
                 result.append(line)
@@ -77,7 +82,7 @@ def trim_markdown(value: str, path: str) -> tuple[str, list[str]]:
             level, title = len(heading.group(1)), heading.group(2).strip()
             if skipped_level is not None and level <= skipped_level:
                 skipped_level = None
-            if title in OMITTED_TITLES and level in (2, 3):
+            if skipped_level is None and title in OMITTED_TITLES and level in (2, 3):
                 skipped_level = level
                 locations.append(f"{path}:heading:{index + 1}")
         if skipped_level is None:
@@ -127,8 +132,6 @@ def trim_report(value, path: str = "report") -> tuple[object, list[str]]:
 
 def transform_row(table: str, row: dict) -> tuple[dict, list[str]]:
     result, locations = dict(row), []
-    if table == BrandReportVersion.__tablename__ and row.get("report_kind") != REPORT_KIND:
-        return row, []
     for column in ALLOWED_COLUMNS[table]:
         value = row.get(column)
         path = f"{table}.{column}"
@@ -139,7 +142,7 @@ def transform_row(table: str, row: dict) -> tuple[dict, list[str]]:
                 decoded = json.loads(value)
             except (ValueError, TypeError):
                 raise ValueError("invalid_report_message_json") from None
-            if not isinstance(decoded, dict) or decoded.get("report_kind") != REPORT_KIND:
+            if not isinstance(decoded, dict):
                 continue
             replacement, found = trim_report(decoded, path)
             if found:
@@ -164,7 +167,7 @@ class AmwayReportOutlineRepairService:
         versions = (await self.db.execute(select(
             BrandReportVersion.id, BrandReportVersion.report_id, BrandReportVersion.version,
             BrandReportVersion.report_kind, BrandReportVersion.session_id, BrandReportVersion.message_id,
-        ).where(BrandReportVersion.entity_id == ENTITY_ID))).mappings().all()
+        ).where(BrandReportVersion.entity_id == ENTITY_ID).order_by(BrandReportVersion.id))).mappings().all()
         message_ids = {row["message_id"] for row in versions if row["message_id"]}
         foreign = list((await self.db.scalars(select(BrandReportVersion.id).where(
             BrandReportVersion.message_id.in_(message_ids), BrandReportVersion.entity_id != ENTITY_ID,
@@ -180,14 +183,23 @@ class AmwayReportOutlineRepairService:
         exports = (await self.db.execute(select(
             AmwayCircleExport.id, AmwayCircleExport.report_id, AmwayCircleExport.projection_id,
             AmwayCircleExport.export_type, AmwayCircleExport.created_at,
-        ).where(AmwayCircleExport.entity_id == ENTITY_ID))).mappings().all()
+        ).where(or_(
+            AmwayCircleExport.entity_id == ENTITY_ID,
+            AmwayCircleExport.report_id.in_(select(AmwayCircleReport.id).where(AmwayCircleReport.entity_id == ENTITY_ID)),
+            AmwayCircleExport.projection_id.in_(select(AmwayCircleProjection.id).where(AmwayCircleProjection.entity_id == ENTITY_ID)),
+        )).order_by(AmwayCircleExport.id))).mappings().all()
         return {"versions": [json_value(dict(row)) for row in versions],
                 "message_ids": sorted(str(value) for value in message_ids),
                 "binding_errors": errors, "foreign_message_bindings": len(foreign),
                 "exports": [json_value(dict(row)) for row in exports]}
 
     async def rows(self, model, bindings: dict, *, lock=False):
-        condition = model.id.in_([UUID(value) for value in bindings["message_ids"]]) if model is Message else model.entity_id == ENTITY_ID
+        if model is Message:
+            condition = model.id.in_([UUID(value) for value in bindings["message_ids"]])
+        elif model in (AmwayCircleEvidence, AmwayCircleEdgeSnapshot):
+            condition = model.circle_run_id.in_(select(AmwayCircleRun.id).where(AmwayCircleRun.entity_id == ENTITY_ID))
+        else:
+            condition = model.entity_id == ENTITY_ID
         query = select(*model.__table__.columns).where(condition).order_by(model.id).execution_options(yield_per=1)
         if lock:
             query = query.with_for_update()
@@ -200,16 +212,191 @@ class AmwayReportOutlineRepairService:
 
     async def inventory(self) -> dict:
         bindings = await self.bindings()
-        tables, affected = {}, []
+        tables, affected, copy_versions = {}, [], Counter()
         for model in REPORT_MODELS:
             table, total, changed = model.__tablename__, 0, 0
             async for row in self.rows(model, bindings):
                 total += 1
                 _, locations = transform_row(table, row)
+                copy_versions.update(report_copy_versions(row))
                 if locations:
                     changed += 1
                     affected.append({"table": table, "id": row["id"], "locations": locations})
             tables[table] = {"total": total, "affected": changed}
         return {"mode": "inventory", "entity_id": str(ENTITY_ID), "repair_id": REPAIR_ID,
                 "tables": tables, "bindings": bindings, "affected": affected,
+                "copy_constraint_versions": dict(copy_versions),
                 "provider_calls": False, "database_committed": False}
+
+    async def capture_index(self, bindings: dict, *, lock=False) -> dict:
+        result = {}
+        for model in MODELS:
+            values = {}
+            async for row in self.rows(model, bindings, lock=lock and model in REPORT_MODELS):
+                values[row["id"]] = digest(row)
+            result[model.__tablename__] = values
+            repair_stage("outline_index_table", table=model.__tablename__, rows=len(values))
+        return result
+
+    async def stage(self, store: RepairRowStore, release_sha: str) -> dict:
+        """Read-only plan generation; caller publishes verified disk images atomically."""
+        bindings = await self.bindings()
+        validate_bindings(bindings)
+        if bindings["exports"]:
+            raise ValueError("existing_exports_require_explicit_file_repair")
+        before_index, after_index, changes = {}, {}, []
+        for model in MODELS:
+            table, before_table, after_table = model.__tablename__, {}, {}
+            async for before in self.rows(model, bindings):
+                row_id = before["id"]
+                before_table[row_id] = digest(before)
+                if model in REPORT_MODELS:
+                    after, locations = transform_row(table, before)
+                else:
+                    after, locations = before, []
+                after_table[row_id] = digest(after) if locations else before_table[row_id]
+                if locations:
+                    changes.append({"table": table, "id": row_id,
+                                    "before": store.write("before", table, row_id, before),
+                                    "after": store.write("after", table, row_id, after),
+                                    "locations": locations})
+                del before, after
+            before_index[table], after_index[table] = before_table, after_table
+            repair_stage("outline_staged_table", table=table, rows=len(before_table), changes=len(changes))
+        plan = {"schema_version": SCHEMA_VERSION, "repair_id": REPAIR_ID,
+                "entity_id": str(ENTITY_ID), "release_sha": release_sha,
+                "bindings": bindings, "before_index": before_index, "after_index": after_index,
+                "before_hash": digest(before_index), "after_hash": digest(after_index),
+                "changes": changes, "row_storage": {"version": 1, "namespace": store.namespace}}
+        plan["manifest_hash"] = digest(plan)
+        validate_plan(plan, store, expected_hash=plan["manifest_hash"])
+        return plan
+
+    async def apply(self, plan: dict, store: RepairRowStore, *, expected_hash: str, reverse=False) -> dict:
+        """Single caller-owned transaction; complete scope drift check before writes."""
+        validate_plan(plan, store, expected_hash=expected_hash)
+        await AmwayCircleTrackingService(self.db)._lock_entity(ENTITY_ID)
+        await self.db.execute(select(Entity.id).where(Entity.id == ENTITY_ID).with_for_update())
+        bindings = await self.bindings()
+        validate_bindings(bindings)
+        if digest(bindings) != digest(plan["bindings"]):
+            raise ValueError("report_bindings_drifted")
+        current = await self.capture_index(bindings, lock=True)
+        source, target = ("after", "before") if reverse else ("before", "after")
+        if digest(current) == plan[target + "_hash"]:
+            return {"status": "already_restored" if reverse else "already_applied",
+                    "changed_rows": len(plan["changes"])}
+        if digest(current) != plan[source + "_hash"]:
+            raise ValueError("source_rows_drifted")
+        for change in plan["changes"]:
+            model = MODELS_BY_TABLE[change["table"]]
+            after = store.read(change[target])
+            # Explicit timestamp values suppress SQLAlchemy's onupdate defaults.
+            values = {column: after[column] for column in ALLOWED_COLUMNS[change["table"]]}
+            if "updated_at" in model.__table__.columns:
+                values["updated_at"] = datetime.fromisoformat(after["updated_at"])
+            result = await self.db.execute(update(model.__table__).where(
+                model.id == UUID(change["id"])
+            ).values(**values))
+            if result.rowcount != 1:
+                raise ValueError("target_row_missing")
+            del after, values
+        await self.db.flush()
+        result_index = await self.capture_index(bindings)
+        if digest(result_index) != plan[target + "_hash"]:
+            raise ValueError("post_write_row_hash_mismatch")
+        return {"status": "restored" if reverse else "applied", "changed_rows": len(plan["changes"])}
+
+    async def verify(self, plan: dict, store: RepairRowStore, *, expected_hash: str) -> dict:
+        validate_plan(plan, store, expected_hash=expected_hash)
+        bindings = await self.bindings()
+        validate_bindings(bindings)
+        if digest(bindings) != digest(plan["bindings"]):
+            raise ValueError("report_bindings_drifted")
+        if digest(await self.capture_index(bindings)) != plan["after_hash"]:
+            raise ValueError("verification_rows_drifted")
+        inventory = await self.inventory()
+        if inventory["affected"]:
+            raise ValueError("target_chapters_still_present")
+        return {"status": "verified", "all_persisted_rows_match_plan": True,
+                "remaining_target_chapters": 0, "tables": inventory["tables"],
+                "copy_constraint_versions": inventory["copy_constraint_versions"]}
+
+
+def report_copy_versions(row: dict) -> Counter:
+    """Only known report slots; skip original answer/strategy content."""
+    found = Counter()
+    for key, value in row.items():
+        if key == "output_data" and isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                continue
+        if key in {"copy_constraints", "report_copy_constraints"} and isinstance(value, dict):
+            found[str(value.get("version") or "unrecorded")] += 1
+        elif key in REPORT_WRAPPERS | {"structured_body", "raw_data", "payload", "output_data", "source_payload"} and isinstance(value, dict):
+            found.update(report_copy_versions(value))
+    return found
+
+
+def validate_bindings(bindings: dict) -> None:
+    if bindings["binding_errors"] or bindings["foreign_message_bindings"]:
+        raise ValueError("unsafe_report_message_bindings")
+
+
+def validate_plan(plan: dict, store: RepairRowStore, *, expected_hash: str) -> None:
+    if (plan.get("manifest_hash") != expected_hash
+            or digest({key: value for key, value in plan.items() if key != "manifest_hash"}) != expected_hash):
+        raise ValueError("manifest_hash_mismatch")
+    if plan.get("schema_version") != SCHEMA_VERSION or plan.get("repair_id") != REPAIR_ID or plan.get("entity_id") != str(ENTITY_ID):
+        raise ValueError("invalid_manifest_scope")
+    if plan["row_storage"] != {"version": 1, "namespace": store.namespace}:
+        raise ValueError("row_storage_mismatch")
+    validate_bindings(plan["bindings"])
+    if plan["bindings"]["exports"]:
+        raise ValueError("existing_exports_require_explicit_file_repair")
+    required_tables = {model.__tablename__ for model in MODELS}
+    if set(plan["before_index"]) != required_tables or set(plan["after_index"]) != required_tables:
+        raise ValueError("incomplete_scope_index")
+    expected_index = {table: dict(rows) for table, rows in plan["before_index"].items()}
+    seen = set()
+    for change in plan["changes"]:
+        key = (change["table"], change["id"])
+        if key in seen or key[0] not in MODELS_BY_TABLE:
+            raise ValueError("invalid_or_duplicate_manifest_row")
+        seen.add(key)
+        before, after = store.read(change["before"]), store.read(change["after"])
+        model = MODELS_BY_TABLE[key[0]]
+        if set(before) != set(model.__table__.columns.keys()) or set(after) != set(before):
+            raise ValueError("incomplete_row_image")
+        if before["id"] != key[1] or after["id"] != key[1]:
+            raise ValueError("row_identity_mismatch")
+        if model is Message:
+            if key[1] not in plan["bindings"]["message_ids"]:
+                raise ValueError("unbound_message_row")
+        elif before["entity_id"] != str(ENTITY_ID):
+            raise ValueError("foreign_entity_row")
+        generated, locations = transform_row(key[0], before)
+        if not locations or locations != change["locations"] or digest(generated) != digest(after):
+            raise ValueError("after_image_outside_report_outline_scope")
+        if transform_row(key[0], after)[1]:
+            raise ValueError("non_idempotent_report_transform")
+        if expected_index[key[0]].get(key[1]) != digest(before):
+            raise ValueError("before_image_not_in_scope_index")
+        expected_index[key[0]][key[1]] = digest(after)
+        del before, after, generated
+    if expected_index != plan["after_index"]:
+        raise ValueError("unexpected_changed_or_protected_rows")
+    if digest(plan["before_index"]) != plan["before_hash"] or digest(expected_index) != plan["after_hash"]:
+        raise ValueError("scope_index_hash_mismatch")
+
+
+def plan_summary(plan: dict) -> dict:
+    return {"repair_id": REPAIR_ID, "entity_id": str(ENTITY_ID),
+            "manifest_hash": plan["manifest_hash"], "release_sha": plan["release_sha"],
+            "changed_rows": len(plan["changes"]),
+            "changed_rows_by_table": dict(Counter(item["table"] for item in plan["changes"])),
+            "before_hash": plan["before_hash"], "after_hash": plan["after_hash"],
+            "provider_calls": False, "raw_answers_changed": False,
+            "analysis_nodes_changed": False, "timestamps_changed": False,
+            "scope": "all_entity_report_history_no_date_limit"}
