@@ -1,0 +1,102 @@
+name: Repair All Amway Report Outlines
+
+on:
+  push:
+    branches: [codex/deepseek41-platform-billing-20260911]
+    paths: [.github/workflows/repair-amway-report-outline.yml]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Reviewed report-only operation, without collection or entity reanalysis.
+        type: choice
+        required: true
+        options: [inventory, dry-run, apply, verify, restore]
+      expected_release:
+        description: Exact active application release.
+        type: string
+        required: true
+      expected_manifest_hash:
+        description: Required reviewed manifest for apply, verify and restore.
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amway-report-outline-repair-20260914
+  cancel-in-progress: false
+
+jobs:
+  register:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Registered only; no production action on push.'
+  repair:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute the exact checked-out repair in a bounded service
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          REPAIR_MODE: ${{ inputs.mode }}
+          EXPECTED_RELEASE: ${{ inputs.expected_release }}
+          EXPECTED_MANIFEST: ${{ inputs.expected_manifest_hash }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_RELEASE" =~ ^[a-f0-9]{40}$ ]] || exit 2
+          case "$REPAIR_MODE" in inventory|dry-run|apply|verify|restore) ;; *) exit 2 ;; esac
+          if [[ "$REPAIR_MODE" == apply || "$REPAIR_MODE" == verify || "$REPAIR_MODE" == restore ]]; then
+            [[ "$EXPECTED_MANIFEST" =~ ^[a-f0-9]{64}$ ]] || exit 2
+          fi
+          install -d -m 700 ~/.ssh repair-output
+          key_path=~/.ssh/ageo_outline_repair_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(-i "$key_path" -p "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=2 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          scp_options=(-i "$key_path" -P "$DEMO_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts)
+          remote="${DEMO_SSH_USER}@${DEMO_SSH_HOST}"
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ && "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || exit 2
+          remote_code="/tmp/ageo-outline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          unit="ageo-outline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          directory=/srv/ageo-deploy/shared/runtime/report-outline-repairs/amway-report-outline-20260914-v1
+          output="$directory/$unit.jsonl"
+          ssh "${ssh_options[@]}" "$remote" "umask 077; mkdir '$remote_code'"
+          scp "${scp_options[@]}" ops/repair-amway-report-outline.py aeo-platform/backend/app/services/amway_report_outline_repair_service.py "$remote:$remote_code/"
+          echo "code_sha=$GITHUB_SHA mode=$REPAIR_MODE unit=$unit"
+          # Do not retry execution after a transport error; inspect the same named service.
+          start_status=0
+          ssh "${ssh_options[@]}" "$remote" "sudo -n install -d -m 700 '$directory' && sudo -n systemd-run --unit='$unit' --quiet -p Type=exec -p RemainAfterExit=yes -p MemoryMax=3G -p MemorySwapMax=0 -p CPUQuota=100% -p RuntimeMaxSec=900 -p TimeoutStopSec=15 -p UMask=0077 -p StandardOutput=append:'$output' -p StandardError=journal /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python -B -u '$remote_code/repair-amway-report-outline.py' --mode '$REPAIR_MODE' --expected-release '$EXPECTED_RELEASE' --repair-id amway-report-outline-20260914-v1 --backup-dir '$directory' --expected-manifest-hash '$EXPECTED_MANIFEST'" || start_status=$?
+          echo "start_transport_status=$start_status"
+          finished=false
+          for attempt in $(seq 1 66); do
+            state=$(ssh "${ssh_options[@]}" "$remote" "sudo -n systemctl show '$unit.service' -p LoadState -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p MemoryPeak" 2>/dev/null) || state=transport_unavailable
+            printf '%s\n' "$state" > repair-output/service-state.txt
+            if grep -q '^SubState=exited$\|^ActiveState=failed$\|^ActiveState=inactive$' <<< "$state"; then finished=true; break; fi
+            if grep -q '^LoadState=not-found$' <<< "$state" && (( attempt >= 3 )); then break; fi
+            sleep 15
+          done
+          cat repair-output/service-state.txt
+          ssh "${ssh_options[@]}" "$remote" "sudo -n cat '$output'" > repair-output/result.jsonl
+          cat repair-output/result.jsonl
+          # Full before/after backup files remain on the server.
+          [[ "$finished" == true ]] || exit 3
+          grep -q '^Result=success$' repair-output/service-state.txt
+          grep -q '^ExecMainStatus=0$' repair-output/service-state.txt
+          ssh "${ssh_options[@]}" "$remote" "rm -f '$remote_code/repair-amway-report-outline.py' '$remote_code/amway_report_outline_repair_service.py'; rmdir '$remote_code'"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: amway-report-outline-${{ github.run_id }}
+          path: repair-output/
+          retention-days: 7
+          if-no-files-found: error
