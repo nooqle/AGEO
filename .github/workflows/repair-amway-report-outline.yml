@@ -68,7 +68,7 @@ jobs:
           [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ && "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || exit 2
           remote_code="/tmp/ageo-outline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           unit="ageo-outline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          directory=/srv/ageo-deploy/shared/runtime/report-outline-repairs/amway-report-outline-20260914-v1
+          directory=/srv/ageo-deploy/shared/runtime/report-outline-repairs/amway-report-outline-20260914-v2
           output="$directory/$unit.jsonl"
           runner=repair-amway-report-outline.py
           if [[ "$REPAIR_MODE" == message-inventory ]]; then runner=inspect-report-message-coverage.py; fi
@@ -80,7 +80,7 @@ jobs:
           echo "code_sha=$GITHUB_SHA mode=$REPAIR_MODE unit=$unit"
           # Do not retry execution after a transport error; inspect the same named service.
           start_status=0
-          ssh "${ssh_options[@]}" "$remote" "sudo -n install -d -m 700 '$directory' && sudo -n systemd-run --unit='$unit' --quiet -p Type=exec -p RemainAfterExit=yes -p MemoryMax=3G -p MemorySwapMax=0 -p CPUQuota=100% -p RuntimeMaxSec=900 -p TimeoutStopSec=15 -p UMask=0077 -p StandardOutput=append:'$output' -p StandardError=journal /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python -B -u '$remote_code/$runner' --mode '$REPAIR_MODE' --expected-release '$EXPECTED_RELEASE' --repair-id amway-report-outline-20260914-v1 --backup-dir '$directory' --expected-manifest-hash '$EXPECTED_MANIFEST'" || start_status=$?
+          ssh "${ssh_options[@]}" "$remote" "sudo -n install -d -m 700 '$directory' && sudo -n systemd-run --unit='$unit' --quiet -p Type=exec -p RemainAfterExit=yes -p MemoryMax=3G -p MemorySwapMax=0 -p CPUQuota=100% -p RuntimeMaxSec=900 -p TimeoutStopSec=15 -p UMask=0077 -p StandardOutput=append:'$output' -p StandardError=journal /srv/ageo-deploy/current/aeo-platform/backend/.venv/bin/python -B -u '$remote_code/$runner' --mode '$REPAIR_MODE' --expected-release '$EXPECTED_RELEASE' --repair-id amway-report-outline-20260914-v2 --backup-dir '$directory' --expected-manifest-hash '$EXPECTED_MANIFEST'" || start_status=$?
           echo "start_transport_status=$start_status"
           finished=false
           for attempt in $(seq 1 66); do

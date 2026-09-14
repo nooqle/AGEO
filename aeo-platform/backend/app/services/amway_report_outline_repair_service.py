@@ -25,8 +25,8 @@ from app.services.amway_topic_repair_service import (
 from app.services.amway_circle_tracking_service import AmwayCircleTrackingService
 
 ENTITY_ID = UUID("70eec83d-a767-4c99-8f28-0a068bfcc8a8")
-REPAIR_ID = "amway-report-outline-20260914-v1"
-SCHEMA_VERSION = "2026-09-14-report-outline-v1"
+REPAIR_ID = "amway-report-outline-20260914-v2"
+SCHEMA_VERSION = "2026-09-14-report-outline-v2"
 OMITTED_IDS = frozenset({"value_pillars", "living_young_autonomy"})
 OMITTED_TITLES = frozenset({
     "四个价值支柱，在 AI 叙事里是什么状态", "活得年轻：掌控生活的自主",
@@ -132,7 +132,7 @@ def trim_report(value, path: str = "report") -> tuple[object, list[str]]:
 
 def transform_row(table: str, row: dict) -> tuple[dict, list[str]]:
     result, locations = dict(row), []
-    for column in ALLOWED_COLUMNS[table]:
+    for column in sorted(ALLOWED_COLUMNS[table]):
         value = row.get(column)
         path = f"{table}.{column}"
         if table == Message.__tablename__:
@@ -292,7 +292,7 @@ class AmwayReportOutlineRepairService:
             model = MODELS_BY_TABLE[change["table"]]
             after = store.read(change[target])
             # Explicit timestamp values suppress SQLAlchemy's onupdate defaults.
-            values = {column: after[column] for column in ALLOWED_COLUMNS[change["table"]]}
+            values = {column: after[column] for column in sorted(ALLOWED_COLUMNS[change["table"]])}
             if "updated_at" in model.__table__.columns:
                 values["updated_at"] = datetime.fromisoformat(after["updated_at"])
             result = await self.db.execute(update(model.__table__).where(
@@ -377,7 +377,9 @@ def validate_plan(plan: dict, store: RepairRowStore, *, expected_hash: str) -> N
         elif before["entity_id"] != str(ENTITY_ID):
             raise ValueError("foreign_entity_row")
         generated, locations = transform_row(key[0], before)
-        if not locations or locations != change["locations"] or digest(generated) != digest(after):
+        # Diagnostic path ordering is not report content. Compare a multiset so
+        # hash randomization cannot reject identical changes or hide duplicates.
+        if not locations or sorted(locations) != sorted(change["locations"]) or digest(generated) != digest(after):
             raise ValueError("after_image_outside_report_outline_scope")
         if transform_row(key[0], after)[1]:
             raise ValueError("non_idempotent_report_transform")

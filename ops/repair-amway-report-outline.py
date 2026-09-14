@@ -33,7 +33,7 @@ def check_release(expected):
 
 def configure(args):
     release, pid = check_release(args.expected_release)
-    if args.repair_id != "amway-report-outline-20260914-v1":
+    if args.repair_id != "amway-report-outline-20260914-v2":
         raise ValueError("invalid_repair_id")
     destination = Path(args.backup_dir)
     if (not destination.is_absolute() or destination.name != args.repair_id
