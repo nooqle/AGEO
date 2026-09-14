@@ -23,6 +23,11 @@ REPORT_KIND = "brand_association_circle"
 ARTIFACT_KIND = "brand_association_circle"
 SCHEMA_VERSION = "2026-07-14"
 REPORT_COPY_CONSTRAINT_VERSION = "human_brand_diagnosis_v19_living_young_evidence_coverage"
+# Temporary report scope; retain the underlying strategy analysis for other chapters.
+REPORT_OMITTED_NARRATIVE_SECTION_IDS = frozenset(
+    {"value_pillars", "living_young_autonomy"}
+)
+REPORT_OMITTED_LEGACY_NARRATIVE_TITLE = "四个价值支柱，在 AI 叙事里是什么状态"
 
 REPORT_COPY_FORBIDDEN_PHRASES = (
     "这" + "说" + "明",
@@ -6517,6 +6522,12 @@ def _build_report_from_calibrated_input(
         strategy_storyline=strategy_storyline,
         storyline_analysis=storyline_analysis,
     )
+    narrative_sections = [
+        section
+        for section in narrative_sections
+        if section.get("section_id") not in REPORT_OMITTED_NARRATIVE_SECTION_IDS
+        and section.get("title") != REPORT_OMITTED_LEGACY_NARRATIVE_TITLE
+    ]
     analysis_tool_trace = _build_analysis_tool_trace(
         question_definition=question_definition,
         platform_source_summary=platform_source_summary,

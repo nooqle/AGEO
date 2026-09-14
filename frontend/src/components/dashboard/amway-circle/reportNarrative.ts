@@ -36,6 +36,11 @@ import type {
   ReportNarrativeSection,
 } from './types';
 
+const LEGACY_REPORT_SECTION_IDS: Record<string, string> = {
+  '活得年轻：掌控生活的自主': 'living_young_autonomy',
+  '四个价值支柱，在 AI 叙事里是什么状态': 'value_pillars',
+};
+
 export function topTermsForReport(groups: AssociationMapGroup[], key: AssociationMapGroupKey, limit = 3) {
   return (groups.find((group) => group.key === key)?.nodes || [])
     .slice(0, limit)
@@ -159,6 +164,7 @@ export function buildAssociationNarrativeReport({
       nextProbe: '下一轮围绕近端资产追加产品事实题、场景题和品牌锚定题，观察它们是否仍被平台稳定带回品牌。',
     },
     {
+      sectionId: 'value_pillars',
       title: '四个价值支柱，在 AI 叙事里是什么状态',
       readerQuestion: '四有分别被接住、牵制、反转还是缺席？',
       takeaway: growthTerms.length || storyTerms.length
@@ -320,7 +326,7 @@ export function normalizeReportNarrativeSections(
       const soWhat = commercialReportCopy(section?.so_what);
       if (!title || !paragraphs.length) return null;
       return {
-        sectionId: String(section?.section_id || '').trim() || undefined,
+        sectionId: LEGACY_REPORT_SECTION_IDS[title] || String(section?.section_id || '').trim() || undefined,
         title,
         text: paragraphs.join('\n\n'),
         readerQuestion,
@@ -350,7 +356,6 @@ export function readableNarrativeSections(
   ];
   const aiArchiveStoryTitles = [
     '核心判断',
-    '四个价值支柱，在 AI 叙事里是什么状态',
     '平台差异',
     '从数据到行动',
   ];

@@ -32,6 +32,9 @@ import {
 } from './reportSections';
 import type { AssociationMapGroup } from './types';
 
+// Temporary report outline adjustment; keep source analysis available for restoration.
+const OMITTED_REPORT_SECTION_IDS = new Set(['living_young_autonomy', 'value_pillars']);
+
 export function AssociationReportPanel({
   projection,
   activeCenterTerm,
@@ -80,6 +83,7 @@ export function AssociationReportPanel({
     : generatedReportSections;
   const contentReportSections = reportSections.filter((section) => (
     (!('sectionId' in section) || section.sectionId !== 'period_change')
+    && (!('sectionId' in section) || !OMITTED_REPORT_SECTION_IDS.has(section.sectionId || ''))
     && !section.title.startsWith('附录：')
   ));
   const exportReportSections = contentReportSections;
