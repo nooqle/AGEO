@@ -787,6 +787,11 @@ class BrandIntelligenceRunService:
             raise ValueError("已取消的任务不能继续")
         if run.status == BrandIntelligenceRunStatus.COMPLETED.value:
             return run
+        if (
+            run.requires_user_action
+            and run.user_action_type == "workflow_confirmation"
+        ):
+            raise ValueError("当前确认无法恢复原采集任务，请停止后重新运行")
         return await self.transition(
             run,
             status=BrandIntelligenceRunStatus.FETCHING_ANSWERS.value,
@@ -848,6 +853,11 @@ class BrandIntelligenceRunService:
         run = await self.get_run(run_id=run_id, current_user=current_user)
         if run is None:
             return None
+        if (
+            run.requires_user_action
+            and run.user_action_type == "workflow_confirmation"
+        ):
+            raise ValueError("当前确认无法恢复原采集任务，请停止后重新运行")
         action = str(user_action_type or "").strip() or "confirm"
         provided = provided_inputs if isinstance(provided_inputs, dict) else {}
 
@@ -1013,6 +1023,9 @@ class BrandIntelligenceRunService:
             run.requires_user_action = False
         if status == BrandIntelligenceRunStatus.FAILED.value:
             run.failed_at = now
+            run.requires_user_action = False
+            run.user_action_type = None
+            run.blocking_reason = None
         run.last_activity_at = now
         run.updated_at = now
         await self.db.commit()
@@ -1072,6 +1085,13 @@ class BrandIntelligenceRunService:
         if (
             run.status in BRAND_INTELLIGENCE_TERMINAL_RUN_STATUSES
             and task.status != TaskStatus.COMPLETED
+        ):
+            return run
+
+        if (
+            run.status == BrandIntelligenceRunStatus.WAITING_USER.value
+            and run.requires_user_action
+            and task.status in {TaskStatus.PENDING, TaskStatus.RUNNING}
         ):
             return run
 
@@ -1137,6 +1157,9 @@ class BrandIntelligenceRunService:
             run.failed_at = run.failed_at or now
             run.error_code = run.error_code or "analysis_task_failed"
             run.error_message = run.error_message or message
+            run.requires_user_action = False
+            run.user_action_type = None
+            run.blocking_reason = None
         elif status == BrandIntelligenceRunStatus.CANCELLED.value:
             run.completed_at = run.completed_at or now
             run.requires_user_action = False
@@ -1316,28 +1339,65 @@ async def dispatch_brand_intelligence_run(run_id: str) -> None:
             reloaded = await service._get_run_unscoped(run_uuid)
             if reloaded is None:
                 return
-            if final_state.get("awaiting_user") or final_state.get(
-                "pending_confirmation"
-            ):
-                await TaskService(db).mark_waiting_for_input(
+            raw_error_info = final_state.get("error_info")
+            error_info = raw_error_info if isinstance(raw_error_info, dict) else {}
+            harness_decision = final_state.get("last_harness_decision")
+            harness_metadata = (
+                harness_decision.get("metadata")
+                if isinstance(harness_decision, dict)
+                else None
+            )
+            blocker_code = str(
+                harness_metadata.get("blocker_code")
+                if isinstance(harness_metadata, dict)
+                else ""
+            )
+            if error_info.get("step") == "A4" and blocker_code == "all_platforms_failed":
+                await TaskService(db).fail_task(
                     task_id,
+                    error_message="所有平台采集失败，请检查平台状态后重新运行。",
+                    error_stage="A4",
                     run_id=task_run_uuid,
-                    checkpoint_stage=str(final_state.get("current_step") or "runtime"),
-                    progress=float(final_state.get("progress") or 0.5),
-                    progress_message="需要用户确认后继续",
                 )
                 await service.transition(
                     reloaded,
-                    status=BrandIntelligenceRunStatus.WAITING_USER.value,
-                    stage=str(final_state.get("current_step") or "waiting_user"),
-                    progress=float(final_state.get("progress") or 0.5),
-                    message="需要确认后继续",
-                    requires_user_action=True,
-                    user_action_type="workflow_confirmation",
-                    blocking_reason="需要用户确认或接管",
-                    output_refs={
-                        "pending_confirmation": final_state.get("pending_confirmation")
-                    },
+                    status=BrandIntelligenceRunStatus.FAILED.value,
+                    stage="answer_fetch",
+                    message="所有平台采集失败，请检查平台状态后重新运行。",
+                    requires_user_action=False,
+                    user_action_type=None,
+                    blocking_reason=None,
+                    error_code="all_platforms_failed",
+                    error_message=str(error_info.get("error") or "所有平台采集失败"),
+                )
+                return
+            if final_state.get("awaiting_user") or final_state.get(
+                "pending_confirmation"
+            ):
+                pending_confirmation = final_state.get("pending_confirmation")
+                pending_message = (
+                    pending_confirmation.get("message")
+                    if isinstance(pending_confirmation, dict)
+                    else None
+                )
+                await TaskService(db).fail_task(
+                    task_id,
+                    error_message="流程等待确认，但后台任务无法从该步骤继续，请重新运行。",
+                    error_stage=str(final_state.get("current_step") or "workflow"),
+                    run_id=task_run_uuid,
+                )
+                await service.transition(
+                    reloaded,
+                    status=BrandIntelligenceRunStatus.FAILED.value,
+                    stage=str(final_state.get("current_step") or "workflow"),
+                    message="流程等待确认，但后台任务无法从该步骤继续，请重新运行。",
+                    requires_user_action=False,
+                    error_code="workflow_confirmation_unavailable",
+                    error_message=str(
+                        pending_message
+                        or "Background workflow confirmation cannot resume"
+                    ),
+                    output_refs={"pending_confirmation": pending_confirmation},
                 )
                 return
 

@@ -1698,14 +1698,21 @@ async def _route_agent_error_without_llm(
     session_id: str,
     current_retry_counts: dict[str, int],
 ) -> Command:
-    error_info = dict(state.get("error_info") or {})
+    raw_error_info = state.get("error_info")
+    error_info = dict(raw_error_info) if isinstance(raw_error_info, dict) else {}
     failed_step = str(error_info.get("step", "未知"))
-    blocker_code = str(
-        ((state.get("last_harness_decision") or {}).get("metadata") or {}).get(
-            "blocker_code"
-        )
-        or ""
-    ).strip()
+    harness_decision = state.get("last_harness_decision")
+    harness_metadata = (
+        harness_decision.get("metadata")
+        if isinstance(harness_decision, dict)
+        else None
+    )
+    raw_blocker_code = (
+        harness_metadata.get("blocker_code")
+        if isinstance(harness_metadata, dict)
+        else None
+    )
+    blocker_code = str(raw_blocker_code or "").strip()
     recovery_options = build_alternative_action_catalog(
         state,
         failed_step=failed_step,
@@ -1795,7 +1802,13 @@ async def orchestrator_node(state: AgentState) -> Command:
         state = {**state, "agent_retry_counts": {}}
 
     current_retry_counts = dict(state.get("agent_retry_counts", {}) or {})
-    error_info = state.get("error_info")
+    raw_error_info = state.get("error_info")
+    if isinstance(raw_error_info, dict):
+        error_info = raw_error_info
+    elif raw_error_info:
+        error_info = {"step": "unknown", "error": "Malformed error state"}
+    else:
+        error_info = None
     exec_status = state.get("execution_status")
     has_agent_error = bool(error_info and exec_status != "completed")
 
@@ -1947,6 +1960,34 @@ async def orchestrator_node(state: AgentState) -> Command:
         )
 
     if has_agent_error:
+        harness_decision = state.get("last_harness_decision")
+        harness_metadata = (
+            harness_decision.get("metadata")
+            if isinstance(harness_decision, dict)
+            else None
+        )
+        blocker_code = str(
+            harness_metadata.get("blocker_code")
+            if isinstance(harness_metadata, dict)
+            else ""
+        )
+        if (
+            state.get("headless_mode")
+            and state.get("run_id")
+            and isinstance(error_info, dict)
+            and error_info.get("step") == "A4"
+            and blocker_code == "all_platforms_failed"
+        ):
+            return Command(
+                goto=END,
+                update={
+                    "execution_status": "error",
+                    "awaiting_user": False,
+                    "pending_confirmation": None,
+                    "next_required_action": None,
+                    "progress_message": "所有平台采集失败，请检查平台状态后重新运行。",
+                },
+            )
         logger.warning(
             "[Orchestrator] Short-circuiting error recovery for session %s: step=%s category=%s",
             session_id,
