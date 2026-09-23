@@ -14,6 +14,9 @@ from app.core.fetchers.browser.browser_executor import (
     BrowserAnswerExecutionPlan,
     execute_post_submit_capture_flow,
 )
+from app.core.fetchers.browser.failure_observability import (
+    is_browser_context_closed_error,
+)
 from app.schemas.fetch import BrowserState, FetchMethod, FetchResult, Platform
 
 logger = logging.getLogger(__name__)
@@ -84,15 +87,27 @@ class QwenHandler(BaseBrowserHandler):
         if page is None:
             raise QwenSearchNotVerified()
         try:
+            current_answer = page.locator(
+                ".chat-answers-card-wrap:has(.qk-markdown-react)"
+            ).last
+            if not await current_answer.count():
+                raise QwenSearchNotVerified()
             cards = page.locator('[data-c="refer_panel"][data-d="card"]')
-            if not await cards.count():
-                source_count = page.get_by_text(re.compile(r"\d+篇来源$"))
-                if await source_count.count() and await source_count.last.is_visible():
-                    await source_count.last.click(timeout=5000)
-                    await cards.first.wait_for(timeout=5000)
+            if await cards.count():
+                close_panel = page.locator(
+                    '[class*="deep-think-source-"] [class*="right-item"]'
+                ).first
+                await close_panel.click(timeout=5000)
+                await cards.first.wait_for(state="detached", timeout=5000)
+            source_count = current_answer.get_by_text(re.compile(r"\d+篇来源$"))
+            if await source_count.count() and await source_count.last.is_visible():
+                await source_count.last.click(timeout=5000)
+                await cards.first.wait_for(timeout=5000)
             response = await self.client.eval(
                 """() => {
-                    const match = document.body.innerText.match(/搜索\\s+(\\d+)\\s+个关键词，参考\\s+(\\d+)\\s+篇资料/);
+                    const answer = [...document.querySelectorAll('.qk-markdown-react')].at(-1);
+                    const current = answer?.closest('.chat-answers-card-wrap');
+                    const match = current?.innerText.match(/搜索\\s+(\\d+)\\s+个关键词，参考\\s+(\\d+)\\s+篇资料/);
                     const cards = [...document.querySelectorAll('[data-c="refer_panel"][data-d="card"]')];
                     const sources = cards.map(card => {
                         try {
@@ -104,6 +119,8 @@ class QwenHandler(BaseBrowserHandler):
                         source_count: match ? Number(match[2]) : 0, retrieved_sources: sources});
                 }"""
             )
+            if response.get("error"):
+                raise RuntimeError(str(response["error"]))
             evidence = json.loads(response.get("output", "{}") or "{}")
             sources = []
             seen = set()
@@ -133,6 +150,8 @@ class QwenHandler(BaseBrowserHandler):
                 "reference_scope": "retrieved_search_results",
             }
         except Exception as exc:
+            if is_browser_context_closed_error(exc):
+                raise
             if not isinstance(exc, QwenSearchNotVerified):
                 logger.warning("[Qwen] Search evidence check failed: %s", exc)
             raise QwenSearchNotVerified() from exc
@@ -221,8 +240,29 @@ class QwenHandler(BaseBrowserHandler):
                 )
                 return
             new_chat = page.locator(self._sel("new_chat")).first
-            if await new_chat.count() and await new_chat.is_visible():
-                await new_chat.click(timeout=5000)
+            if not await new_chat.count() or not await new_chat.is_visible():
+                yield self._create_event(
+                    BrowserState.ERROR,
+                    "千问新对话入口不可用，已停止采集",
+                    progress=0,
+                    error_type="new_chat_unavailable",
+                )
+                return
+            await new_chat.click(timeout=5000)
+            try:
+                await page.locator(".qk-markdown-react").first.wait_for(
+                    state="detached", timeout=5000
+                )
+                if await page.locator(".qk-markdown-react").count():
+                    raise RuntimeError("old answer still present")
+            except Exception:
+                yield self._create_event(
+                    BrowserState.ERROR,
+                    "千问旧回答未清空，已停止采集以免混入新题",
+                    progress=0,
+                    error_type="new_chat_not_cleared",
+                )
+                return
             if not await self._authenticated():
                 yield self._create_event(
                     BrowserState.ERROR, "千问新对话后登录状态未确认", progress=0

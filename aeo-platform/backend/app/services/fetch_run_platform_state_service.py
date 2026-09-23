@@ -831,6 +831,14 @@ class FetchRunPlatformStateService:
         citations = packet.get("citations")
         if isinstance(citations, list):
             normalized["citations"] = citations
+        provenance = packet.get("provenance")
+        retrieved_sources = (
+            provenance.get("retrieved_sources")
+            if isinstance(provenance, dict)
+            else None
+        )
+        if isinstance(retrieved_sources, list):
+            normalized["retrieved_sources"] = retrieved_sources
         timing_json = packet.get("timing_json")
         if isinstance(timing_json, dict):
             normalized["timing_json"] = timing_json
@@ -885,6 +893,9 @@ class FetchRunPlatformStateService:
         citations = legacy_result.get("citations")
         if isinstance(citations, list):
             normalized["citations"] = citations
+        retrieved_sources = legacy_result.get("retrieved_sources")
+        if isinstance(retrieved_sources, list):
+            normalized["retrieved_sources"] = retrieved_sources
         return normalized
 
     @classmethod
@@ -925,6 +936,12 @@ class FetchRunPlatformStateService:
             if isinstance((packet or {}).get("citations"), list)
             and (packet or {}).get("citations")
             else (legacy_result or {}).get("citations")
+        )
+        merged["retrieved_sources"] = (
+            (packet or {}).get("retrieved_sources")
+            if isinstance((packet or {}).get("retrieved_sources"), list)
+            and (packet or {}).get("retrieved_sources")
+            else (legacy_result or {}).get("retrieved_sources") or []
         )
         merged["error"] = (
             (packet or {}).get("error")

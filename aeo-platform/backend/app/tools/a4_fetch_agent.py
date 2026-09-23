@@ -623,6 +623,11 @@ class AioAnswerFetchTool:
                 "web_search_supported": result.get("web_search_supported"),
                 "web_search_executed": result.get("web_search_executed"),
                 "reference_scope": result.get("reference_scope"),
+                "retrieved_sources": (
+                    result.get("retrieved_sources")[:100]
+                    if isinstance(result.get("retrieved_sources"), list)
+                    else []
+                ),
                 "protocol": result.get("protocol"),
                 "platform_legacy_id": str(platform or ""),
                 "duration": result.get("duration"),
