@@ -32,6 +32,7 @@ from app.core.fetchers.browser.failure_observability import (
     is_browser_context_closed_error,
 )
 from app.core.fetchers.browser.browser_agent_loop import collect_browser_agent_step
+from app.core.fetchers.browser.browser_agent_policy import decide_browser_stage
 from app.core.fetchers.browser.parsers.base import (
     BaseResponseParser,
     InterceptConfig,
@@ -1044,18 +1045,37 @@ class BaseBrowserHandler(ABC):
         """Run one generic browser-agent preflight before platform logic."""
 
         sync_method = getattr(self.client, "sync_to_existing_target_page", None)
-        for _ in range(max_rounds):
+        login_entry_attempted = False
+        pending_login_recheck = False
+        rounds = 0
+        while rounds < max_rounds or pending_login_recheck:
+            rounds += 1
+            pending_login_recheck = False
             step = await collect_browser_agent_step(
                 client=self.client,
                 platform=self.PLATFORM.value,
                 loop_context=self._build_browser_agent_loop_context(
                     stage="preflight",
                     url=url or self.URL,
+                    meta={"login_entry_attempted": login_entry_attempted},
                 ),
                 target_url=url or self.URL,
                 screenshot_provider=self._browser_agent_screenshot_provider,
             )
             decision = step.decision
+            if login_entry_attempted:
+                # An LLM decision must not retry a login CTA indefinitely after
+                # the click failed to expose a recognizable login surface.
+                deterministic = decide_browser_stage(
+                    step.observation,
+                    loop_context=step.loop_context,
+                    target_url=url or self.URL,
+                )
+                if (
+                    deterministic.outcome == "takeover_required"
+                    and deterministic.blocker_kind == "login"
+                ):
+                    decision = deterministic
             logger.info(
                 "[%s] Browser-agent preflight decision: outcome=%s blocker=%s rationale=%s",
                 self.PLATFORM_KEY,
@@ -1107,6 +1127,12 @@ class BaseBrowserHandler(ABC):
 
             action_ok = True
             for action in decision.actions:
+                if (
+                    self.PLATFORM_KEY == "kimi"
+                    and action.reason == "expand login surface before takeover"
+                ):
+                    login_entry_attempted = True
+                    pending_login_recheck = True
                 action_ok = await self._execute_browser_agent_action(
                     action,
                     fallback_url=url or self.URL,
@@ -1114,6 +1140,8 @@ class BaseBrowserHandler(ABC):
                 if not action_ok:
                     break
             if not action_ok:
+                if pending_login_recheck:
+                    continue
                 return [], False
 
         return [], False
@@ -1204,6 +1232,18 @@ class BaseBrowserHandler(ABC):
                     screenshot_provider=self._browser_agent_screenshot_provider,
                 )
                 decision = step.decision
+                if self.PLATFORM_KEY == "kimi":
+                    deterministic = decide_browser_stage(
+                        step.observation,
+                        loop_context=step.loop_context,
+                        target_url=target_url or self.URL,
+                    )
+                    if (
+                        deterministic.takeover is not None
+                        and deterministic.takeover.reason_code
+                        == "login_entry_after_submit"
+                    ):
+                        decision = deterministic
                 if (
                     decision.blocker_kind == "target_closed"
                     and callable(sync_method)

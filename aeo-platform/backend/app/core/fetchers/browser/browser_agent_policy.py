@@ -454,6 +454,24 @@ def decide_browser_stage(
     if loop_context.stage == "preflight":
         login_cta_ref = _has_login_cta(observation, text_blob, profile)
         if login_cta_ref:
+            if (
+                profile is not None
+                and profile.platform == "kimi"
+                and loop_context.meta.get("login_entry_attempted")
+            ):
+                return BrowserAgentDecision(
+                    outcome="takeover_required",
+                    blocker_kind="login",
+                    rationale="login entry remains after opening it",
+                    confidence=0.9,
+                    takeover=_build_takeover(
+                        blocker_kind="login",
+                        reason_code="login_entry_unresolved",
+                        observation=observation,
+                        loop_context=loop_context,
+                        text_blob=text_blob,
+                    ),
+                )
             return BrowserAgentDecision(
                 outcome="continue",
                 actions=(
@@ -472,6 +490,28 @@ def decide_browser_stage(
                 rationale="login entry detected; opening live blocking scene first",
                 confidence=0.84,
             )
+
+    # Kimi can keep only a login entry visible after a submitted question. At
+    # these stages the caller has already established that no answer appeared.
+    if (
+        profile is not None
+        and profile.platform == "kimi"
+        and loop_context.stage in {"wait_gate", "empty_answer"}
+        and _has_login_cta(observation, text_blob, profile)
+    ):
+        return BrowserAgentDecision(
+            outcome="takeover_required",
+            blocker_kind="login",
+            rationale="Kimi login entry visible while answer is absent",
+            confidence=0.85,
+            takeover=_build_takeover(
+                blocker_kind="login",
+                reason_code="login_entry_after_submit",
+                observation=observation,
+                loop_context=loop_context,
+                text_blob=text_blob,
+            ),
+        )
 
     if loop_context.stage == "resume_probe" and _is_ready_surface(observation, text_blob, profile):
         return BrowserAgentDecision(
