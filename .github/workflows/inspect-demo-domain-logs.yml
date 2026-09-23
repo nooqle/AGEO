@@ -163,6 +163,10 @@ jobs:
 
           echo "== nginx recent slow/static lines =="
           if [ -r /var/log/nginx/access.log ]; then
+            echo "== auth login responses (timestamps and status only) =="
+            sudo grep -E '"POST /api/v1/auth/(login/otp|invite/redeem) ' /var/log/nginx/access.log |
+              tail -n 30 |
+              sed -nE 's/.*\[([^]]+)\] "POST \/api\/v1\/auth\/([^ ]+) HTTP\/[^"]+" ([0-9]+).*/\1 auth:\2 status:\3/p' || true
             sudo tail -n 2000 /var/log/nginx/access.log |
               grep -E 'GET /dashboard|GET /_next/|GET /api/v1| 499 | 500 | 502 | 503 | 504 ' |
               tail -n 160 || true
