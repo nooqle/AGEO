@@ -80,6 +80,30 @@ class QwenHandler(BaseBrowserHandler):
             return await self._authenticated()
         return await super().probe_takeover_ready(action_type)
 
+    async def _open_login_dialog(self) -> bool:
+        """Expose the site's login form before handing the browser to the user."""
+
+        page = self.client.page
+        if page is None:
+            return False
+        try:
+            login_frame = page.locator('iframe[src*="passport.qianwen.com"]')
+            if await login_frame.count() and await login_frame.first.is_visible():
+                return True
+            login_buttons = page.get_by_role(
+                "button", name=re.compile(r"^(登录|登录/注册|Log in|Sign in)$", re.I)
+            )
+            for index in range(min(await login_buttons.count(), 5)):
+                button = login_buttons.nth(index)
+                if not await button.is_visible():
+                    continue
+                await button.click(timeout=5000)
+                await login_frame.first.wait_for(state="visible", timeout=5000)
+                return True
+        except Exception as exc:
+            logger.info("[Qwen] Login dialog not confirmed; user takeover remains available: %s", exc)
+        return False
+
     async def _verify_search_evidence(self) -> None:
         """Require search status plus source cards from this conversation."""
 
@@ -193,11 +217,15 @@ class QwenHandler(BaseBrowserHandler):
             if not await self._authenticated():
                 events, request_id = await self._begin_login_takeover_gate(
                     message="千问需要登录后才能采集，请在浏览器中完成登录",
-                    action_hint="在千问页面扫码或使用手机号登录，完成后点击我已完成",
+                    action_hint="请在接管窗口扫码或使用手机号登录；若未看到登录窗口，请先点击千问页面“登录”，完成后点击我已完成",
                     progress=0.25,
                     url=self.URL,
                     open_error_message="千问登录接管窗口无法打开",
                 )
+                if request_id:
+                    # The shared gate can reopen a non-AIO browser. Open the dialog
+                    # only on the final page the user will actually control.
+                    await self._open_login_dialog()
                 for event in events:
                     yield event
                 if not request_id:
