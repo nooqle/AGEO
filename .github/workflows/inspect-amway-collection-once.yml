@@ -2,6 +2,15 @@ name: Inspect Amway Collection Once
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: Read-only inspection to run.
+        required: true
+        default: collection
+        type: choice
+        options:
+          - collection
+          - db_pool
   push:
     branches:
       - codex/amway-live-diagnostic-20260905
@@ -28,6 +37,7 @@ jobs:
           : "${DEMO_SSH_KEY:?Missing DEMO_SSH_KEY secret}"
 
       - name: Read sanitized collection state
+        if: ${{ inputs.diagnostic != 'db_pool' }}
         env:
           DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
           DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
@@ -214,3 +224,155 @@ jobs:
           )
 
           ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" "bash -s" <<< "$remote_script"
+
+      - name: Read sanitized database pool state
+        if: ${{ inputs.diagnostic == 'db_pool' }}
+        shell: bash
+        env:
+          DEMO_SSH_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
+          DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
+          DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          key_path=~/.ssh/ageo_db_pool_inspect_key
+          trap 'rm -f "$key_path"' EXIT
+          printf '%s\n' "$DEMO_SSH_KEY" | sed 's/\\n/\n/g' | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          ssh-keygen -y -f "$key_path" >/dev/null
+          ssh_options=(
+            -i "$key_path" -p "$DEMO_SSH_PORT"
+            -o BatchMode=yes -o ConnectTimeout=20 -o ConnectionAttempts=2
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+          )
+
+          remote_script=$(cat <<'REMOTE'
+          set -euo pipefail
+          release="$(readlink -f /srv/ageo-deploy/current)"
+          [[ "$release" == /srv/ageo-deploy/releases/* ]] || { echo 'release=invalid'; exit 2; }
+          sha="${release##*/}"
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]] || { echo 'release_sha=invalid'; exit 2; }
+          echo "release_sha=$sha"
+          backend="$release/aeo-platform/backend"
+          python_bin="$backend/.venv/bin/python"
+          [[ -x "$python_bin" ]] || { echo 'backend_python=missing'; exit 2; }
+          [[ -f "$backend/.env.local" ]] || { echo 'backend_env=missing'; exit 2; }
+          echo 'backend_env=present'
+
+          for unit in ageo-backend.service ageo-frontend.service; do
+            echo "== $unit =="
+            systemctl show "$unit" --property=ActiveState,SubState,MainPID,NRestarts,Result --no-pager
+            pid="$(systemctl show "$unit" --property=MainPID --value)"
+            if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+              ps -p "$pid" -o pid=,stat=,etime=,comm= || true
+            fi
+          done
+          if curl --silent --output /dev/null --max-time 8 --write-out 'backend_health_http=%{http_code}\n' http://127.0.0.1:8000/health; then
+            :
+          else
+            echo 'backend_health=unavailable'
+          fi
+
+          cd "$backend"
+          timeout --signal=TERM --kill-after=5s 45s "$python_bin" -B - <<'PY'
+          import asyncio
+          import hashlib
+          import json
+          import re
+          from sqlalchemy import text
+          from sqlalchemy.ext.asyncio import create_async_engine
+          from sqlalchemy.pool import NullPool
+          from app.core.config import settings
+
+          AGGREGATES = text("""
+              SELECT state, wait_event_type, wait_event, application_name,
+                     count(*) AS connections
+              FROM pg_stat_activity
+              WHERE datname = current_database()
+              GROUP BY state, wait_event_type, wait_event, application_name
+              ORDER BY connections DESC, state NULLS LAST
+          """)
+          LONG_TRANSACTIONS = text("""
+              SELECT pid, state, wait_event_type, wait_event,
+                     extract(epoch FROM now() - xact_start)::bigint AS age_seconds,
+                     CASE
+                       WHEN upper(substring(query FROM '^[[:space:]]*([[:alpha:]]+)'))
+                            IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'WITH',
+                                'BEGIN', 'COMMIT', 'ROLLBACK', 'SET', 'SHOW',
+                                'CREATE', 'ALTER', 'DROP', 'CALL', 'COPY')
+                       THEN upper(substring(query FROM '^[[:space:]]*([[:alpha:]]+)'))
+                       ELSE 'OTHER'
+                     END AS query_type
+              FROM pg_stat_activity
+              WHERE datname = current_database()
+                AND xact_start < now() - interval '60 seconds'
+              ORDER BY xact_start ASC
+              LIMIT 30
+          """)
+
+          def safe_event(value):
+              return value if value and re.fullmatch(r'[A-Za-z0-9_ ()]{1,64}', value) else 'none_or_redacted'
+
+          def safe_app(value):
+              if not value:
+                  return 'empty'
+              if value in ('psql', 'PostgreSQL JDBC Driver'):
+                  return value
+              return 'sha256:' + hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]
+
+          async def main():
+              if not settings.is_postgres:
+                  print('database_type=not_postgres')
+                  return 2
+              engine = None
+              try:
+                  engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+                  async with engine.connect() as conn:
+                      await conn.execute(text('SET TRANSACTION READ ONLY'))
+                      await conn.execute(text("SET LOCAL statement_timeout = '8s'"))
+                      groups = (await conn.execute(AGGREGATES)).mappings().all()
+                      long_tx = (await conn.execute(LONG_TRANSACTIONS)).mappings().all()
+                  print('database_type=postgres')
+                  print('== pg_stat_activity grouped ==')
+                  for row in groups:
+                      print(json.dumps({
+                          'state': safe_event(row['state']),
+                          'wait_event_type': safe_event(row['wait_event_type']),
+                          'wait_event': safe_event(row['wait_event']),
+                          'application_name': safe_app(row['application_name']),
+                          'connections': int(row['connections']),
+                      }, sort_keys=True))
+                  print('== transactions older than 60 seconds (max 30) ==')
+                  print(f'rows={len(long_tx)}')
+                  for row in long_tx:
+                      print(json.dumps({
+                          'pid': int(row['pid']),
+                          'state': safe_event(row['state']),
+                          'age_seconds': int(row['age_seconds']),
+                          'wait_event_type': safe_event(row['wait_event_type']),
+                          'wait_event': safe_event(row['wait_event']),
+                          'query_type': row['query_type'],
+                      }, sort_keys=True))
+                  return 0
+              except Exception as exc:
+                  print(f'db_diag=failed error_type={type(exc).__name__}')
+                  return 1
+              finally:
+                  if engine is not None:
+                      try:
+                          await engine.dispose()
+                      except Exception as exc:
+                          print(f'db_cleanup=failed error_type={type(exc).__name__}')
+
+          raise SystemExit(asyncio.run(main()))
+          PY
+          REMOTE
+          )
+          if ! timeout --signal=TERM --kill-after=5s 90s ssh "${ssh_options[@]}" \
+            "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" 'bash -s' <<< "$remote_script" 2>/dev/null; then
+            echo 'inspect_remote=failed'
+            exit 1
+          fi
