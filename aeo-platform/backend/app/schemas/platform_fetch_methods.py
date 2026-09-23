@@ -2,7 +2,7 @@
 
 from typing import Any
 
-PLATFORMS = ("doubao", "yuanbao", "kimi", "deepseek")
+PLATFORMS = ("doubao", "yuanbao", "kimi", "deepseek", "qwen")
 
 
 def resolve_platform_fetch_methods(
@@ -10,7 +10,7 @@ def resolve_platform_fetch_methods(
     explicit: bool = False, legacy_yuanbao_browser: bool = False,
 ) -> dict[str, str]:
     defaults = {
-        platform: "browser" if fetch_mode == "full" or platform == "deepseek" else "api"
+        platform: "browser" if fetch_mode == "full" or platform in {"deepseek", "qwen"} else "api"
         for platform in PLATFORMS
     }
     if explicit:

@@ -58,7 +58,9 @@ def billing_details(record: LLMUsageRecord) -> dict[str, Any]:
     is_kimi_search = (getattr(record, "provider", None) == "moonshot"
                       and (metadata.get("protocol") == "moonshot_chat_search"
                            or metadata.get("usage_scope") == "a4_platform_fetch"))
-    if is_hy3 or is_kimi_search:
+    is_qwen_search = (getattr(record, "provider", None) == "qwen"
+                      and metadata.get("protocol") == "qianwen_dashscope_multimodal_search")
+    if is_hy3 or is_kimi_search or is_qwen_search:
         provider_usage = metadata.get("provider_usage")
         tool_usage = provider_usage.get("tool_usage") if isinstance(provider_usage, dict) else None
         requests = tool_usage.get("web_search_call") if isinstance(tool_usage, dict) else None

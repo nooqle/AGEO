@@ -80,7 +80,7 @@ export interface BrowserTakeoverAccess {
 
 export interface BrowserState {
   state: BrowserStateType;
-  platform: 'kimi' | 'deepseek' | 'doubao' | 'yuanbao';
+  platform: 'kimi' | 'deepseek' | 'doubao' | 'yuanbao' | 'qwen';
   message: string;
   requiresAction: boolean;
   actionType?: BrowserActionType;

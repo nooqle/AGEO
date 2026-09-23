@@ -175,6 +175,26 @@ yuanbao:
     - "Sources"
     - "References"
 
+qwen:
+  url: "https://www.qwen.com/"
+  input: "[contenteditable='true'][role='textbox'], textarea, [contenteditable='true']"
+  new_chat: "a[href='/'], button[aria-label*='新建'], button[aria-label*='New chat']"
+  content:
+    - ".qk-markdown-react"
+    - "[data-testid='message-content']"
+    - "[class*='assistant'] [class*='markdown']"
+  # Login and search selectors are conservative until a signed-in AIO pilot.
+  account_marker: "header [data-testid='user-avatar'], header button[aria-label*='个人'], header button[aria-label*='账号'], nav [data-testid='user-avatar']"
+  search_button: "button:has-text('联网搜索'), button:has-text('Web Search')"
+  reference_links:
+    - "[class*='source'] a[href^='http']"
+    - "[class*='reference'] a[href^='http']"
+  citation_strip: "[class*='cite'], [class*='citation'], sup"
+  reference_expand_texts:
+    - "来源"
+    - "引用"
+    - "Sources"
+
 
 doubao:
   url: "https://www.doubao.com/chat/"

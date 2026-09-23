@@ -10,6 +10,7 @@ export const PLATFORM_META: Array<{ id: string; label: string }> = [
   { id: 'kimi', label: 'Kimi' },
   { id: 'doubao', label: '豆包' },
   { id: 'hunyuan', label: '腾讯元宝' },
+  { id: 'qwen', label: '千问' },
 ];
 
 export const NODE_DEFINITIONS: Array<{
@@ -75,6 +76,7 @@ export const PLATFORM_POSITIONS = [
   { x: 660, y: -30 },
   { x: 660, y: 50 },
   { x: 660, y: 130 },
+  { x: 660, y: 210 },
 ];
 
 export const STATUS_TEXT: Record<FlowNodeStatus, string> = {

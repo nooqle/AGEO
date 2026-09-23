@@ -4811,6 +4811,7 @@ def _report_platform_label(value: Any) -> str:
         "tencent yuanbao": "元宝",
         "tencent_yuanbao": "元宝",
         "hunyuan": "腾讯混元",
+        "qwen": "千问",
         "腾讯混元": "腾讯混元",
         "chatgpt": "ChatGPT",
     }.get(normalized.lower(), _clean_text(value) or "未知平台")
@@ -4951,7 +4952,7 @@ def _build_storyline_report_sections(
     )
     platform_claims = [
         _story_platform_sentence(profile)
-        for profile in platform_profiles[:4]
+        for profile in platform_profiles
         if profile.get("platform")
     ]
     entity_fact_lines = [
@@ -5005,7 +5006,7 @@ def _build_storyline_report_sections(
     platform_focus = _join_report_terms(
         [
             _report_platform_label(profile.get("platform"))
-            for profile in platform_profiles[:4]
+            for profile in platform_profiles
             if profile.get("platform")
         ],
         "平台样本待补",
@@ -5098,7 +5099,7 @@ def _build_storyline_report_sections(
     platform_refs = list(
         dict.fromkeys(
             _clean_text(ref)
-            for profile in platform_profiles[:4]
+            for profile in platform_profiles
             for ref in profile.get("evidence_refs") or []
             if _clean_text(ref)
         )
@@ -5144,7 +5145,7 @@ def _build_storyline_report_sections(
     platform_question_ids = list(
         dict.fromkeys(
             _clean_text(question_id)
-            for profile in platform_profiles[:4]
+            for profile in platform_profiles
             for question_id in profile.get("question_ids") or []
             if _clean_text(question_id)
         )
@@ -5363,7 +5364,7 @@ def _build_storyline_report_sections(
                 f"AI 档案前排联想是{top_entities}。"
                 f"四有结构化状态为：{pillar_status_summary}。"
             ),
-            "claims": platform_claims[:4] or [f"解析节点 {len(nodes)} 个。"],
+            "claims": platform_claims or [f"解析节点 {len(nodes)} 个。"],
             "paragraphs": [
                 (
                     f"AI 档案里最前排的正向词是{top_entities}。"
@@ -5594,7 +5595,7 @@ def _build_storyline_report_sections(
             "title": "平台差异",
             "reader_question": "哪个平台更容易给安利完整叙事，哪个平台风险更重？",
             "takeaway": f"同一个{center_term}，{platform_story}",
-            "claims": platform_claims[:4] or ["平台样本待补。"],
+            "claims": platform_claims or ["平台样本待补。"],
             "paragraphs": [
                 (
                     "平台差异决定内容往哪投。"
@@ -6044,10 +6045,10 @@ def _build_calibrated_report_narrative_sections(
             "title": "平台差异",
             "reader_question": "不同平台怎样验证同一个战略词？",
             "takeaway": f"平台差异必须绑定战略词来看。{platform_scope_sentence}",
-            "claims": strategy_platform_lines[:4]
+            "claims": strategy_platform_lines
             or [
                 _clean_text(row.get("answer_preference"))
-                for row in platform_source_summary.get("platforms", [])[:4]
+                for row in platform_source_summary.get("platforms", [])
                 if _clean_text(row.get("answer_preference"))
             ]
             or ["平台偏好还需要继续观察。"],

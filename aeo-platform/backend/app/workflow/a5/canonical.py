@@ -28,7 +28,6 @@ from app.workflow.a5.diagnosis import (
     validate_report_artifact,
 )
 from app.workflow.brand_mentions import extract_brand_aliases
-from app.workflow.nodes_a4 import PLATFORMS
 
 
 CANONICAL_PLATFORM_ALIASES = {
@@ -37,6 +36,7 @@ CANONICAL_PLATFORM_ALIASES = {
     "doubao": "doubao",
     "deepseek": "deepseek",
     "kimi": "kimi",
+    "qwen": "qwen",
 }
 
 CANONICAL_REPORT_KIND_ALIASES = {
@@ -306,6 +306,7 @@ PLATFORM_DISPLAY = {
     "doubao": "豆包",
     "deepseek": "DeepSeek",
     "yuanbao": "元宝",
+    "qwen": "千问",
 }
 
 
@@ -1771,7 +1772,7 @@ def build_input_bundle(
         entity_id=entity_id,
         generated_at=datetime.now(timezone.utc).date().isoformat(),
         platforms=sorted(
-            platforms_seen or {normalize_platform(platform) for platform in PLATFORMS}
+            platforms_seen or {"deepseek", "kimi", "doubao", "yuanbao"}
         ),
     )
 

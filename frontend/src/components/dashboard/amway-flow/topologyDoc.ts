@@ -14,16 +14,16 @@ import type {
 } from './types';
 
 export function readEnabledFlowPlatforms(entityId: string): string[] {
-  if (typeof window === 'undefined') return ALL_PLATFORM_IDS;
+  if (typeof window === 'undefined') return ALL_PLATFORM_IDS.filter((id) => id !== 'qwen');
   try {
     const raw = window.localStorage.getItem(PLATFORMS_STORAGE_PREFIX + entityId);
-    if (!raw) return ALL_PLATFORM_IDS;
+    if (!raw) return ALL_PLATFORM_IDS.filter((id) => id !== 'qwen');
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return ALL_PLATFORM_IDS;
+    if (!Array.isArray(parsed)) return ALL_PLATFORM_IDS.filter((id) => id !== 'qwen');
     const valid = parsed.filter((id) => ALL_PLATFORM_IDS.includes(String(id))).map(String);
-    return valid.length ? valid : ALL_PLATFORM_IDS;
+    return valid;
   } catch {
-    return ALL_PLATFORM_IDS;
+    return ALL_PLATFORM_IDS.filter((id) => id !== 'qwen');
   }
 }
 
@@ -44,7 +44,7 @@ export function platformsEnabledByTopology(topology: {
     Array.isArray(topology.removedEdgeIds) ? topology.removedEdgeIds.map(String) : [],
   );
   const enabled = ALL_PLATFORM_IDS.filter((id) => !removed.has(`e-fetch-${id}`));
-  return enabled.length ? enabled : [...ALL_PLATFORM_IDS];
+  return enabled;
 }
 
 export function syncPlatformStorageFromTopology(
@@ -58,7 +58,7 @@ export function syncPlatformStorageFromTopology(
 
 
 export function emptyFlowTopology(): FlowTopology {
-  return { version: 1, customNodes: [], customEdges: [], removedEdgeIds: [] };
+  return { version: 2, customNodes: [], customEdges: [], removedEdgeIds: ['e-fetch-qwen'] };
 }
 
 export function parseFlowTopology(raw: unknown): FlowTopology {
@@ -97,7 +97,8 @@ export function parseFlowTopology(raw: unknown): FlowTopology {
     });
   const removedEdgeIds = (Array.isArray(parsed.removedEdgeIds) ? parsed.removedEdgeIds : [])
     .filter((id): id is string => typeof id === 'string' && EDGE_DEFS.some((definition) => definition.id === id));
-  return { version: 1, customNodes, customEdges, removedEdgeIds };
+  if (parsed.version !== 2 && !removedEdgeIds.includes('e-fetch-qwen')) removedEdgeIds.push('e-fetch-qwen');
+  return { version: 2, customNodes, customEdges, removedEdgeIds };
 }
 
 export function readFlowTopology(entityId: string): FlowTopology {

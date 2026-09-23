@@ -27,9 +27,10 @@ const PLATFORM_CONFIG: Record<string, { label: string; color: string; dotColor: 
   yuanbao:   { label: '元宝',     color: 'var(--evidence-secondary)', dotColor: '#7B6A4C' },
   kimi:      { label: 'Kimi',    color: 'var(--success)',            dotColor: '#3F8F62' },
   deepseek:  { label: 'DeepSeek',color: 'var(--brand-primary)',      dotColor: '#1F7A6B' },
+  qwen:      { label: '千问',     color: 'var(--evidence-secondary)', dotColor: '#6D7182' },
 };
 
-const PLATFORM_ORDER = ['doubao', 'yuanbao', 'kimi', 'deepseek'] as const;
+const PLATFORM_ORDER = ['doubao', 'yuanbao', 'kimi', 'deepseek', 'qwen'] as const;
 
 function normalizeFetchStatus(value: string | undefined): FetchPlatformStatusValue {
   const normalized = value?.trim().toLowerCase();

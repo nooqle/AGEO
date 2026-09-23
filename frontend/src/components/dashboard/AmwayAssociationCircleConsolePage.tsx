@@ -13,6 +13,7 @@ import {
 import { buildAssociationProjection } from './AmwayAssociationCircleDashboardViews';
 import { AmwayConsoleHeader } from './AmwayConsoleHeader';
 import { AmwayFlowCanvas, readEnabledFlowPlatforms } from './AmwayFlowCanvas';
+import { parseFlowTopology, platformsEnabledByTopology } from './amway-flow/topologyDoc';
 import { useEntityStore } from '@/stores/entityStore';
 import { useIntelligenceRunStore } from '@/stores/intelligenceRunStore';
 import { useOntologyStore } from '@/stores/ontologyStore';
@@ -812,6 +813,15 @@ export function AmwayAssociationCircleConsolePage({
         payload?.uploadedQuestions?.filter((question) => question.text.trim()) || [];
       startPendingRef.current = true;
       try {
+        // The canvas saves its topology asynchronously. Start only after the
+        // authoritative platform edges match the switches shown to the user.
+        const savedTopology = await api.getAmwayFlowTopology(selectedEntityId);
+        const savedPlatforms = platformsEnabledByTopology(
+          parseFlowTopology(savedTopology.topology),
+        );
+        if (JSON.stringify([...platforms].sort()) !== JSON.stringify([...savedPlatforms].sort())) {
+          throw new Error('平台连线尚未同步到服务器，请稍后再开始运行。');
+        }
         let uploadedQuestionSetId: string | null = payload?.questionSetId || null;
         let questionSetVersion: number | null = payload?.questionSetVersion || null;
         if (uploadedQuestions.length && payload?.persistQuestionSet && !uploadedQuestionSetId) {

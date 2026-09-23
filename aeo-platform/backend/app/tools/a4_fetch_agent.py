@@ -18,8 +18,8 @@ from app.schemas.platform_fetch_methods import resolve_platform_fetch_methods
 
 logger = logging.getLogger(__name__)
 
-AioPublicPlatform = Literal["doubao", "yuanbao", "kimi", "deepseek"]
-AioExecutorPlatform = Literal["doubao", "hunyuan", "kimi", "deepseek"]
+AioPublicPlatform = Literal["doubao", "yuanbao", "kimi", "deepseek", "qwen"]
+AioExecutorPlatform = Literal["doubao", "hunyuan", "kimi", "deepseek", "qwen"]
 AioFetchMode = Literal["fast", "full"]
 AioFetchMethod = Literal["api", "browser"]
 AioPlatformStatus = Literal["result", "takeover_required", "skipped", "failed"]
@@ -29,6 +29,7 @@ PUBLIC_PLATFORM_IDS: tuple[AioPublicPlatform, ...] = (
     "yuanbao",
     "kimi",
     "deepseek",
+    "qwen",
 )
 
 _PUBLIC_PLATFORM_DISPLAY_NAMES: dict[str, str] = {
@@ -37,6 +38,7 @@ _PUBLIC_PLATFORM_DISPLAY_NAMES: dict[str, str] = {
     "hunyuan": "元宝",
     "kimi": "Kimi",
     "deepseek": "DeepSeek",
+    "qwen": "千问",
 }
 
 _PLATFORM_ALIASES: dict[str, AioPublicPlatform] = {
@@ -60,6 +62,10 @@ _PLATFORM_ALIASES: dict[str, AioPublicPlatform] = {
     "deepseek_browser": "deepseek",
     "deepseek_api": "deepseek",
     "deepseek_web": "deepseek",
+    "qwen": "qwen",
+    "千问": "qwen",
+    "qwen_api": "qwen",
+    "qwen_browser": "qwen",
 }
 
 _PUBLIC_TO_EXECUTOR_PLATFORM: dict[AioPublicPlatform, AioExecutorPlatform] = {
@@ -67,6 +73,7 @@ _PUBLIC_TO_EXECUTOR_PLATFORM: dict[AioPublicPlatform, AioExecutorPlatform] = {
     "yuanbao": "hunyuan",
     "kimi": "kimi",
     "deepseek": "deepseek",
+    "qwen": "qwen",
 }
 
 _EXECUTOR_TO_PUBLIC_PLATFORM: dict[str, AioPublicPlatform] = {
@@ -75,9 +82,10 @@ _EXECUTOR_TO_PUBLIC_PLATFORM: dict[str, AioPublicPlatform] = {
     "yuanbao": "yuanbao",
     "kimi": "kimi",
     "deepseek": "deepseek",
+    "qwen": "qwen",
 }
 
-_API_PUBLIC_PLATFORMS: set[AioPublicPlatform] = {"doubao", "yuanbao", "kimi"}
+_API_PUBLIC_PLATFORMS: set[AioPublicPlatform] = {"doubao", "yuanbao", "kimi", "qwen"}
 _FAST_BROWSER_PUBLIC_PLATFORMS: set[AioPublicPlatform] = {"deepseek"}
 
 
@@ -403,6 +411,10 @@ class AioAnswerFetchTool:
             from app.core.fetchers.browser.doubao_handler import DoubaoHandler
 
             return DoubaoHandler(browser_client, session_id=session_id, run_id=run_id)
+        if public_platform == "qwen":
+            from app.core.fetchers.browser.qwen_handler import QwenHandler
+
+            return QwenHandler(browser_client, session_id=session_id, run_id=run_id)
         raise ValueError(f"Unsupported AIO browser platform: {platform!r}")
 
     async def gather_browser_tasks(
@@ -665,6 +677,7 @@ def build_legacy_platform_configs() -> dict[str, dict[str, str]]:
         "hunyuan": {"name": display_platform_name("yuanbao"), "method": "api"},
         "kimi": {"name": display_platform_name("kimi"), "method": "api"},
         "deepseek": {"name": display_platform_name("deepseek"), "method": "browser"},
+        "qwen": {"name": display_platform_name("qwen"), "method": "browser"},
     }
 
 

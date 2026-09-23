@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Canvas platform ids double as A4 executor keys for all four platforms
 # (canvas "hunyuan" == executor "hunyuan" == public "yuanbao").
 # Must stay in sync with frontend AmwayFlowCanvas PLATFORM_META.
-CANVAS_PLATFORM_IDS: tuple[str, ...] = ("deepseek", "kimi", "doubao", "hunyuan")
+CANVAS_PLATFORM_IDS: tuple[str, ...] = ("deepseek", "kimi", "doubao", "hunyuan", "qwen")
 
 # Builtin canvas edge ids — must stay in sync with frontend
 # AmwayFlowCanvas EDGE_DEFS.
@@ -107,7 +107,8 @@ def disabled_platform_ids(topology: FlowTopology) -> frozenset[str]:
     return frozenset(
         platform
         for platform in CANVAS_PLATFORM_IDS
-        if not is_edge_active(topology, platform_edge_id(platform))
+        if (platform == "qwen" and topology.version < 2)
+        or not is_edge_active(topology, platform_edge_id(platform))
     )
 
 

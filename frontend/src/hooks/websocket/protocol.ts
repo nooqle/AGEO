@@ -60,4 +60,5 @@ export const BROWSER_PLATFORMS: BrowserState['platform'][] = [
   'deepseek',
   'doubao',
   'yuanbao',
+  'qwen',
 ];

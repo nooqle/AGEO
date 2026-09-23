@@ -58,7 +58,7 @@ export type FlowTopologyCustomEdge = {
 };
 
 export type FlowTopology = {
-  version: 1;
+  version: 1 | 2;
   customNodes: FlowTopologyCustomNode[];
   customEdges: FlowTopologyCustomEdge[];
   removedEdgeIds: string[];

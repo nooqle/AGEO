@@ -483,7 +483,10 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
         )
         reusable_contexts = [candidate for candidate in existing_contexts if candidate]
         self.context_reuse_strategy = None
-        if reusable_contexts and target_host:
+        # Qwen login must be scoped to this Specta user and environment. A
+        # host-matched context can belong to another account and bypasses the
+        # saved platform state and configured UA, so it is never borrowed.
+        if reusable_contexts and target_host and self.platform != "qwen":
             for candidate in reversed(reusable_contexts):
                 existing_pages = [
                     page for page in candidate.pages if self._is_page_reusable(page)
@@ -519,7 +522,7 @@ class AioConnectedBrowserClient(PlaywrightBrowserClient):
                 self.session_name,
                 target_host,
             )
-        elif reusable_contexts:
+        elif reusable_contexts and self.platform != "qwen":
             self._context_owned_by_client = False
             self._storage_state_loaded_into_context = False
             logger.info(

@@ -3,6 +3,7 @@ export const COLLECTION_PLATFORMS = [
   { id: 'doubao', label: '豆包' },
   { id: 'kimi', label: 'Kimi' },
   { id: 'yuanbao', label: '元宝' },
+  { id: 'qwen', label: '千问' },
 ] as const;
 
 export type CollectionPlatform = typeof COLLECTION_PLATFORMS[number]['id'];
@@ -10,7 +11,7 @@ export type PlatformFetchMethod = 'api' | 'browser';
 export type PlatformFetchMethods = Record<CollectionPlatform, PlatformFetchMethod>;
 
 export function defaultPlatformFetchMethods(): PlatformFetchMethods {
-  return { deepseek: 'browser', doubao: 'browser', kimi: 'browser', yuanbao: 'browser' };
+  return { deepseek: 'browser', doubao: 'browser', kimi: 'browser', yuanbao: 'browser', qwen: 'browser' };
 }
 
 export function platformFetchMethodsFromScope(scope: Record<string, unknown> | null | undefined): Partial<PlatformFetchMethods> {
@@ -23,7 +24,7 @@ export function platformFetchMethodsFromScope(scope: Record<string, unknown> | n
     }
     return methods;
   }
-  if (scope?.fetch_mode === 'fast') return { deepseek: 'browser', doubao: 'api', kimi: 'api', yuanbao: 'api' };
+  if (scope?.fetch_mode === 'fast') return { deepseek: 'browser', doubao: 'api', kimi: 'api', yuanbao: 'api', qwen: 'browser' };
   return scope?.fetch_mode === 'full' ? defaultPlatformFetchMethods() : {};
 }
 

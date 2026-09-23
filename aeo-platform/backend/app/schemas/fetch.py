@@ -15,6 +15,7 @@ class Platform(str, Enum):
     HUNYUAN = "yuanbao"
     KIMI = "kimi"
     DEEPSEEK = "deepseek"
+    QWEN = "qwen"
 
 
 class FetchMethod(str, Enum):

@@ -29,6 +29,7 @@ PLATFORM_LABELS = {
     "deepseek": "DeepSeek",
     "kimi": "Kimi",
     "doubao": "豆包",
+    "qwen": "千问",
     "yuanbao": "元宝",
     "chatgpt": "ChatGPT",
     "gpt": "ChatGPT",
@@ -183,6 +184,13 @@ def _text_or_pending(value: Any) -> str:
 def _platform_label(platform: Any) -> str:
     code = str(platform or "").strip()
     return PLATFORM_LABELS.get(code.lower(), code or "未知平台")
+
+
+def _active_platform_codes(metric_bundle: dict[str, Any]) -> list[str]:
+    profiles = metric_bundle.get("platform_profiles")
+    if isinstance(profiles, dict) and profiles:
+        return sorted(profiles)
+    return ["deepseek", "doubao", "kimi", "yuanbao"]
 
 
 def _join_detail_parts(parts: list[str]) -> str:
@@ -1478,7 +1486,10 @@ def build_action_recommendations(
                 "recommended_asset": contested.get("recommended_asset")
                 or f"{scenario}权威解释页",
                 "target_metric": ["主推荐率", "官网引用转化率", "竞品同台率"],
-                "validation_plan": f"固定 20 个{scenario}问题，在 DeepSeek、豆包、Kimi、元宝复测。",
+                "validation_plan": (
+                    f"固定 20 个{scenario}问题，在"
+                    f"{'、'.join(_platform_label(code) for code in _active_platform_codes(metric_bundle))}复测。"
+                ),
                 "observation_cycle": "2-4 周或下一轮内容上线后。",
             }
         )
@@ -1655,7 +1666,7 @@ def build_no_signal_report(
             "",
             "### 5. 下一轮验证计划",
             f"- 新增问题：品牌比较、场景购买、风险验证三类问题，优先覆盖 {('、'.join(item.get('decision_scenario', '') for item in suggested_scenarios[:3]) or '高价值决策场景')}。",
-            "- 每类问题采样：每个核心场景至少 10 条问题，覆盖 DeepSeek、豆包、Kimi、元宝。",
+            f"- 每类问题采样：每个核心场景至少 10 条问题，覆盖 {'、'.join(_platform_label(code) for code in _active_platform_codes(metric_bundle))}。",
             "- 观察指标：品牌可见度、无品牌率、竞品挤压率、品牌相关链接数。",
             "- 进入完整报告阈值：品牌提及样本达到 5 条以上进入弱信号观察，达到 10 条且有效答案超过 30 条进入完整诊断。",
             "",
@@ -2044,6 +2055,7 @@ def _build_retest_plan(
     *,
     mode: str,
     scenario_items: list[dict[str, Any]],
+    platforms: list[str],
 ) -> dict[str, Any]:
     scenario_names = [
         str(item.get("decision_scenario") or "")
@@ -2053,7 +2065,7 @@ def _build_retest_plan(
     return {
         "question_types": ["品牌比较", "场景购买", "风险验证"],
         "sample_size": "每个核心场景至少 10 条问题",
-        "platforms": ["DeepSeek", "豆包", "Kimi", "元宝"],
+        "platforms": [_platform_label(platform) for platform in platforms],
         "metrics": ["品牌可见度", "无品牌率", "竞品挤压率", "官网引用转化率"],
         "entry_threshold": (
             "品牌提及样本达到 5 条以上进入弱信号观察，达到 10 条且有效答案超过 30 条进入完整诊断。"
@@ -2584,7 +2596,11 @@ def build_structured_report(
         for item in risk_concern_analysis.get("items", []) or []
         if isinstance(item, dict)
     ]
-    retest_plan = _build_retest_plan(mode=mode, scenario_items=scenario_items)
+    retest_plan = _build_retest_plan(
+        mode=mode,
+        scenario_items=scenario_items,
+        platforms=_active_platform_codes(metric_bundle),
+    )
     platform_diagnostics = _build_platform_diagnostics(
         metric_bundle,
         scenario_items=scenario_items,

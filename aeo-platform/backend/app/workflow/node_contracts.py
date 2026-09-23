@@ -238,7 +238,7 @@ AMWAY_NODE_CONTRACTS: dict[str, NodeContract] = {
 
 # Platform sub-nodes hang off `fetch`; their enablement is consumed as
 # platform_filter by the fetch executor (nodes_a4.py).
-AMWAY_PLATFORM_IDS: tuple[str, ...] = ("deepseek", "kimi", "doubao", "hunyuan")
+AMWAY_PLATFORM_IDS: tuple[str, ...] = ("deepseek", "kimi", "doubao", "hunyuan", "qwen")
 
 # Canvas node id -> orchestrator tool key (only directly schedulable nodes).
 CANVAS_TO_TOOL: dict[str, str] = {

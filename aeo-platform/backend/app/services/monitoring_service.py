@@ -33,7 +33,7 @@ class MonitoringService:
         "hunyuan": "yuanbao",
     }
     SUPPORTED_PLATFORM_SET = frozenset(
-        {"doubao", "yuanbao", "hunyuan", "kimi", "deepseek"}
+        {"doubao", "yuanbao", "hunyuan", "kimi", "deepseek", "qwen"}
     )
 
     def __init__(self, db: AsyncSession) -> None:
@@ -739,7 +739,7 @@ class MonitoringService:
                 normalized.append(platform)
 
         if invalid:
-            supported = ", ".join(["doubao", "yuanbao", "kimi", "deepseek"])
+            supported = ", ".join(["doubao", "yuanbao", "kimi", "deepseek", "qwen"])
             raise ValueError(
                 "Unsupported monitoring platforms: "
                 f"{', '.join(invalid)}. Must be one of: {supported}"

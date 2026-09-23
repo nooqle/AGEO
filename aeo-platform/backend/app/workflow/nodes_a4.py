@@ -302,7 +302,7 @@ async def _record_a4_api_usage(
             "provider_endpoint": result.get("provider_endpoint"),
             "search_source": result.get("search_source"),
             "web_search_executed": result.get("web_search_executed"),
-            "cost_scope": "token_estimate",
+            "cost_scope": "token_and_search_unknown" if platform == "qwen" else "token_estimate",
         },
     )
 
@@ -1429,6 +1429,39 @@ def _attach_aio_platform_packet(
         auth_context=getattr(request, "auth_context", None),
         run_context=getattr(request, "run_context", None),
     )
+
+
+def _fill_missing_qwen_browser_results(
+    *,
+    questions: list[dict[str, Any]],
+    question_results: dict[int, list[dict[str, Any]]],
+    question_platform_targets: dict[str, set[str]],
+    request: Any,
+) -> None:
+    """Expose an unavailable Qwen browser pipeline as failed A4 pairs."""
+    for idx, question in enumerate(questions):
+        question_id = _question_id_from_state_question(question)
+        allowed_platforms = question_platform_targets.get(question_id)
+        if allowed_platforms and "qwen" not in allowed_platforms:
+            continue
+        if any(
+            normalize_public_platform_id(result.get("platform")) == "qwen"
+            for result in question_results[idx]
+        ):
+            continue
+        question_results[idx].append(
+            _attach_aio_platform_packet(
+                {
+                    "platform": "qwen",
+                    "fetch_method": "browser",
+                    "success": False,
+                    "error": "Qwen browser pipeline unavailable or missing a result",
+                    "error_code": "browser_pipeline_unavailable",
+                },
+                question=question,
+                request=request,
+            )
+        )
 
 
 def _collect_aio_platform_packets(
@@ -2907,6 +2940,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         hunyuan_client = None
         kimi_client = None
         deepseek_client = None
+        qwen_client = None
         api_init_errors: dict[str, str] = {}
         hunyuan_fetch_method = resolved_methods["yuanbao"] if (_pf is None or "hunyuan" in _pf) else None
         if api_platforms:
@@ -2957,6 +2991,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     deepseek_client = DeepSeekClient()
             except Exception as e:
                 api_init_errors["deepseek"] = str(e)
+            try:
+                if "qwen" in api_platforms:
+                    from app.core.fetchers.api.qwen_client import QwenClient
+
+                    qwen_client = QwenClient()
+            except Exception as e:
+                api_init_errors["qwen"] = str(e)
+                logger.warning("[A4] Qwen client init failed: %s", e)
 
         # ── Browser handlers ──
         # fast mode: DeepSeek, plus Yuanbao when the legacy API is configured
@@ -2969,7 +3011,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
         # state from a previous execution doesn't block new requests.
         from app.workflow.resilience import get_circuit_breaker as _get_cb
 
-        for _p in ["deepseek", "kimi", "hunyuan", "doubao"]:
+        for _p in ["deepseek", "kimi", "hunyuan", "doubao", "qwen"]:
             _get_cb(_p).reset()
 
         # Track all browser clients for cleanup
@@ -2983,6 +3025,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
         yuanbao_browser_client = None
         doubao_browser_handler = None
         doubao_browser_client = None
+        qwen_browser_handler = None
+        qwen_browser_client = None
 
         if playwright_ok:
             # DeepSeek browser: always initialized (both modes)
@@ -3054,6 +3098,18 @@ async def a4_fetch_node(state: AgentState) -> Command:
 
                 except Exception as e:
                     logger.warning("[A4] Doubao browser init failed: %s", e)
+
+                try:
+                    if "qwen" in browser_platforms:
+                        qwen_browser_client = _create_browser_client("qwen", state)
+                        qwen_browser_handler = _AIO_ANSWER_FETCH_TOOL.create_browser_handler(
+                            platform="qwen", browser_client=qwen_browser_client,
+                            session_id=session_id, run_id=state.get("run_id"),
+                        )
+                        browser_clients.append(qwen_browser_client)
+                        logger.info("[A4] Qwen browser handler initialized")
+                except Exception as e:
+                    logger.warning("[A4] Qwen browser init failed: %s", e)
 
         else:
             logger.warning("[A4] Playwright not ready, all browser handlers skipped")
@@ -3361,6 +3417,14 @@ async def a4_fetch_node(state: AgentState) -> Command:
                                 )
                             )
                             api_task_map.append((idx, "kimi"))
+                        if qwen_client is not None and (
+                            not allowed_platforms or "qwen" in allowed_platforms
+                        ):
+                            api_tasks.append(_throttled_retry_fetch(
+                                _fetch_from_qwen, qwen_client, q_text,
+                                platform="qwen", method="api",
+                            ))
+                            api_task_map.append((idx, "qwen"))
                 except BaseException:
                     # Construction can await failed-platform persistence before
                     # the task manager owns these unstarted coroutines.
@@ -3372,6 +3436,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 api_clients = {
                     "doubao": doubao_client, "hunyuan": hunyuan_client,
                     "kimi": kimi_client, "deepseek": deepseek_client,
+                    "qwen": qwen_client,
                 }
                 active_api_platforms = ["deepseek"] if deepseek_client is not None else []
                 if doubao_client is not None:
@@ -3380,6 +3445,8 @@ async def a4_fetch_node(state: AgentState) -> Command:
                     active_api_platforms.append("hunyuan")
                 if kimi_client is not None:
                     active_api_platforms.append("kimi")
+                if qwen_client is not None:
+                    active_api_platforms.append("qwen")
 
                 tracker = _ProgressTracker(
                     total_questions=total,
@@ -3836,6 +3903,7 @@ async def a4_fetch_node(state: AgentState) -> Command:
                 kimi_requested = "kimi" in browser_platforms
                 yuanbao_requested = hunyuan_fetch_method == "browser"
                 doubao_requested = "doubao" in browser_platforms
+                qwen_requested = "qwen" in browser_platforms
 
                 if kimi_requested:
                     requested_browser_platforms.append("kimi")
@@ -3893,6 +3961,16 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         doubao_browser_handler,
                         doubao_browser_client,
                     )
+
+                if qwen_requested:
+                    requested_browser_platforms.append("qwen")
+                if qwen_browser_handler is not None and qwen_browser_client is not None:
+                    browser_tasks.append(_pipeline_with_global_timeout(
+                        qwen_browser_handler, qwen_browser_client, "qwen", "千问",
+                    ))
+                    browser_task_platforms.append("qwen")
+                elif qwen_requested:
+                    logger.warning("[A4] Phase 2: Qwen browser handler unavailable")
 
             if browser_tasks:
                 active_browser_pipeline_count = max(len(browser_task_platforms), 1)
@@ -3978,6 +4056,17 @@ async def a4_fetch_node(state: AgentState) -> Command:
                         question_results[q_idx].append(enriched_result)
                         if _fetch_result_has_success(enriched_result):
                             browser_success_total += 1
+
+            # Browser initialization can fail before a pipeline is queued. Keep
+            # the requested Qwen question/platform pair visible to A5 as a
+            # failure, so a five-platform run cannot silently become four.
+            if "qwen" in browser_platforms:
+                _fill_missing_qwen_browser_results(
+                    questions=questions,
+                    question_results=question_results,
+                    question_platform_targets=question_platform_targets,
+                    request=aio_fetch_request,
+                )
 
             logger.info(
                 "[A4] Phase 2 (Browser) done: %d succeeded", browser_success_total
@@ -4860,6 +4949,56 @@ async def _fetch_from_deepseek(client, question: str) -> dict[str, Any]:
         result.update(success=False, error=f"{type(exc).__name__}: {exc}")
     result["duration"] = (datetime.now(timezone.utc) - started).total_seconds()
     return result
+
+
+async def _fetch_from_qwen(client, question: str) -> dict[str, Any]:
+    """Fetch an attributed search answer through Qwen's DashScope API."""
+    start_time = datetime.now(timezone.utc)
+    try:
+        response = await client.ask_with_search(question)
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        raw = response.raw_response if isinstance(response.raw_response, dict) else {}
+        usage_fields = _api_usage_fields(
+            response, fallback_model=str(getattr(client, "model", "") or "qwen3.7-plus"),
+        )
+        usage_fields.update(
+            protocol="qianwen_dashscope_multimodal_search",
+            actual_provider="qwen",
+            provider_endpoint=getattr(client, "endpoint", None),
+            web_search_supported=True,
+            web_search_executed=bool(raw.get("web_search_executed")),
+            reference_scope=raw.get("reference_scope"),
+        )
+        answer_text = response.answer_text or ""
+        if not answer_text.strip() or not usage_fields["web_search_executed"]:
+            return {
+                "platform": "qwen", "platform_name": "千问", "fetch_method": "api",
+                "success": False,
+                "error": raw.get("search_error") or "Qwen returned no verified web-search answer",
+                "duration": duration, **usage_fields,
+            }
+        return {
+            "platform": "qwen", "platform_name": "千问", "fetch_method": "api",
+            "success": True,
+            "answer": {"content": answer_text, "word_count": len(answer_text.split())},
+            "citations": [ref.model_dump() for ref in response.search_references],
+            "retrieved_sources": raw.get("retrieved_sources") or [],
+            "duration": duration, **usage_fields,
+        }
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise
+        return {
+            "platform": "qwen", "platform_name": "千问", "fetch_method": "api",
+            "success": False, "error": f"HTTP {exc.response.status_code}",
+            "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
+        }
+    except Exception as exc:
+        return {
+            "platform": "qwen", "platform_name": "千问", "fetch_method": "api",
+            "success": False, "error": f"{type(exc).__name__}: {exc}",
+            "duration": (datetime.now(timezone.utc) - start_time).total_seconds(),
+        }
 
 
 async def _fetch_from_kimi(client, question: str) -> dict[str, Any]:

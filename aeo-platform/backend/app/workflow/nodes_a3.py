@@ -41,12 +41,28 @@ from app.workflow.brand_state import build_effective_brand_profile
 
 from app.core.constants import PlatformConstants, WorkflowConstants
 from app.workflow.runtime_policy_executor import build_next_required_action
-from app.workflow.topology_resolver import fetch_chain_enabled, load_flow_topology
+from app.workflow.topology_resolver import (
+    disabled_platform_ids,
+    fetch_chain_enabled,
+    load_flow_topology,
+)
 
 logger = logging.getLogger(__name__)
 
 # Platforms to distribute questions across
 _PLATFORMS = PlatformConstants.SUPPORTED_PLATFORMS
+
+
+async def _question_platforms_for_run(state: AgentState) -> list[str]:
+    """Use only platforms enabled for this entity when assigning question labels.
+
+    Legacy topology documents are v1 and intentionally keep Qwen disabled.
+    Without this gate, enabling Qwen in the global platform registry would
+    relabel one in five old-run questions before A4 applies its topology gate.
+    """
+    topology = await load_flow_topology(state.get("entity_id"))
+    enabled = [p for p in _PLATFORMS if p not in disabled_platform_ids(topology)]
+    return enabled or [p for p in _PLATFORMS if p != "qwen"]
 # Hard limit on total questions
 _MAX_QUESTIONS = WorkflowConstants.MAX_QUESTIONS
 
@@ -700,6 +716,7 @@ async def _a3_association_circle_mode(state: AgentState) -> Command:
     session_id = state["session_id"]
     center_terms = _association_center_terms_from_state(state)
     question_only = _is_question_generation_only(state)
+    run_platforms = await _question_platforms_for_run(state)
 
     await send_progress_event(
         session_id=session_id,
@@ -726,7 +743,7 @@ async def _a3_association_circle_mode(state: AgentState) -> Command:
         core_question = str(question.get("core_question") or "").strip()
         if not core_question:
             continue
-        platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
+        platform = run_platforms[platform_idx % len(run_platforms)]
         platform_idx += 1
         metadata = _copy_association_metadata(question)
         simulated_questions.append(
@@ -862,6 +879,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
     brand_name = _extract_brand_name(brand_profile, state)
     identity = _get_identity_override(state)
     question_only = _is_question_generation_only(state)
+    run_platforms = await _question_platforms_for_run(state)
 
     # Defensive check: refuse to generate if industry is unknown
     industry = brand_profile.get("industry", "")
@@ -901,7 +919,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             mode="brand_panorama",
             brand_profile=brand_profile,
             competitors=competitors,
-            platforms=_PLATFORMS,
+            platforms=run_platforms,
             identity=identity,
         )
 
@@ -951,7 +969,7 @@ async def _a3_brand_panorama_mode(state: AgentState) -> Command:
             if not core_question:
                 continue
 
-            platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
+            platform = run_platforms[platform_idx % len(run_platforms)]
             platform_idx += 1
 
             question_obj = {
@@ -1123,6 +1141,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
     brand_profile = build_effective_brand_profile(state)
     identity = _get_identity_override(state)
     question_only = _is_question_generation_only(state)
+    run_platforms = await _question_platforms_for_run(state)
     brand_name = brand_profile.get("brand_name", "") or brand_profile.get("name", "")
     if not brand_name:
         brand_name = state.get("brand_name", "")
@@ -1188,7 +1207,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             mode="persona_focused",
             brand_profile=brand_profile,
             selected_personas=selected_personas,
-            platforms=_PLATFORMS,
+            platforms=run_platforms,
             identity=identity,
         )
 
@@ -1240,7 +1259,7 @@ async def _a3_persona_focused_mode(state: AgentState) -> Command:
             if not core_question:
                 continue
 
-            platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
+            platform = run_platforms[platform_idx % len(run_platforms)]
             platform_idx += 1
 
             category = q.get("category", "画像痛点场景")
@@ -1478,6 +1497,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
     brand_name = explicit_brand_name or topic_label or "主题"
     identity = _get_identity_override(state)
     question_only = _is_question_generation_only(state)
+    run_platforms = await _question_platforms_for_run(state)
 
     # Defensive check: refuse to generate if industry is unknown
     industry = brand_profile.get("industry", "")
@@ -1527,7 +1547,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             mode="baseline_dynamic",
             brand_profile=brand_profile,
             competitors=competitors,
-            platforms=_PLATFORMS,
+            platforms=run_platforms,
             identity=identity,
             topic_keywords=topic_focus.get("topic_keywords"),
             topic_description=topic_focus.get("topic_description"),
@@ -1589,7 +1609,7 @@ async def _a3_baseline_dynamic_mode(state: AgentState) -> Command:
             if not core_question:
                 continue
 
-            platform = _PLATFORMS[platform_idx % len(_PLATFORMS)]
+            platform = run_platforms[platform_idx % len(run_platforms)]
             platform_idx += 1
 
             question_obj = {

@@ -80,9 +80,10 @@ class PlatformConstants:
         "hunyuan",
         "kimi",
         "deepseek",
+        "qwen",
     ]
 
-    API_PLATFORMS: Final[list[str]] = ["doubao", "hunyuan", "kimi"]
+    API_PLATFORMS: Final[list[str]] = ["doubao", "hunyuan", "kimi", "qwen"]
     BROWSER_PLATFORMS: Final[list[str]] = ["deepseek"]
 
     PLATFORM_DISPLAY_NAMES: Final[dict[str, str]] = {
@@ -91,6 +92,7 @@ class PlatformConstants:
         "hunyuan": "元宝",
         "kimi": "Kimi",
         "deepseek": "DeepSeek",
+        "qwen": "千问",
     }
 
     # Platform-specific browser timeouts (per-question, seconds)
@@ -101,6 +103,7 @@ class PlatformConstants:
         "hunyuan": 90,
         "kimi": 130,
         "deepseek": 90,
+        "qwen": 130,
     }
 
     # Global per-pipeline timeout (seconds): caps entire browser platform regardless of question count
@@ -119,6 +122,7 @@ class PlatformConstants:
         "hunyuan": 3.0,
         "kimi": 3.0,
         "deepseek": 2.0,
+        "qwen": 3.0,
     }
 
     # Per-platform HTTP timeouts for API clients (seconds)
@@ -127,6 +131,7 @@ class PlatformConstants:
         "yuanbao": 60.0,
         "hunyuan": 60.0,
         "kimi": 60.0,
+        "qwen": 90.0,
     }
 
 

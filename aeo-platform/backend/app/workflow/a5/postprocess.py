@@ -145,6 +145,8 @@ def _build_platform_preference_lines(source_overview: dict[str, Any]) -> list[st
     platform_stats = source_overview.get("platform_citation_stats", {}) or {}
     lines: list[str] = []
     for platform in PLATFORMS:
+        if platform == "qwen" and platform not in platform_stats:
+            continue
         stats = (
             platform_stats.get(platform, {}) if isinstance(platform_stats, dict) else {}
         )
@@ -366,6 +368,8 @@ def _collect_platform_availability(metrics: dict[str, Any]) -> dict[str, list[st
     unavailable: list[str] = []
 
     for platform in PLATFORMS:
+        if platform == "qwen" and platform not in platform_breakdown:
+            continue
         stats = (
             platform_breakdown.get(platform, {})
             if isinstance(platform_breakdown, dict)
@@ -609,7 +613,9 @@ def _build_aeo_report_facts(
         else []
     )
     platform_rows = []
-    for platform in ["deepseek", "kimi", "doubao", "hunyuan"]:
+    for platform in ["deepseek", "kimi", "doubao", "hunyuan", "qwen"]:
+        if platform == "qwen" and platform not in platform_breakdown:
+            continue
         raw_stats = (
             platform_breakdown.get(platform, {})
             if isinstance(platform_breakdown, dict)
@@ -740,6 +746,8 @@ def _build_platform_mention_table(metrics: dict[str, Any]) -> list[str]:
     ]
     platform_breakdown = metrics.get("platform_breakdown", {}) or {}
     for platform in PLATFORMS:
+        if platform == "qwen" and platform not in platform_breakdown:
+            continue
         stats = (
             platform_breakdown.get(platform, {})
             if isinstance(platform_breakdown, dict)
@@ -1277,7 +1285,7 @@ def enrich_report_data(
                     if item.get("platform")
                 )
             )
-            total_platforms = len(PLATFORMS)
+            total_platforms = len(platform_breakdown) or 4
             coverage = unique_platforms / total_platforms if total_platforms > 0 else 0
             row.setdefault("coverage", round(coverage, 4))
 

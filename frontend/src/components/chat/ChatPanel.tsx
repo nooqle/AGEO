@@ -156,6 +156,10 @@ const BROWSER_MESSAGE_KEYWORDS: Record<
     labels: ['元宝', 'Yuanbao'],
     actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
   },
+  qwen: {
+    labels: ['千问', 'Qwen'],
+    actionHints: ['需要登录', '需要验证', '页面弹窗', '完成登录', '完成验证', '关闭弹窗'],
+  },
 };
 
 function resolveBrowserActionMessageId(

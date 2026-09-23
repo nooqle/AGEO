@@ -3,6 +3,7 @@ export const PLATFORM_NAMES: Record<string, string> = {
   deepseek: 'DeepSeek',
   doubao: '豆包',
   yuanbao: '元宝',
+  qwen: '千问',
   zhipu: '智谱',
 };
 
@@ -11,6 +12,7 @@ export const PLATFORM_COLORS: Record<string, string> = {
   kimi: '#1F7A6B',
   doubao: '#B7792B',
   yuanbao: '#7B6A4C',
+  qwen: '#6D7182',
   zhipu: '#3F8F62',
 };
 
