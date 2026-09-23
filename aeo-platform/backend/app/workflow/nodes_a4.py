@@ -5216,6 +5216,11 @@ async def _fetch_from_browser(
         and len(result_data.answer_text.strip()) >= 10
     ):
         answer_text = result_data.answer_text
+        browser_raw = (
+            result_data.raw_response
+            if isinstance(result_data.raw_response, dict)
+            else {}
+        )
         return {
             "platform": platform,
             "platform_name": platform_name,
@@ -5226,6 +5231,9 @@ async def _fetch_from_browser(
                 "word_count": len(answer_text.split()),
             },
             "citations": [ref.model_dump() for ref in result_data.search_references],
+            "web_search_executed": browser_raw.get("web_search_executed"),
+            "reference_scope": browser_raw.get("reference_scope"),
+            "retrieved_sources": browser_raw.get("retrieved_sources") or [],
             "auth_state_updated": _auth_state_updated,
             "duration": duration,
         }

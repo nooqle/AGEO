@@ -56,3 +56,7 @@ Qwen3.8 Flash/Max、Qwen3.7 系列均列在官方搜索支持清单；Qwen3.8 �
 - API 使用千问 AI 平台的独立通用 API Key，不复用 MiMo 编程 Token Plan 或其他提供商 Key。现有后端只有其他平台的 Key 配置，开发时新增仅服务端可见的 `QWEN_API_KEY`/Base URL 配置与 `.env.local.example` 占位说明；生产密钥放在 `/srv/ageo-deploy/shared/backend/.env.local` 或等效受控密钥注入位置，绝不写入前端、仓库、日志或本调研文档。创建 Key 后先做不回显密钥的存在性检查与一题有界真实试采，再扩容。
 
 上述契约已通过 Sol 对“调研与开发准备”阶段的架构复核；代码已开始实现，仍不代替真实 API/浏览器试采和上线验收。
+
+## 2026-09-23 登录态网页补充验证
+
+用户已在本机 Chrome 千问页面登录。登录态 DOM 中可见账号菜单 `button[aria-haspopup="menu"]:has(img)`、新对话入口 `[data-session-switch-target="new-chat"]` 和输入框 `[contenteditable="true"][role="textbox"]`。一题公开问题的网页回答显示“搜索 2 个关键词，参考 15 篇资料”；点击“15篇来源”后可读取 15 张带 URL 的来源卡片。另一个网页问题只有回答而没有独立来源，说明网页并非每题都自动联网。浏览器 handler 已改为提交后要求检索状态与来源卡片双重证据；检索候选单独保存，不冒充正文引用；证据缺失时不持久化成功结果。Chrome 的登录态不等于 Specta 隔离 AIO/CDP 会话已登录，后者仍需单题端到端试采。上述网页答复仅用于验证交互和 DOM，不用作事实资料。

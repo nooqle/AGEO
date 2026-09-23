@@ -2280,6 +2280,7 @@ class BaseBrowserHandler(ABC):
                     for ref in fetch_result.search_references
                 ],
                 "source": source,
+                "raw_response": fetch_result.raw_response,
                 "saved_at": datetime.now(timezone.utc).isoformat(),
             }
             await self._aio_backend.persist_extraction(runtime, payload=payload)

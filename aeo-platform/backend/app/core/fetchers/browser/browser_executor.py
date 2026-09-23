@@ -242,8 +242,17 @@ async def execute_post_submit_capture_flow(
             exc,
         )
         context_closed = is_browser_context_closed_error(exc)
-        failure_reason = "browser_context_closed" if context_closed else "parser_error"
-        error_type = "browser_context_closed" if context_closed else "fetch_loop_error"
+        declared_error_type = getattr(exc, "error_type", None)
+        failure_reason = (
+            "browser_context_closed"
+            if context_closed
+            else str(declared_error_type or "parser_error")
+        )
+        error_type = (
+            "browser_context_closed"
+            if context_closed
+            else str(declared_error_type or "fetch_loop_error")
+        )
         failure_layer = "client" if context_closed else "executor"
         retryable = context_closed
         evidence_ref = None
@@ -271,7 +280,10 @@ async def execute_post_submit_capture_flow(
         message = (
             f"{display_name}浏览器页面已关闭，正在重建页面后重试。"
             if context_closed
-            else f"{display_name}抓取流程异常中断，请稍后重试。"
+            else str(
+                getattr(exc, "user_message", None)
+                or f"{display_name}抓取流程异常中断，请稍后重试。"
+            )
         )
         events.append(
             handler._create_event(
