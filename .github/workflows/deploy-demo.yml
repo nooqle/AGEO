@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      configure_qwen_key:
+        description: "Install the Qwen API key from the repository secret for this deployment only."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -35,6 +40,7 @@ jobs:
       DEMO_SSH_PORT: ${{ secrets.DEMO_SSH_PORT || '22' }}
       REQUESTED_REF: ${{ github.event.inputs.ref || github.sha }}
       ALLOW_MIGRATIONS: ${{ github.event.inputs.allow_migrations || 'false' }}
+      CONFIGURE_QWEN_KEY: ${{ github.event.inputs.configure_qwen_key || 'false' }}
 
     steps:
       - name: Check out repository
@@ -80,6 +86,7 @@ jobs:
           DEMO_SSH_USER: ${{ secrets.DEMO_SSH_USER }}
           DEMO_SSH_KEY: ${{ secrets.DEMO_SSH_KEY }}
           RESOLVED_SHA: ${{ steps.resolve.outputs.sha }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
         run: |
           set -euo pipefail
           install -d -m 700 ~/.ssh
@@ -131,5 +138,13 @@ jobs:
           fi
           retry ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" "true"
 
-          ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
-            "chmod +x /tmp/ageo-deploy-demo.sh && /tmp/ageo-deploy-demo.sh --sha $(printf '%q' "$RESOLVED_SHA") --repo $(printf '%q' "$DEMO_REPO_URL") --external-url $(printf '%q' "$DEMO_EXTERNAL_URL")${allow_migrations_arg}"
+          deploy_command="chmod +x /tmp/ageo-deploy-demo.sh && /tmp/ageo-deploy-demo.sh --sha $(printf '%q' "$RESOLVED_SHA") --repo $(printf '%q' "$DEMO_REPO_URL") --external-url $(printf '%q' "$DEMO_EXTERNAL_URL")${allow_migrations_arg}"
+          if [[ "${CONFIGURE_QWEN_KEY}" == "true" ]]; then
+            : "${QWEN_API_KEY:?Missing QWEN_API_KEY secret}"
+            printf '%s\n' "$QWEN_API_KEY" | ssh "${ssh_options[@]}" \
+              "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+              "${deploy_command} --qwen-key-stdin"
+          else
+            ssh "${ssh_options[@]}" "${DEMO_SSH_USER}@${DEMO_SSH_HOST}" \
+              "$deploy_command"
+          fi

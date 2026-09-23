@@ -13,6 +13,9 @@ DRY_RUN=0
 ROLLBACK=0
 ALLOW_MIGRATIONS=0
 MIGRATIONS_CHANGED=0
+QWEN_KEY_STDIN=0
+QWEN_KEY_INPUT=""
+QWEN_BACKUP_READY=0
 
 usage() {
   cat <<'EOF'
@@ -20,6 +23,7 @@ Usage:
   deploy-demo.sh --sha <commit-ish> [--repo <repo-url>] [--external-url <url>] [--root <path>] [--dry-run]
   deploy-demo.sh --sha <commit-ish> --allow-migrations [--repo <repo-url>] [--external-url <url>] [--root <path>]
   deploy-demo.sh --rollback [--root <path>] [--external-url <url>]
+  deploy-demo.sh --sha <commit-ish> --qwen-key-stdin < <(printf '%s\n' "$QWEN_API_KEY")
 
 Deploys AGEO demo from a git commit into an isolated release directory, then
 atomically switches /srv/ageo-deploy/current and restarts systemd services.
@@ -61,6 +65,10 @@ while [[ $# -gt 0 ]]; do
       ALLOW_MIGRATIONS=1
       shift
       ;;
+    --qwen-key-stdin)
+      QWEN_KEY_STDIN=1
+      shift
+      ;;
     --rollback)
       ROLLBACK=1
       shift
@@ -81,6 +89,15 @@ fi
 
 if [[ "$ROLLBACK" -eq 1 && -n "$TARGET_REF" ]]; then
   fail "--rollback cannot be combined with --sha"
+fi
+
+if [[ "$ROLLBACK" -eq 1 && "$QWEN_KEY_STDIN" -eq 1 ]]; then
+  fail "--qwen-key-stdin cannot be combined with --rollback"
+fi
+
+if [[ "$QWEN_KEY_STDIN" -eq 1 ]]; then
+  IFS= read -r QWEN_KEY_INPUT || fail "Qwen key was not provided on stdin"
+  [[ -n "$QWEN_KEY_INPUT" && "$QWEN_KEY_INPUT" != *$'\r'* ]] || fail "Qwen key is missing or malformed"
 fi
 
 if [[ "$APP_ROOT" != /srv/* ]]; then
@@ -108,10 +125,10 @@ require_command() {
 sudo_write_file() {
   local target="$1"
   local tmp
-  tmp="$(mktemp)"
-  cat > "$tmp"
-  sudo install -m 0644 "$tmp" "$target"
-  rm -f "$tmp"
+  tmp="$(mktemp)" || return
+  cat > "$tmp" || { rm -f "$tmp"; return 1; }
+  sudo install -m 0644 "$tmp" "$target" || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp" || return
 }
 
 external_url_host() {
@@ -486,7 +503,7 @@ install_systemd_units() {
   local current_frontend="$CURRENT_LINK/frontend"
 
   log "Installing systemd units"
-  sudo_write_file "/etc/systemd/system/$BACKEND_SERVICE" <<EOF
+  sudo_write_file "/etc/systemd/system/$BACKEND_SERVICE" <<EOF || return
 [Unit]
 Description=AGEO Backend
 After=network.target postgresql.service
@@ -508,7 +525,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-  sudo_write_file "/etc/systemd/system/$FRONTEND_SERVICE" <<EOF
+  sudo_write_file "/etc/systemd/system/$FRONTEND_SERVICE" <<EOF || return
 [Unit]
 Description=AGEO Frontend
 After=network.target $BACKEND_SERVICE
@@ -525,8 +542,8 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-  sudo systemctl daemon-reload
-  sudo systemctl enable "$BACKEND_SERVICE" "$FRONTEND_SERVICE" >/dev/null
+  sudo systemctl daemon-reload || return
+  sudo systemctl enable "$BACKEND_SERVICE" "$FRONTEND_SERVICE" >/dev/null || return
 }
 
 certificate_pair_for_host() {
@@ -776,12 +793,12 @@ switch_current() {
   fi
 
   if [[ -n "$old_current" && -d "$old_current" ]]; then
-    ln -sfn "$old_current" "$PREVIOUS_LINK.next"
-    mv -Tf "$PREVIOUS_LINK.next" "$PREVIOUS_LINK"
+    ln -sfn "$old_current" "$PREVIOUS_LINK.next" || return
+    mv -Tf "$PREVIOUS_LINK.next" "$PREVIOUS_LINK" || return
   fi
 
-  ln -sfn "$release_dir" "$CURRENT_LINK.next"
-  mv -Tf "$CURRENT_LINK.next" "$CURRENT_LINK"
+  ln -sfn "$release_dir" "$CURRENT_LINK.next" || return
+  mv -Tf "$CURRENT_LINK.next" "$CURRENT_LINK" || return
 }
 
 restart_services() {
@@ -853,6 +870,52 @@ health_check() {
   return "$status"
 }
 
+configure_qwen_key() {
+  local backup="$1"
+  [[ -f "$BACKEND_ENV" && ! -L "$BACKEND_ENV" ]] || fail "Backend env must be a regular file"
+  [[ "$(stat -c '%a' "$BACKEND_ENV")" == "600" ]] || fail "Backend env permissions must be 600 before adding Qwen key"
+  [[ -w "$BACKEND_ENV" ]] || fail "Backend env is not writable by deploy user"
+  cp -p -- "$BACKEND_ENV" "$backup" || return
+  cmp -s -- "$BACKEND_ENV" "$backup" || return
+  QWEN_BACKUP_READY=1
+  printf '%s\n' "$QWEN_KEY_INPUT" | python3 -c '
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+value = sys.stdin.readline().rstrip("\n")
+if not value or "\r" in value or "\n" in value:
+    raise SystemExit("Qwen key is missing or malformed")
+raw = path.read_bytes()
+lines = raw.decode("utf-8").splitlines()
+existing = [line[len("QWEN_API_KEY="):] for line in lines if line.startswith("QWEN_API_KEY=")]
+if existing and any(item != value for item in existing):
+    raise SystemExit("A different Qwen key is already configured")
+if existing:
+    print("Qwen key already configured")
+    raise SystemExit(0)
+fd, name = tempfile.mkstemp(prefix=".env.local.qwen-", dir=path.parent)
+try:
+    os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(raw)
+        if raw and not raw.endswith(b"\n"):
+            stream.write(b"\n")
+        stream.write(("QWEN_API_KEY=" + value + "\n").encode("utf-8"))
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(name, path)
+except BaseException:
+    if os.path.exists(name):
+        os.unlink(name)
+    raise
+print("Qwen key configured")
+' "$BACKEND_ENV" || return
+}
+
 rollback_to_previous() {
   [[ -L "$PREVIOUS_LINK" ]] || fail "No previous release symlink exists"
   local previous_target
@@ -904,10 +967,18 @@ deploy() {
 
   local sha
   local old_sha
+  local old_current_target=""
+  local old_previous_target=""
   local release_dir
   local service_backup_dir
   sha="$(resolve_target_sha "$TARGET_REF")"
   old_sha="$(current_sha)"
+  if [[ -L "$CURRENT_LINK" ]]; then
+    old_current_target="$(readlink -f "$CURRENT_LINK")"
+  fi
+  if [[ -L "$PREVIOUS_LINK" ]]; then
+    old_previous_target="$(readlink -f "$PREVIOUS_LINK")"
+  fi
   log "Resolved target: $sha"
   guard_migrations "$old_sha" "$sha"
   if [[ "$ALLOW_MIGRATIONS" -eq 1 && "$MIGRATIONS_CHANGED" -eq 0 ]]; then
@@ -930,19 +1001,48 @@ deploy() {
 
   install_nginx_site
   service_backup_dir="$(backup_existing_units)"
-  switch_current "$release_dir"
-  install_systemd_units
-
-  if ! restart_services || ! health_check; then
-    dump_service_diagnostics
-    log "Deployment health check failed; attempting rollback"
-    if [[ -L "$PREVIOUS_LINK" ]]; then
-      rollback_to_previous
-    else
-      restore_units_from_backup "$service_backup_dir"
-      health_check || fail "Restored legacy services, but legacy health checks failed"
+  local qwen_backup=""
+  if [[ "$QWEN_KEY_STDIN" -eq 1 ]]; then
+    qwen_backup="$(mktemp "$SHARED_DIR/backend/.env.local.qwen-backup.XXXXXX")"
+    chmod 600 "$qwen_backup"
+    if ! configure_qwen_key "$qwen_backup"; then
+      if [[ "$QWEN_BACKUP_READY" -eq 1 ]]; then
+        mv -f -- "$qwen_backup" "$BACKEND_ENV" || fail "Failed to restore backend env after Qwen configuration error"
+      else
+        rm -f -- "$qwen_backup"
+      fi
+      fail "Qwen key configuration failed"
     fi
+  fi
+
+  if ! switch_current "$release_dir" || ! install_systemd_units || ! restart_services || ! health_check; then
+    dump_service_diagnostics || true
+    log "Deployment health check failed; attempting rollback"
+    if [[ "$QWEN_BACKUP_READY" -eq 1 && -f "$qwen_backup" ]]; then
+      mv -f -- "$qwen_backup" "$BACKEND_ENV" || fail "Failed to restore backend env during rollback"
+    fi
+    if [[ -L "$CURRENT_LINK" && "$(readlink -f "$CURRENT_LINK")" == "$release_dir" ]]; then
+      if [[ -n "$old_current_target" && -d "$old_current_target" ]]; then
+        ln -sfn "$old_current_target" "$CURRENT_LINK.next"
+        mv -Tf "$CURRENT_LINK.next" "$CURRENT_LINK"
+      else
+        rm -f -- "$CURRENT_LINK"
+      fi
+    fi
+    if [[ -n "$old_previous_target" && -d "$old_previous_target" ]]; then
+      ln -sfn "$old_previous_target" "$PREVIOUS_LINK.next"
+      mv -Tf "$PREVIOUS_LINK.next" "$PREVIOUS_LINK"
+    elif [[ -L "$PREVIOUS_LINK" ]]; then
+      rm -f -- "$PREVIOUS_LINK"
+    fi
+    restore_units_from_backup "$service_backup_dir"
+    restart_services || fail "Restored service units, but service restart failed"
+    health_check || fail "Restored service units, but health checks failed"
     fail "Deployment failed health checks"
+  fi
+
+  if [[ -n "$qwen_backup" ]]; then
+    rm -f -- "$qwen_backup"
   fi
 
   log "Deployment complete: $sha"
