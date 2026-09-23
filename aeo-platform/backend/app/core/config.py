@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     MOONSHOT_FAST_MODEL: str | None = "kimi-k2.6"
     MOONSHOT_BASE_URL: str = "https://api.moonshot.cn/v1/chat/completions"
     QWEN_API_KEY: str | None = None
-    QWEN_MODEL: str = "qwen3.7-plus"
+    QWEN_MODEL: str = "qwen3.8-max"
     QWEN_ENDPOINT: str = "https://maas.qianwenaiapi.com/api/v1/services/aigc/multimodal-generation/generation"
     BOCHA_API_KEY: str | None = None
 

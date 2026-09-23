@@ -22,10 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 class QwenHandler(BaseBrowserHandler):
-    URL = "https://www.qwen.com/"
+    URL = "https://www.qianwen.com/"
     PLATFORM = Platform.QWEN
     PLATFORM_KEY = "qwen"
-    BROWSER_READY_URL_PATTERNS = ("qwen.com",)
+    BROWSER_READY_URL_PATTERNS = ("qwen.com", "qianwen.com")
     BROWSER_LOGIN_URL_PATTERNS = ("login", "signin", "auth")
     BROWSER_LOGIN_HINTS = ("登录", "扫码", "验证码", "手机号", "Qwen App")
     BROWSER_LATE_BLOCKER_HINTS = ("登录", "验证码", "安全验证")
@@ -56,7 +56,10 @@ class QwenHandler(BaseBrowserHandler):
     async def _authenticated(self) -> bool:
         page = self.client.page
         host = urlparse(page.url).hostname if page is not None else None
-        if host != "qwen.com" and not (host or "").endswith(".qwen.com"):
+        if host not in {"qwen.com", "qianwen.com"} and not (
+            (host or "").endswith(".qwen.com")
+            or (host or "").endswith(".qianwen.com")
+        ):
             return False
         try:
             marker = page.locator(self._sel("account_marker"))

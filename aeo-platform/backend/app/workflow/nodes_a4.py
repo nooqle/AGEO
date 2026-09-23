@@ -4959,7 +4959,7 @@ async def _fetch_from_qwen(client, question: str) -> dict[str, Any]:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         raw = response.raw_response if isinstance(response.raw_response, dict) else {}
         usage_fields = _api_usage_fields(
-            response, fallback_model=str(getattr(client, "model", "") or "qwen3.7-plus"),
+            response, fallback_model=str(getattr(client, "model", "") or "qwen3.8-max"),
         )
         usage_fields.update(
             protocol="qianwen_dashscope_multimodal_search",

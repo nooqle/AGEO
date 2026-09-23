@@ -4,7 +4,7 @@ Uses the user-linked qianwen AI platform (not the old aliyun DashScope host)
 with the official DashScope multimodal-generation HTTP SSE protocol.
 
 Official constraints encoded here:
-- multimodal models such as qwen3.7-plus must be called via the
+- multimodal models such as qwen3.8-max must be called via the
   multimodal-generation endpoint, not text-generation
 - multimodal web search requires streaming (`stream=true`)
 - only DashScope returns `search_info.search_results` plus inline citation
@@ -33,7 +33,7 @@ DEFAULT_ENDPOINT = (
     "https://maas.qianwenaiapi.com/api/v1/services/aigc/"
     "multimodal-generation/generation"
 )
-DEFAULT_MODEL = "qwen3.7-plus"
+DEFAULT_MODEL = "qwen3.8-max"
 
 # Bounded SSE body so a runaway stream cannot exhaust memory.
 MAX_SSE_BODY_BYTES = 2_000_000
@@ -322,10 +322,9 @@ def _aggregate_usage(raw_usage: dict[str, Any] | None) -> dict[str, Any]:
 def parse_dashscope_sse(body: str) -> dict[str, Any]:
     """Parse a DashScope multimodal-generation SSE body into structured evidence.
 
-    With `incremental_output=false` each text chunk carries the full answer so
-    far; the final complete answer is the last observed text.
+    With `incremental_output=true` each text chunk carries only a new fragment.
     """
-    answer_text = ""
+    answer_parts: list[str] = []
     finish_reason: str | None = None
     search_info: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
@@ -358,10 +357,10 @@ def parse_dashscope_sse(body: str) -> dict[str, Any]:
             request_id = chunk_request_id
 
         chunk_text = _extract_chunk_text(payload)
-        # incremental_output=false carries full text so far; empty terminal
-        # chunks must not wipe the accumulated answer.
+        # The provider requires incremental output for this model. Empty
+        # terminal chunks must not wipe previously received fragments.
         if chunk_text:
-            answer_text = chunk_text
+            answer_parts.append(chunk_text)
 
         chunk_finish = _extract_finish_reason(payload)
         if chunk_finish is not None:
@@ -379,7 +378,7 @@ def parse_dashscope_sse(body: str) -> dict[str, Any]:
             usage = payload["usage"]
 
     return {
-        "answer_text": answer_text,
+        "answer_text": "".join(answer_parts),
         "finish_reason": finish_reason,
         "search_info": search_info,
         "usage": usage,
@@ -454,7 +453,8 @@ class QwenClient(BaseAPIClient):
             "parameters": {
                 "result_format": "message",
                 "stream": True,
-                "incremental_output": False,
+                "incremental_output": True,
+                "enable_thinking": False,
                 "enable_search": True,
                 "search_options": search_options,
             },

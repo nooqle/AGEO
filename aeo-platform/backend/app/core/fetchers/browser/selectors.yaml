@@ -176,7 +176,7 @@ yuanbao:
     - "References"
 
 qwen:
-  url: "https://www.qwen.com/"
+  url: "https://www.qianwen.com/"
   input: "[contenteditable='true'][role='textbox'], textarea, [contenteditable='true']"
   new_chat: "a[href='/'], button[aria-label*='新建'], button[aria-label*='New chat']"
   content:
