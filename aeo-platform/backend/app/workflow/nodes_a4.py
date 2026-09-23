@@ -2253,7 +2253,7 @@ async def _retry_fetch(
                 if len({item.get(key) for item in request_metadata_attempts}) != 1:
                     metadata.pop(key, None)
             attached["provider_request_metadata"] = metadata
-        if platform in {"hunyuan", "kimi"} and method == "api":
+        if platform in {"hunyuan", "kimi", "qwen"} and method == "api":
             counts = [item.get("tool_usage", {}).get("web_search_call")
                       if isinstance(item.get("tool_usage"), dict) else None for item in usage_attempts]
             attached["provider_usage"]["tool_usage"] = {
@@ -2305,7 +2305,7 @@ async def _retry_fetch(
                 return attach_retry_usage(result)
             last_result = result
         except Exception as e:
-            if platform in {"hunyuan", "kimi"} and method == "api":
+            if platform in {"hunyuan", "kimi", "qwen"} and method == "api":
                 # A transport/provider failure gives no reliable billable usage.
                 usage_attempts.append({})
                 request_metadata_attempts.append({})

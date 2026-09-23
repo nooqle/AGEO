@@ -241,7 +241,7 @@ jobs:
 
           echo "== backend A4/error journal lines =="
           sudo journalctl -u ageo-backend.service --since "$since" --no-pager -o short-iso |
-            grep -Ei 'A4|answer_fetch|fetch result|fetch_results|citation|429|timeout|timed out|exception|traceback|error|failed|kimi|moonshot|deepseek|glm5|doubao|yuanbao' |
+            grep -Ei 'A4|answer_fetch|fetch result|fetch_results|citation|429|timeout|timed out|exception|traceback|error|failed|kimi|moonshot|deepseek|glm5|doubao|yuanbao|qwen' |
             redact |
             tail -n 500 || true
           echo

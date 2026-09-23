@@ -208,6 +208,11 @@ def _provider_tool_count(usage: dict[str, Any]) -> int | None:
         if isinstance(web_search, dict):
             candidates.append(web_search.get("count"))
         candidates.append(x_tools.get("web_search"))
+    plugins = usage.get("plugins")
+    if isinstance(plugins, dict):
+        search = plugins.get("search")
+        if isinstance(search, dict):
+            candidates.append(search.get("count"))
     tool_usage = usage.get("tool_usage")
     if isinstance(tool_usage, dict):
         candidates.append(tool_usage.get("web_search_call"))
@@ -374,8 +379,11 @@ def parse_dashscope_sse(body: str) -> dict[str, Any]:
         ):
             search_info = chunk_search
 
-        if isinstance(payload.get("usage"), dict):
-            usage = payload["usage"]
+        chunk_usage = payload.get("usage")
+        if isinstance(chunk_usage, dict) and chunk_usage:
+            # A terminal SSE event may omit counters or include an empty
+            # object; neither should erase earlier provider usage.
+            usage = chunk_usage
 
     return {
         "answer_text": "".join(answer_parts),
@@ -663,6 +671,16 @@ class QwenClient(BaseAPIClient):
             truncated=truncated,
             request_metadata=request_metadata,
             body_bytes=len(body_bytes),
+        )
+        usage_summary = raw["usage_aggregate"]
+        logger.info(
+            "[QwenClient] usage_observed=%s prompt_tokens=%s completion_tokens=%s "
+            "search_count=%s stream_truncated=%s",
+            isinstance(parsed.get("usage"), dict),
+            usage_summary.get("prompt_tokens"),
+            usage_summary.get("completion_tokens"),
+            usage_summary.get("tool_usage", {}).get("web_search_call"),
+            truncated,
         )
 
         complete = "search_error" not in raw
