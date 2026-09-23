@@ -26,6 +26,56 @@ HY3_GUANGZHOU_ENDPOINT = "https://tokenhub.tencentmaas.com/v1/chat/completions"
 HY3_PRICING_SOURCE = "https://cloud.tencent.com/document/product/1823/130055"
 HY3_SEARCH_PRICES_PER_THOUSAND = {"lite": 7.0, "standard": 12.0}
 KIMI_CN_ENDPOINT = "https://api.moonshot.cn/v1/chat/completions"
+QWEN_MULTIMODAL_ENDPOINT = (
+    "https://maas.qianwenaiapi.com/api/v1/services/aigc/"
+    "multimodal-generation/generation"
+)
+QWEN_MODEL_PRICING_SOURCE = "https://www.qianwenai.com/models/qwen3.8-max"
+QWEN_SEARCH_PRICING_SOURCE = (
+    "https://platform.qianwenai.com/docs/developer-guides/getting-started/pricing"
+)
+
+
+def _is_official_qwen_route(provider: str, model_name: str, metadata: Any) -> bool:
+    return (
+        provider == "qwen"
+        and model_name == "qwen3.8-max"
+        and isinstance(metadata, dict)
+        and metadata.get("provider_endpoint") == QWEN_MULTIMODAL_ENDPOINT
+        and metadata.get("protocol") == "qianwen_dashscope_multimodal_search"
+    )
+
+
+def qwen_search_pricing_snapshot(
+    provider: str,
+    model_name: str,
+    metadata: dict[str, Any],
+    raw_usage: Any,
+    occurred_at: datetime,
+) -> dict[str, Any] | None:
+    """Estimate only explicitly reported turbo searches on the official route."""
+    if provider != "qwen" or model_name != "qwen3.8-max":
+        return None
+    tool_usage = raw_usage.get("tool_usage") if isinstance(raw_usage, dict) else None
+    count = tool_usage.get("web_search_call") if isinstance(tool_usage, dict) else None
+    count = count if type(count) is int and count >= 0 else None
+    price_known = (
+        _is_official_qwen_route(provider, model_name, metadata)
+        and metadata.get("search_strategy") == "turbo"
+    )
+    price = 3.0 if price_known else None
+    return {
+        "status": "unknown_usage" if count is None else "unknown_price" if price is None else "estimated",
+        "provider_web_search_requests": count,
+        "search_source": "turbo" if price_known else metadata.get("search_strategy"),
+        "price_per_thousand_requests": price,
+        "estimated_cost": count * price / 1000 if count is not None and price is not None else None,
+        "currency": "CNY" if price is not None else "UNKNOWN",
+        "rate_version": "qwen3_8_max_turbo_2026_09_23" if price is not None else None,
+        "source_url": QWEN_SEARCH_PRICING_SOURCE if price is not None else None,
+        "priced_at": occurred_at.astimezone(timezone.utc).isoformat(),
+        "cost_scope": "search_tool_estimate",
+    }
 
 
 def _is_official_kimi_route(provider: str, metadata: Any) -> bool:
@@ -254,6 +304,11 @@ def _resolve_pricing(
         source = "tencent_hy3_guangzhou_2026_09_11"
         source_url = HY3_PRICING_SOURCE
         input_price, cached_input_price, output_price = 1.0, 0.25, 4.0
+    elif _is_official_qwen_route(provider, model_name, provider_metadata):
+        pricing_currency = "CNY"
+        source = "qwen3_8_max_public_2026_09_23"
+        source_url = QWEN_MODEL_PRICING_SOURCE
+        input_price, cached_input_price, output_price = 12.0, 1.5, 36.0
     elif provider == "hunyuan" and "hunyuan-2.0-instruct" in model_key:
         pricing_currency = "CNY"
         pricing_model = "hunyuan-2.0-instruct"
@@ -518,6 +573,11 @@ class LLMUsageService:
         if search_pricing is None:
             search_pricing = kimi_search_pricing_snapshot(
                 resolved_provider, resolved_model_name, normalized_extra_metadata, usage.raw
+            )
+        if search_pricing is None:
+            search_pricing = qwen_search_pricing_snapshot(
+                resolved_provider, resolved_model_name, normalized_extra_metadata,
+                usage.raw, occurred_at,
             )
         if search_pricing is not None:
             normalized_extra_metadata["search_pricing"] = search_pricing

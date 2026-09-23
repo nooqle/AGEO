@@ -68,7 +68,7 @@ def billing_details(record: LLMUsageRecord) -> dict[str, Any]:
     search_status = "not_estimated" if metadata.get("protocol") == "anthropic_native_search" else "not_reported"
     search_cost = None
     search_currency = None
-    if is_hy3 or is_kimi_search:
+    if is_hy3 or is_kimi_search or is_qwen_search:
         # Only read the saved estimate, never apply today's rates to old calls.
         snapshot = metadata.get("search_pricing")
         snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -175,9 +175,15 @@ def summarize_billing(records: Iterable[LLMUsageRecord]) -> dict[str, Any]:
 def summarize_usage(records: list[LLMUsageRecord]) -> dict[str, Any]:
     fields = ("total_tokens", "prompt_tokens", "completion_tokens", "cached_prompt_tokens", "billable_prompt_tokens")
     latency = sum(record.latency_ms or 0 for record in records)
+    unknown_usage_count = sum(
+        1 for record in records
+        if isinstance(record.extra_metadata, dict)
+        and record.extra_metadata.get("pricing_status") == "unknown_usage"
+    )
     return {
         **{field: sum(getattr(record, field) or 0 for record in records) for field in fields},
         "call_count": len(records),
+        "unknown_usage_call_count": unknown_usage_count,
         "total_latency_ms": latency,
         "avg_latency_ms": round(latency / len(records), 2) if records else 0.0,
         **summarize_billing(records),

@@ -147,6 +147,7 @@ class ControlPlaneCustomerDetail(BaseModel):
 class ControlPlaneObservabilitySummary(BillingCoverage):
     days: int
     call_count: int
+    unknown_usage_call_count: int = 0
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
@@ -191,6 +192,7 @@ class ControlPlaneCostBreakdown(BillingCoverage):
     step: str | None = None
     step_name: str | None = None
     call_count: int
+    unknown_usage_call_count: int = 0
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int = 0

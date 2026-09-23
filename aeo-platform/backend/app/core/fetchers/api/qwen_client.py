@@ -259,7 +259,7 @@ def _usage_snapshot(raw: Any) -> dict[str, Any] | None:
     if isinstance(input_details, dict) and input_details:
         snapshot["input_tokens_details"] = {
             key: _token_count(input_details[key])
-            for key in ("text_tokens", "image_tokens", "video_tokens", "audio_tokens")
+            for key in ("text_tokens", "image_tokens", "video_tokens", "audio_tokens", "cached_tokens")
             if key in input_details
         }
     output_details = raw.get("output_tokens_details")
@@ -294,18 +294,37 @@ def _aggregate_usage(raw_usage: dict[str, Any] | None) -> dict[str, Any]:
     total = _token_count(source.get("total_tokens"))
 
     prompt_details = source.get("prompt_tokens_details")
-    cached = None
     cache_creation = None
     if isinstance(prompt_details, dict):
-        cached = _token_count(prompt_details.get("cached_tokens"))
         cache_creation = _token_count(prompt_details.get("cache_creation_input_tokens"))
-    if cached is None:
-        cached = _token_count(source.get("prompt_cache_hit_tokens"))
-    if cached is None:
-        cached = _token_count(source.get("cached_tokens"))
-    cache_miss = _token_count(source.get("prompt_cache_miss_tokens"))
-    if cache_miss is None:
-        cache_miss = _token_count(source.get("cache_miss_prompt_tokens"))
+    input_details = source.get("input_tokens_details")
+    hit_fields = (
+        (prompt_details, "cached_tokens"),
+        (input_details, "cached_tokens"),
+        (source, "prompt_cache_hit_tokens"),
+        (source, "cached_tokens"),
+    )
+    hit_values = {
+        _token_count(mapping[key])
+        for mapping, key in hit_fields
+        if isinstance(mapping, dict) and key in mapping
+    }
+    hit_invalid = None in hit_values or len(hit_values) > 1
+    cached = next(iter(hit_values)) if len(hit_values) == 1 and not hit_invalid else None
+    miss_values = {
+        _token_count(source[key])
+        for key in ("prompt_cache_miss_tokens", "cache_miss_prompt_tokens")
+        if key in source
+    }
+    miss_invalid = None in miss_values or len(miss_values) > 1
+    cache_miss = next(iter(miss_values)) if len(miss_values) == 1 and not miss_invalid else None
+    # A contradictory/invalid hit cannot be repaired from a reported miss (or
+    # vice versa); the generic billing layer otherwise infers and prices it.
+    if hit_invalid or miss_invalid or (
+        prompt is not None and cached is not None and cache_miss is not None
+        and cached + cache_miss != prompt
+    ):
+        cached = cache_miss = None
 
     tool_count = _provider_tool_count(source)
     aggregate: dict[str, Any] = {
@@ -439,6 +458,7 @@ class QwenClient(BaseAPIClient):
     def _build_payload(self, question: str) -> dict[str, Any]:
         """Build the official multimodal-generation request with web search on."""
         search_options = {
+            "search_strategy": "turbo",
             "forced_search": True,
             "enable_source": True,
             "enable_citation": True,
@@ -479,6 +499,7 @@ class QwenClient(BaseAPIClient):
             "runtime_context_unit": "characters",
             "runtime_context_scope": "max_serialized_non_system_messages",
             "request_round_count": 1,
+            "search_strategy": payload["parameters"]["search_options"]["search_strategy"],
         }
 
     @staticmethod

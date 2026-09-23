@@ -203,11 +203,17 @@ def _api_request_metadata(raw: Any) -> dict[str, Any]:
         result["runtime_context_unit"] = "characters"
     if raw.get("runtime_context_scope") == "max_serialized_non_system_messages":
         result["runtime_context_scope"] = raw["runtime_context_scope"]
+    if raw.get("search_strategy") == "turbo":
+        result["search_strategy"] = "turbo"
     return result
 
 
 def _llm_usage_from_provider_payload(raw_usage: dict[str, Any]) -> LLMUsage:
-    if "cache_read_input_tokens" in raw_usage or "cache_creation_input_tokens" in raw_usage:
+    if (
+        "prompt_tokens" not in raw_usage
+        and ("cache_read_input_tokens" in raw_usage
+             or "cache_creation_input_tokens" in raw_usage)
+    ):
         from app.core.fetchers.api.deepseek_client import native_search_usage
         return native_search_usage(raw_usage)
     prompt_details = raw_usage.get("prompt_tokens_details")
@@ -302,7 +308,7 @@ async def _record_a4_api_usage(
             "provider_endpoint": result.get("provider_endpoint"),
             "search_source": result.get("search_source"),
             "web_search_executed": result.get("web_search_executed"),
-            "cost_scope": "token_and_search_unknown" if platform == "qwen" else "token_estimate",
+            "cost_scope": "token_and_search_separate_estimates" if platform == "qwen" else "token_estimate",
         },
     )
 
@@ -2252,6 +2258,8 @@ async def _retry_fetch(
             for key in ("static_prompt_hash", "tool_surface_hash"):
                 if len({item.get(key) for item in request_metadata_attempts}) != 1:
                     metadata.pop(key, None)
+            if len({item.get("search_strategy") for item in request_metadata_attempts}) != 1:
+                metadata.pop("search_strategy", None)
             attached["provider_request_metadata"] = metadata
         if platform in {"hunyuan", "kimi", "qwen"} and method == "api":
             counts = [item.get("tool_usage", {}).get("web_search_call")

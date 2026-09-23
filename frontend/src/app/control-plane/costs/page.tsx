@@ -77,6 +77,26 @@ function formatSize(value: number | null | undefined) {
   return value.toLocaleString();
 }
 
+function unknownUsageCount(row: { total_tokens: number; unknown_usage_call_count?: number }) {
+  return row.unknown_usage_call_count ?? 0;
+}
+
+function tokenTotalLabel(row: { total_tokens: number; unknown_usage_call_count?: number }) {
+  const total = row.total_tokens.toLocaleString();
+  return unknownUsageCount(row) > 0 ? `已知 ${total}` : total;
+}
+
+function tokenBreakdownLabel(row: {
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  unknown_usage_call_count?: number;
+}) {
+  const counts = `输入 ${row.prompt_tokens.toLocaleString()} / 输出 ${row.completion_tokens.toLocaleString()}`;
+  const unknown = unknownUsageCount(row);
+  return unknown > 0 ? `已知${counts} · 另有 ${unknown.toLocaleString()} 次用量未知` : counts;
+}
+
 function tariffPeriodLabel(row: ControlPlaneRecentCall) {
   const period = row.pricing?.tariff_period;
   if (period === 'peak') return '高峰';
@@ -285,10 +305,10 @@ function ControlPlaneCostsContent() {
             />
             <ControlPlaneStatCard
               label="Token 用量"
-              value={snapshot ? snapshot.summary.total_tokens.toLocaleString() : '--'}
+              value={snapshot ? tokenTotalLabel(snapshot.summary) : '--'}
               hint={
                 snapshot
-                  ? `输入 ${snapshot.summary.prompt_tokens.toLocaleString()} / 输出 ${snapshot.summary.completion_tokens.toLocaleString()}`
+                  ? tokenBreakdownLabel(snapshot.summary)
                   : `最近 ${days} 天`
               }
             />
@@ -507,13 +527,14 @@ function CostBreakdownTable({
                   {row.call_count}
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {row.total_tokens.toLocaleString()}
+                  {tokenTotalLabel(row)}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
                     未命中输入 {row.billable_prompt_tokens.toLocaleString()}
+                    {unknownUsageCount(row) > 0 ? ` · 另有 ${unknownUsageCount(row).toLocaleString()} 次用量未知` : ''}
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {row.prompt_tokens.toLocaleString()} / {row.completion_tokens.toLocaleString()}
+                  {unknownUsageCount(row) > 0 ? '已知 ' : ''}{row.prompt_tokens.toLocaleString()} / {row.completion_tokens.toLocaleString()}
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
                   {formatPercent(row.cache_hit_ratio)}
@@ -719,9 +740,11 @@ function RecentCallsTable({
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
-                  {row.total_tokens.toLocaleString()}
+                  {row.pricing_status === 'unknown_usage' ? '未知' : row.total_tokens.toLocaleString()}
                   <div className="mt-1 text-xs" style={{ color: palette.subtle }}>
-                    输入 {row.prompt_tokens.toLocaleString()} / 输出 {row.completion_tokens.toLocaleString()}
+                    {row.pricing_status === 'unknown_usage'
+                      ? '输入 / 输出用量未完整获得'
+                      : `输入 ${row.prompt_tokens.toLocaleString()} / 输出 ${row.completion_tokens.toLocaleString()}`}
                   </div>
                 </td>
                 <td className="py-4 pr-4" style={{ color: palette.muted }}>
