@@ -3,6 +3,7 @@
 from typing import AsyncGenerator
 from uuid import UUID
 
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,23 +63,21 @@ async def get_user_from_token(
     token: str,
     db: AsyncSession,
 ):
-    try:
-        if settings.DEBUG and settings.DEV_MODE_ENABLED and token == settings.DEV_TOKEN:
-            service = UserService(db)
-            return await service.get_or_create_dev_user(
-                email=settings.DEV_USER_EMAIL,
-                name=settings.DEV_USER_NAME,
-            )
-        payload = decode_access_token(token)
-        user_id = payload.get("sub")
-        if not user_id:
-            return None
+    if settings.DEBUG and settings.DEV_MODE_ENABLED and token == settings.DEV_TOKEN:
         service = UserService(db)
-        user = await service.get_user_by_id(UUID(user_id))
-        if user is None:
-            return None
-        if not user.is_active or user.status != UserStatus.ACTIVE:
-            return None
-        return user
-    except Exception:
+        return await service.get_or_create_dev_user(
+            email=settings.DEV_USER_EMAIL,
+            name=settings.DEV_USER_NAME,
+        )
+
+    try:
+        payload = decode_access_token(token)
+        user_id = UUID(payload.get("sub"))
+    except (jwt.PyJWTError, ValueError, TypeError, AttributeError):
         return None
+
+    service = UserService(db)
+    user = await service.get_user_by_id(user_id)
+    if user is None or not user.is_active or user.status != UserStatus.ACTIVE:
+        return None
+    return user

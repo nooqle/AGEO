@@ -12,7 +12,6 @@ import {
 import { PublicBrand } from '@/components/layout/PublicBrand';
 import { toast } from '@/components/ui/toast';
 import {
-  clearStoredAccessToken,
   getStoredAccessToken,
   setStoredAccessToken,
 } from '@/lib/auth-storage';
@@ -136,17 +135,22 @@ function ControlPlaneLoginContent() {
       .getMe()
       .then((user) => {
         if (cancelled) return;
+        if (getStoredAccessToken() !== token) {
+          setChecking(false);
+          return;
+        }
         if (user.role === 'internal_admin') {
           router.replace(nextPath);
           return;
         }
-        clearStoredAccessToken();
         setCurrentUser(user);
         setChecking(false);
       })
       .catch(() => {
         if (cancelled) return;
-        clearStoredAccessToken();
+        if (getStoredAccessToken() === token) {
+          toast.error('暂时无法校验账号状态，请稍后刷新重试。');
+        }
         setChecking(false);
       });
 
@@ -211,15 +215,22 @@ function ControlPlaneLoginContent() {
         verification_code: code,
       });
       setStoredAccessToken(token.access_token);
-      const user = await api.getMe();
+      let user: AuthUser;
+      try {
+        user = await api.getMe();
+      } catch {
+        if (getStoredAccessToken() === token.access_token) {
+          toast.error('登录凭据已保留，账号校验暂时不可用，请刷新页面重试。');
+        }
+        return;
+      }
+      if (getStoredAccessToken() !== token.access_token) return;
       if (user.role !== 'internal_admin') {
-        clearStoredAccessToken();
         setCurrentUser(user);
         throw new Error('当前账号没有运营后台权限');
       }
       router.replace(nextPath);
     } catch (error) {
-      clearStoredAccessToken();
       toast.error(error instanceof Error ? error.message : '登录失败');
     } finally {
       setIsSubmitting(false);

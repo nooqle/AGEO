@@ -23,7 +23,6 @@ import {
 
 import { toast } from '@/components/ui/toast';
 import {
-  clearStoredAccessToken,
   getStoredAccessToken,
   setStoredAccessToken,
 } from '@/lib/auth-storage';
@@ -372,10 +371,12 @@ function AuthPageContent() {
     api
       .getMe()
       .then(() => {
-        router.replace(nextPath);
+        if (getStoredAccessToken() === storedToken) router.replace(nextPath);
       })
       .catch(() => {
-        clearStoredAccessToken();
+        if (getStoredAccessToken() === storedToken) {
+          toast.error('暂时无法校验登录状态，请稍后刷新重试。');
+        }
       });
   }, [nextPath, router]);
 

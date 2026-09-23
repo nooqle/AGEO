@@ -165,8 +165,35 @@ class ApiService {
 
   private readonly outputDetailCacheTtlMs = 10 * 60 * 1000;
 
-  private handleUnauthorized() {
-    redirectToLoginForExpiredAuth();
+  private async handleUnauthorized(input: RequestInfo | URL, init: RequestInit) {
+    const authorization = new Headers(init.headers).get('Authorization');
+    const requestToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!requestToken || getStoredAccessToken() !== requestToken) return;
+
+    const url = input instanceof Request ? input.url : String(input);
+    if (!url.split('?')[0].endsWith('/auth/me')) {
+      // A provider or endpoint can return 401 while the Specta session is valid.
+      // Verify the exact token used by this request before ending the session.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const authResponse = await fetch(`${API_URL}/auth/me`, {
+          headers: { Authorization: `Bearer ${requestToken}` },
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (authResponse.status !== 401) return;
+      } catch {
+        // A network failure cannot establish that this token is invalid.
+        return;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    if (getStoredAccessToken() === requestToken) {
+      redirectToLoginForExpiredAuth();
+    }
   }
 
   private normalizeAioMode(value: unknown): AioTakeoverMode {
@@ -199,10 +226,12 @@ class ApiService {
   private async ensureSuccessfulResponse(
     response: Response,
     errorContext: ApiErrorContext = 'default',
+    input?: RequestInfo | URL,
+    init?: RequestInit,
   ): Promise<void> {
     if (response.ok) return;
-    if (response.status === 401) {
-      this.handleUnauthorized();
+    if (response.status === 401 && input && init) {
+      await this.handleUnauthorized(input, init);
     }
     throw await apiErrorFromResponse(response, errorContext);
   }
@@ -228,7 +257,7 @@ class ApiService {
     } finally {
       if (timeoutId !== null) clearTimeout(timeoutId);
     }
-    await this.ensureSuccessfulResponse(response, errorContext);
+    await this.ensureSuccessfulResponse(response, errorContext, input, init);
     return response;
   }
 

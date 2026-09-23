@@ -19,6 +19,7 @@ import { buildCanvasContentFromConfirmation } from '@/hooks/websocket/confirmati
 import { isSupersededA5FailureText } from '@/adapters/chatMessage';
 import { sanitizeUserFacingWorkflowText } from '@/lib/workflowStageLabels';
 import { api } from '@/services/api';
+import { ApiError } from '@/services/api-error';
 import { redirectToLoginForExpiredAuth } from '@/lib/auth-expiry';
 import type { AnalysisTask } from '@/types/task';
 import type { Attachment } from '@/components/chat/Message/AttachmentCard';
@@ -1062,6 +1063,23 @@ export function useWebSocket(sessionId: string | null) {
     let isActive = true;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+    const scheduleReconnect = (isInitial1006 = false) => {
+      if (!isActive || wsRef.current) return;
+      if (reconnectCountRef.current < maxReconnectAttempts) {
+        const delay = baseReconnectDelay * Math.pow(2, reconnectCountRef.current);
+        if (!isInitial1006) {
+          console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${reconnectCountRef.current + 1}/${maxReconnectAttempts})`);
+        }
+        reconnectTimer = setTimeout(() => {
+          if (!isActive || wsRef.current) return;
+          reconnectCountRef.current++;
+          connect();
+        }, delay);
+      } else {
+        console.error('[WebSocket] Max reconnection attempts reached');
+      }
+    };
+
     const connect = () => {
       if (!isActive) return;
 
@@ -1122,7 +1140,7 @@ export function useWebSocket(sessionId: string | null) {
 
         ws.onclose = (event) => {
           // If effect was cleaned up, do not reconnect
-          if (!isActive) return;
+          if (!isActive || wsRef.current !== ws) return;
 
           // Suppress noisy log for initial 1006 close (expected on first connect)
           const isInitial1006 = event.code === 1006 && reconnectCountRef.current === 0;
@@ -1133,25 +1151,36 @@ export function useWebSocket(sessionId: string | null) {
           wsRef.current = null;
 
           if (event.code === 1008 && event.reason === 'Unauthorized') {
-            redirectToLoginForExpiredAuth();
+            const currentToken = getAuthToken();
+            if (!currentToken) {
+              redirectToLoginForExpiredAuth();
+              return;
+            }
+            // The server may have authenticated the cookie rather than this
+            // socket's local token. Check the current Specta token directly.
+            if (currentToken !== token) reconnectCountRef.current = 0;
+            void api.getMe().then(() => {
+              // The Specta session is valid; retry the socket connection.
+              if (getAuthToken() !== currentToken) reconnectCountRef.current = 0;
+              scheduleReconnect();
+            }).catch((error: unknown) => {
+              if (!isActive) return;
+              const tokenAfterCheck = getAuthToken();
+              if (!tokenAfterCheck) return;
+              if (tokenAfterCheck !== currentToken) {
+                reconnectCountRef.current = 0;
+                scheduleReconnect();
+              } else if (!(error instanceof ApiError && error.status === 401)) {
+                // Network and server errors cannot prove the token is invalid.
+                scheduleReconnect();
+              }
+              // A genuine /auth/me 401 redirects through the API client.
+            });
             return;
           }
 
           // Auto reconnect with exponential backoff
-          if (reconnectCountRef.current < maxReconnectAttempts) {
-            const delay = baseReconnectDelay * Math.pow(2, reconnectCountRef.current);
-            if (!isInitial1006) {
-              console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${reconnectCountRef.current + 1}/${maxReconnectAttempts})`);
-            }
-
-            reconnectTimer = setTimeout(() => {
-              if (!isActive) return;
-              reconnectCountRef.current++;
-              connect();
-            }, delay);
-          } else {
-            console.error('[WebSocket] Max reconnection attempts reached');
-          }
+          scheduleReconnect(isInitial1006);
         };
 
         ws.onerror = () => {

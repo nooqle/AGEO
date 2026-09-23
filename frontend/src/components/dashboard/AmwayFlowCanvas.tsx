@@ -757,7 +757,6 @@ export function AmwayFlowCanvas({
       const registration = useAioTakeoverStore.getState().registrations[takeover.takeoverId];
       const store = useAioTakeoverStore.getState();
       if (!registration?.frontendId || !openedTakeoverIds[takeover.takeoverId]
-        || store.connectionStatus[takeover.takeoverId] !== 'connected'
         || !['issued', 'active'].includes(store.records[takeover.takeoverId]?.takeoverState || '')) {
         toast.error('请先打开登录窗口，完成操作后再确认。');
         return;
@@ -1661,7 +1660,6 @@ export function AmwayFlowCanvas({
                     const takeoverId = browserState?.takeover?.takeoverId;
                     const isTakeoverOpened = Boolean(takeoverId && openedTakeoverIds[takeoverId]);
                     const canCompleteTakeover = Boolean(takeoverId && isTakeoverOpened
-                      && takeoverConnections[takeoverId] === 'connected'
                       && ['issued', 'active'].includes(takeoverRecords[takeoverId]?.takeoverState || ''));
                     const blockerKey = flowRuntimeActionKey(blocker.platform);
                     const isOpening = openingTakeoverKey === blockerKey;
@@ -1710,7 +1708,7 @@ export function AmwayFlowCanvas({
                                 操作指引：{!takeoverId
                                   ? '当前平台未获得可用登录窗口。请等待其他平台释放窗口后刷新任务状态；若仍不可用，可跳过此平台，稍后单独补采。完成登录前无法确认完成。'
                                   : takeoverConnections[takeoverId] === 'error'
-                                    ? '登录窗口连接已中断，请重新打开登录窗口，完成登录后再确认。'
+                                    ? '登录窗口连接已中断。如已完成登录，可点击“我已完成”；否则请重新打开登录窗口。'
                                     : blocker.actionHint || '请先打开登录窗口，完成验证或登录后回到这里确认。'}
                               </p>
                             ) : (
