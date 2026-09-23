@@ -110,6 +110,13 @@ jobs:
           echo "== release =="
           current="$(readlink -f /srv/ageo-deploy/current || true)"
           echo "current=${current:-missing}"
+          backend_env=/srv/ageo-deploy/shared/backend/.env.local
+          if [ -f "$backend_env" ]; then
+            jwt_ttl_minutes="$(sed -nE 's/^JWT_ACCESS_TOKEN_EXPIRE_MINUTES=([0-9]+)$/\1/p' "$backend_env" | tail -n 1)"
+            echo "jwt_access_ttl_minutes=${jwt_ttl_minutes:-default_1440}"
+          else
+            echo "jwt_access_ttl_minutes=env_file_missing"
+          fi
           if [ -n "${current:-}" ] && [ -f "$current/.release-sha" ]; then
             echo "sha=$(cat "$current/.release-sha")"
           fi
