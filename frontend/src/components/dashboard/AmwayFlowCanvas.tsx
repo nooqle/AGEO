@@ -599,6 +599,13 @@ export function AmwayFlowCanvas({
       left.blocker.platform.localeCompare(right.blocker.platform)
     ));
   }, [browserActionStates, durablePlatformStateBlockers, durableRuntimeBlockers, openedBrowserStates]);
+  const allPlatformsFailed = activeRun?.status === 'failed'
+    && activeRun.error_code === 'all_platforms_failed';
+  const confirmationUnavailable = activeRun?.status === 'failed'
+    && activeRun.error_code === 'workflow_confirmation_unavailable';
+  const confirmationWithoutAction = activeRun?.requires_user_action === true
+    && activeRun.user_action_type === 'workflow_confirmation'
+    && !runtimeBlockerCards.some(({ blocker }) => blocker.status === 'waiting_input');
 
   // Flow does not mount ChatPanel, so it owns the takeover registration and
   // heartbeat lifecycle while a browser window is open.
@@ -1599,6 +1606,49 @@ export function AmwayFlowCanvas({
                   setTopologySaveEpoch((n) => n + 1);
                 }}
               />
+              {allPlatformsFailed || confirmationUnavailable || confirmationWithoutAction ? (
+                <section
+                  role="alert"
+                  aria-label="本轮采集处理方式"
+                  data-testid="amway-flow-fetch-recovery"
+                  className="mt-4 rounded-xl border border-[var(--status-error)] bg-[var(--status-error-bg)] px-4 py-3"
+                >
+                  <h2 className="text-sm font-semibold text-[var(--text-primary)]">
+                    {allPlatformsFailed
+                      ? '本轮采集全部失败'
+                      : confirmationUnavailable
+                        ? '本轮分析未能继续'
+                        : '本轮采集无法在此确认继续'}
+                  </h2>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                    {allPlatformsFailed
+                      ? '没有可用于本轮分析的回答。请检查问题集、平台、登录状态和采集方式，再点击“开始运行”重新采集。'
+                      : confirmationUnavailable
+                        ? '本轮确认无法在生产线执行，也没有生成新报告。请检查问题集、平台、登录状态和采集方式，再点击“开始运行”重新采集。'
+                        : canCancelRun
+                          ? '当前任务被标记为需要确认，但生产线没有可执行的确认步骤。请点击下方“停止采集”，再检查运行设置与登录状态并重新运行。'
+                          : '当前任务被标记为需要确认，但本轮已结束，无法再执行确认或取消。请检查运行设置与登录状态，再点击“开始运行”重新采集。'}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
+                    页面上的周期报告只汇总此前已完成的采集轮次，不包含本次未完成的采集。
+                  </p>
+                  {(allPlatformsFailed || confirmationUnavailable) && activeRun.message ? (
+                    <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">原因：{activeRun.message}</p>
+                  ) : null}
+                  {!confirmationWithoutAction || !canCancelRun ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={onOpenRunSettings}
+                        disabled={isRunSubmitting}
+                        className="inline-flex h-9 items-center rounded-lg border border-[var(--brand-primary)] bg-[var(--brand-primary)] px-3 text-xs font-semibold text-[var(--brand-contrast)] transition hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        检查运行设置
+                      </button>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
               {runtimeBlockerCards.length > 0 ? (
                 <section
                   aria-label="采集阻塞与失败状态"

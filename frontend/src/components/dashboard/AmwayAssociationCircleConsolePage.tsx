@@ -1021,7 +1021,10 @@ export function AmwayAssociationCircleConsolePage({
   const headerIsStarting = Boolean(selectedEntity && submittingByEntity[selectedEntity.id]);
   const headerIsRunning = isSelectedRunExecuting;
   const headerIsBusy = headerIsStarting || headerIsRunning;
-  const headerStatusLabel = isAwaitingPlanConfirm
+  const headerStatusLabel = selectedRun?.requires_user_action
+    && selectedRun.user_action_type === 'workflow_confirmation'
+    ? '采集待处理'
+    : isAwaitingPlanConfirm
     ? '待确认计划'
     : headerIsStarting
       ? '正在启动…'
@@ -1041,10 +1044,11 @@ export function AmwayAssociationCircleConsolePage({
     ? '生成中'
     : headerHasPeriodReport
       ? reportQualityPassed(periodView?.projection) ? '查看报告' : '查看待校验报告'
-      : '生成报告';
+      : '生成周期报告';
+  const hasPeriodReportInput = Number(periodView?.current_period?.run_count || 0) > 0;
   const headerReportDisabled = headerIsBusy
     || Boolean(isPeriodReportGenerating)
-    || (!headerHasPeriodReport && !consoleProjection.nodes.length);
+    || (!headerHasPeriodReport && !hasPeriodReportInput);
 
   const handleQuickRun = useCallback(() => {
     void handleStart();

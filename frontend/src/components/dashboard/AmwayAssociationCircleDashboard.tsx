@@ -289,6 +289,7 @@ export function AmwayAssociationCircleDashboard({
   const hasPeriodReport = Boolean(
     periodView?.report_id && hasReportContent(periodView.projection),
   );
+  const hasPeriodReportInput = Number(periodView?.current_period?.run_count || 0) > 0;
   const headerStatusLabel = isRunSubmitting
     ? '正在启动…'
     : isRunActive
@@ -388,6 +389,7 @@ export function AmwayAssociationCircleDashboard({
       openReport();
       return;
     }
+    if (!hasPeriodReportInput) return;
     if (await onGeneratePeriodReport()) openReport();
   };
   const openReportSignalRef = useRef(0);
@@ -835,7 +837,7 @@ export function AmwayAssociationCircleDashboard({
                 </section>
               ) : (
                 <ReportGenerationGate
-                  disabled={isModeling || Boolean(isPeriodReportGenerating) || !nodes.length || periodSelectionUnavailable}
+                  disabled={isModeling || Boolean(isPeriodReportGenerating) || !nodes.length || periodSelectionUnavailable || (!hasPeriodReport && !hasPeriodReportInput)}
                   activeCenterTerm={activeCenterTerm}
                   answerCount={answerCount}
                   nodeCount={nodes.length}
